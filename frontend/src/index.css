@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Karecik ortak stilleri
+
+   NOT: Landing page'de bilinçli olarak hiçbir animasyon/geçiş yoktur.
+   Aşağıdaki ortak sınıflar da transition içermez; hareket gereken tek yer
+   müşteri menüsündeki (opsiyonel) karşılama ekranıdır ve o stil
+   src/components/menu içinde ayrı tutulur.
+--------------------------------------------------------------------------- */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-white text-gray-900 antialiased;
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  /* Sayı girdilerindeki artır/azalt oklarını gizle */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5
+           text-sm font-medium leading-none disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-birincil {
+    @apply btn bg-marka-600 text-white hover:bg-marka-700;
+  }
+
+  .btn-ikincil {
+    @apply btn border border-gray-300 bg-white text-gray-700 hover:bg-gray-50;
+  }
+
+  .btn-sessiz {
+    @apply btn text-gray-600 hover:bg-gray-100;
+  }
+
+  .btn-tehlike {
+    @apply btn border border-red-200 bg-white text-red-600 hover:bg-red-50;
+  }
+
+  .btn-kucuk {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .girdi {
+    @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm
+           text-gray-900 placeholder-gray-400 outline-none
+           focus:border-marka-600 focus:ring-2 focus:ring-marka-100
+           disabled:bg-gray-50 disabled:text-gray-500;
+  }
+
+  .etiket {
+    @apply mb-1.5 block text-sm font-medium text-gray-700;
+  }
+
+  .yardim {
+    @apply mt-1 text-xs text-gray-500;
+  }
+
+  .hata-metni {
+    @apply mt-1 text-xs text-red-600;
+  }
+
+  .kart {
+    @apply rounded-xl border border-gray-200 bg-white shadow-kart;
+  }
+
+  .rozet {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+}
+
+@layer utilities {
+  /* Sürükle-bırak sırasında metin seçimini engelle */
+  .surukleniyor {
+    @apply select-none;
+  }
+
+  /* Yatay kaydırmalı kategori şeridi için kaydırma çubuğunu gizle */
+  .kaydirma-gizli {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .kaydirma-gizli::-webkit-scrollbar {
+    display: none;
+  }
+}
