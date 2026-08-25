@@ -20,13 +20,25 @@ export default function Header({ kayitAc, dil = 'tr', dilDegisti }) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white">
-      <div className="mx-auto flex h-[4.5rem] max-w-icerik items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6">
-        <Link to="/" className="flex shrink-0 items-center gap-2.5" aria-label={m.markaAnaSayfa}>
+      {/*
+        Yerleşim iki kademeli:
+
+        telefon (sm altı) : İKİ SATIR. Üstte logo, altta dil seçici + butonlar.
+                            Tek satırda butonlar ~300px yer kapladığı için
+                            "Karecik" yazısına yer kalmıyor ve kırpılıyordu.
+                            Alt satıra alınca marka adı tam görünüyor ve
+                            logo boyutu (36px / 22px) küçültülmek zorunda kalmıyor.
+        sm ve üzeri       : TEK SATIR, logo 56px / 34px (eskisinin ~1,55 katı).
+      */}
+      <div className="mx-auto flex max-w-icerik flex-wrap items-center justify-between gap-x-2 gap-y-2.5 px-4 py-3 sm:h-24 sm:flex-nowrap sm:gap-4 sm:px-6 sm:py-0">
+        <Link to="/" className="flex shrink-0 items-center gap-2.5 sm:gap-3" aria-label={m.markaAnaSayfa}>
           <KarecikIsareti />
-          <span className="text-[1.375rem] font-bold tracking-tight text-gray-900">Karecik</span>
+          <span className="text-[1.375rem] font-bold leading-none tracking-tight text-gray-900 sm:text-[2.125rem]">
+            Karecik
+          </span>
         </Link>
 
-        <nav className="flex items-center gap-1.5 sm:gap-2">
+        <nav className="flex w-full flex-wrap items-center justify-end gap-1.5 sm:w-auto sm:flex-nowrap sm:gap-2">
           <DilSecici dil={dil} dilDegisti={dilDegisti} etiket={m.dilSec} />
 
           <Link
@@ -148,7 +160,7 @@ function KarecikIsareti() {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-9 w-9 shrink-0"
+      className="h-9 w-9 shrink-0 sm:h-14 sm:w-14"
       fill="none"
       aria-hidden="true"
       focusable="false"
