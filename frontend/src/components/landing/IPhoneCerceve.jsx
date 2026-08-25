@@ -34,7 +34,13 @@ export default function IPhoneCerceve({ children, className = '' }) {
       <div className="relative aspect-[390/844] w-full rounded-[3rem] bg-gray-900 p-3 shadow-2xl">
         {/* ekran alanı */}
         <div className="relative h-full w-full overflow-hidden rounded-[2.5rem] bg-white">
-          {children}
+          {/*
+            Güvenli alan (safe area): Dynamic Island top-2 (8px) konumunda ve
+            26px yüksekliğinde, yani alt hizası 34px. İçeriği 44px aşağıdan
+            başlatarak çentiğin altına/arkasına taşmasını engelliyoruz —
+            gerçek iOS'un üst güvenli alan payıyla aynı değer.
+          */}
+          <div className="h-full w-full pt-[44px]">{children}</div>
 
           {/* dynamic island */}
           <div

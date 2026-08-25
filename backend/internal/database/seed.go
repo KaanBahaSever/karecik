@@ -119,7 +119,7 @@ func SeedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			default_language, languages, splash_enabled, splash_duration,
 			splash_bg_color, splash_text, address, phone, instagram, wifi_password
 		) VALUES (
-			$1, $2, $3, 'TRY', 'modern-light', 'inter', '#1a7f5a',
+			$1, $2, $3, 'TRY', 'modern-light', 'inter', '#1d4ed8',
 			'tr', $4, true, 1200,
 			'#0f172a', 'Hoş geldiniz', $5, $6, $7, $8
 		)

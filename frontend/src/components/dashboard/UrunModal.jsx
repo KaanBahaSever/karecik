@@ -260,7 +260,7 @@ export default function UrunModal({
                       : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  <span aria-hidden="true">{dil.flag}</span>
+                  <span aria-hidden="true">{dil.kisa}</span>
                   {dil.label}
                   {kod === anaDil ? <span className="text-xs text-marka-600">•</span> : null}
                 </button>

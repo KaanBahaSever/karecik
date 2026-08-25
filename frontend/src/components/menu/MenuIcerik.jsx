@@ -315,13 +315,15 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                     onClick={() => dilDegisti?.(kod)}
                     aria-label={bilgi.label}
                     title={bilgi.label}
-                    className="rounded-full px-1.5 py-1 text-base leading-none"
+                    className="rounded-full px-2 py-1 text-xs font-semibold leading-none"
                     style={{
                       opacity: secili ? 1 : 0.45,
                       border: secili ? '1px solid var(--menu-border)' : '1px solid transparent',
                     }}
                   >
-                    {bilgi.flag}
+                    {/* Bayrak emojisi yerine dil kodu: Windows bayrakları
+                        çizemediği için İngilizce "GB" olarak görünüyordu. */}
+                    {bilgi.kisa}
                   </button>
                 )
               })}
@@ -461,7 +463,17 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
           )}
         </div>
 
-        <MenuFooter business={business} footer={menu?.footer} dil={dil} />
+        {/*
+          Ana sayfada (kategori kartları) yalnızca "Karecik ile hazırlandı"
+          görünür. Fiyat tarihi, KDV ibaresi ve iletişim bilgileri ürünlerin
+          listelendiği ekranlara taşındı.
+        */}
+        <MenuFooter
+          business={business}
+          footer={menu?.footer}
+          dil={dil}
+          kapsam={aramaAktif || seciliKategori ? 'urunler' : 'anasayfa'}
+        />
       </div>
 
       <UrunDetayModal

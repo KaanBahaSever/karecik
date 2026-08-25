@@ -575,7 +575,7 @@ export default function Ayarlar() {
                       : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
-                  <span aria-hidden="true">{dil.flag}</span>
+                  <span aria-hidden="true">{dil.kisa}</span>
                   {dil.label}
                 </button>
               )
@@ -594,7 +594,7 @@ export default function Ayarlar() {
             >
               {DILLER.filter((dil) => taslak.languages.includes(dil.code)).map((dil) => (
                 <option key={dil.code} value={dil.code}>
-                  {dil.flag} {dil.label}
+                  {dil.kisa} {dil.label}
                 </option>
               ))}
             </select>

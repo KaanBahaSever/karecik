@@ -1,35 +1,46 @@
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Check, ChevronDown, Globe } from 'lucide-react'
+
+import { LANDING_DILLERI, landingMetni } from '../../locales/landing.js'
 
 /**
  * Açılış sayfasının üst çubuğu.
  *
  * Not: Landing page kuralı gereği burada hiçbir animasyon/geçiş yoktur.
- * Yalnızca anlık renk değişimi yapan hover sınıfları kullanılır.
+ * Yalnızca anlık renk değişimi yapan hover sınıfları kullanılır; açılır
+ * pencere de geçiş efekti olmadan doğrudan görünür/gizlenir.
  *
- * @param {Function} kayitAc - Kayıt modalını açan çağrı
+ * @param {Function} kayitAc    - Kayıt modalını açan çağrı
+ * @param {string}   dil        - Seçili dil kodu (tr | en | de)
+ * @param {Function} dilDegisti - Dil değiştiğinde çağrılır
  */
-export default function Header({ kayitAc }) {
+export default function Header({ kayitAc, dil = 'tr', dilDegisti }) {
+  const m = landingMetni(dil)
+
   return (
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white">
-      <div className="mx-auto flex h-16 max-w-icerik items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6">
-        <Link to="/" className="flex shrink-0 items-center gap-2" aria-label="Karecik ana sayfa">
+      <div className="mx-auto flex h-[4.5rem] max-w-icerik items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6">
+        <Link to="/" className="flex shrink-0 items-center gap-2.5" aria-label={m.markaAnaSayfa}>
           <KarecikIsareti />
-          <span className="text-lg font-bold tracking-tight text-gray-900">Karecik</span>
+          <span className="text-[1.375rem] font-bold tracking-tight text-gray-900">Karecik</span>
         </Link>
 
         <nav className="flex items-center gap-1.5 sm:gap-2">
+          <DilSecici dil={dil} dilDegisti={dilDegisti} etiket={m.dilSec} />
+
           <Link
             to="/giris"
             className="btn-sessiz whitespace-nowrap px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm"
           >
-            Giriş Yap
+            {m.girisYap}
           </Link>
           <button
             type="button"
             onClick={kayitAc}
             className="btn-birincil whitespace-nowrap px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm"
           >
-            Hemen Ücretsiz Başla
+            {m.ucretsizBasla}
           </button>
         </nav>
       </div>
@@ -37,17 +48,112 @@ export default function Header({ kayitAc }) {
   )
 }
 
-/** Marka işareti: QR karesini andıran dört bloklu sade simge. */
+/**
+ * Minimalist dil seçici.
+ *
+ * Bayrak emojisi kullanmaz: Windows bu emojileri çizemediği için yerlerine
+ * ülke kodu basıyor ve İngilizce "GB" olarak görünüyor. Bunun yerine her
+ * dilin kısa kodunu (TR / EN / DE) gösteriyoruz.
+ */
+function DilSecici({ dil, dilDegisti, etiket }) {
+  const [acik, setAcik] = useState(false)
+  const kapsayiciRef = useRef(null)
+
+  const seciliDil = LANDING_DILLERI.find((d) => d.kod === dil) || LANDING_DILLERI[0]
+
+  // Dışarı tıklayınca ve Escape ile kapat
+  useEffect(() => {
+    if (!acik) return undefined
+
+    function disariTiklandi(olay) {
+      if (kapsayiciRef.current && !kapsayiciRef.current.contains(olay.target)) {
+        setAcik(false)
+      }
+    }
+    function tusaBasildi(olay) {
+      if (olay.key === 'Escape') setAcik(false)
+    }
+
+    document.addEventListener('mousedown', disariTiklandi)
+    document.addEventListener('keydown', tusaBasildi)
+    return () => {
+      document.removeEventListener('mousedown', disariTiklandi)
+      document.removeEventListener('keydown', tusaBasildi)
+    }
+  }, [acik])
+
+  function sec(kod) {
+    dilDegisti?.(kod)
+    setAcik(false)
+  }
+
+  return (
+    <div className="relative" ref={kapsayiciRef}>
+      <button
+        type="button"
+        onClick={() => setAcik((onceki) => !onceki)}
+        aria-label={etiket}
+        aria-haspopup="listbox"
+        aria-expanded={acik}
+        className="flex items-center gap-1 rounded-lg px-2 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 sm:gap-1.5 sm:px-2.5 sm:text-sm"
+      >
+        <Globe className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span>{seciliDil.kisa}</span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
+      </button>
+
+      {acik ? (
+        <ul
+          role="listbox"
+          aria-label={etiket}
+          className="absolute right-0 top-full z-50 mt-1 w-40 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-panel"
+        >
+          {LANDING_DILLERI.map((secenek) => {
+            const secili = secenek.kod === dil
+            return (
+              <li key={secenek.kod}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={secili}
+                  onClick={() => sec(secenek.kod)}
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50 ${
+                    secili ? 'font-medium text-marka-700' : 'text-gray-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="w-6 shrink-0 text-xs font-semibold text-gray-400">
+                      {secenek.kisa}
+                    </span>
+                    <span>{secenek.ad}</span>
+                  </span>
+                  {secili ? (
+                    <Check className="h-4 w-4 shrink-0 text-marka-600" aria-hidden="true" />
+                  ) : null}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Marka işareti: QR karesini andıran dört bloklu sade simge.
+ * Şekil değişmedi; yalnızca rengi kurumsal maviye güncellendi.
+ */
 function KarecikIsareti() {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-7 w-7 shrink-0"
+      className="h-9 w-9 shrink-0"
       fill="none"
       aria-hidden="true"
       focusable="false"
     >
-      <rect x="1" y="1" width="22" height="22" rx="5.5" fill="#1a7f5a" />
+      <rect x="1" y="1" width="22" height="22" rx="5.5" fill="#1d4ed8" />
       <rect x="5.5" y="5.5" width="5.5" height="5.5" rx="1.4" fill="#ffffff" />
       <rect x="13" y="5.5" width="5.5" height="5.5" rx="1.4" fill="#ffffff" fillOpacity="0.55" />
       <rect x="5.5" y="13" width="5.5" height="5.5" rx="1.4" fill="#ffffff" fillOpacity="0.55" />

@@ -20,20 +20,20 @@ const TASARIM_ALANLARI = [
 ]
 
 const HAZIR_RENKLER = [
-  '#1a7f5a',
+  '#1d4ed8',
   '#0f766e',
   '#b45309',
   '#c2410c',
   '#be123c',
   '#7c3aed',
-  '#1d4ed8',
+  '#0369a1',
   '#111827',
 ]
 
 const HAZIR_KARSILAMA_RENKLERI = [
   '#0f172a',
   '#111827',
-  '#1a7f5a',
+  '#1d4ed8',
   '#7c3aed',
   '#be123c',
   '#c2410c',
@@ -96,7 +96,7 @@ export default function Tasarim() {
   const degisiklikVar = degisenAlanlar.length > 0
 
   const karsilamaAcik = Boolean(taslak.splash_enabled)
-  const anaRenk = guvenliRenk(taslak.primary_color, '#1a7f5a')
+  const anaRenk = guvenliRenk(taslak.primary_color, '#1d4ed8')
   const karsilamaZemin = guvenliRenk(taslak.splash_bg_color, '#0f172a')
   const anaRenkGecersiz = !gecerliRenkMi(taslak.primary_color)
   const karsilamaZeminGecersiz = !gecerliRenkMi(taslak.splash_bg_color)
@@ -109,7 +109,7 @@ export default function Tasarim() {
     if (!degisiklikVar || kaydediliyor) return
 
     if (anaRenkGecersiz) {
-      bildirim.hata('Ana renk #RRGGBB biçiminde olmalı (örn. #1a7f5a).')
+      bildirim.hata('Ana renk #RRGGBB biçiminde olmalı (örn. #1d4ed8).')
       return
     }
     if (karsilamaZeminGecersiz) {
@@ -275,7 +275,7 @@ export default function Tasarim() {
                   type="text"
                   value={taslak.primary_color || ''}
                   onChange={(olay) => guncelle('primary_color', olay.target.value.trim())}
-                  placeholder="#1a7f5a"
+                  placeholder="#1d4ed8"
                   maxLength={7}
                   aria-label="Ana renk kodu"
                   className={`girdi font-mono uppercase ${

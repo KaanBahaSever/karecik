@@ -8,17 +8,18 @@ export default {
       },
       colors: {
         // Karecik kurumsal paleti (landing + panel)
+        // Kurumsal, tok mavi — 600 ana ton, 700 hover tonudur.
         marka: {
-          50: '#f0f9f5',
-          100: '#dbf0e5',
-          200: '#b9e1cd',
-          300: '#8bcbad',
-          400: '#57ae88',
-          500: '#35916c',
-          600: '#1a7f5a',
-          700: '#175d44',
-          800: '#144a38',
-          900: '#123d2f',
+          50: '#eff5ff',
+          100: '#dbe7fe',
+          200: '#bfd5fe',
+          300: '#93b8fd',
+          400: '#6092fa',
+          500: '#3b6ef6',
+          600: '#1d4ed8',
+          700: '#1e40af',
+          800: '#1e3a8a',
+          900: '#172554',
         },
       },
       boxShadow: {

@@ -17,11 +17,11 @@ type Theme struct {
 // Themes, panelde secilebilen tasarim tarzlari.
 // Frontend'deki src/themes/themes.js ile ayni kimlikleri (id) kullanir.
 var Themes = []Theme{
-	{ID: "modern-light", Label: "Modern Açık", Description: "Beyaz zemin, yeşil vurgu",
-		Primary: "#1a7f5a", Background: "#ffffff", Surface: "#f6f7f8", Text: "#111827",
+	{ID: "modern-light", Label: "Modern Açık", Description: "Beyaz zemin, mavi vurgu",
+		Primary: "#1d4ed8", Background: "#ffffff", Surface: "#f6f7f8", Text: "#111827",
 		Muted: "#6b7280", Border: "#e5e7eb", Dark: false},
 	{ID: "modern-dark", Label: "Modern Koyu", Description: "Koyu zemin, gece kullanımı",
-		Primary: "#34d399", Background: "#0f172a", Surface: "#1e293b", Text: "#f1f5f9",
+		Primary: "#60a5fa", Background: "#0f172a", Surface: "#1e293b", Text: "#f1f5f9",
 		Muted: "#94a3b8", Border: "#334155", Dark: true},
 	{ID: "zarif", Label: "Zarif", Description: "Krem zemin, serif başlıklar",
 		Primary: "#8a6a3c", Background: "#faf6ef", Surface: "#f2ead9", Text: "#3b2f22",
@@ -87,20 +87,25 @@ var Allergens = []Allergen{
 }
 
 // Language, desteklenen menu dilleri.
+//
+// Short: arayuzde gosterilen kisa kod (TR/EN/DE). Bayrak emojisi yerine bunu
+// kullaniyoruz: Windows bayrak emojilerini cizemedigi icin yerlerine ulke kodu
+// basiyor ve Ingilizce "GB" olarak gorunuyordu.
 type Language struct {
 	Code  string `json:"code"`
+	Short string `json:"short"`
 	Label string `json:"label"`
 	Flag  string `json:"flag"`
 }
 
 // Languages, menuye eklenebilecek diller.
 var Languages = []Language{
-	{Code: "tr", Label: "Türkçe", Flag: "🇹🇷"},
-	{Code: "en", Label: "English", Flag: "🇬🇧"},
-	{Code: "de", Label: "Deutsch", Flag: "🇩🇪"},
-	{Code: "ru", Label: "Русский", Flag: "🇷🇺"},
-	{Code: "ar", Label: "العربية", Flag: "🇸🇦"},
-	{Code: "fr", Label: "Français", Flag: "🇫🇷"},
+	{Code: "tr", Short: "TR", Label: "Türkçe", Flag: "🇹🇷"},
+	{Code: "en", Short: "EN", Label: "English", Flag: "🇬🇧"},
+	{Code: "de", Short: "DE", Label: "Deutsch", Flag: "🇩🇪"},
+	{Code: "ru", Short: "RU", Label: "Русский", Flag: "🇷🇺"},
+	{Code: "ar", Short: "AR", Label: "العربية", Flag: "🇸🇦"},
+	{Code: "fr", Short: "FR", Label: "Français", Flag: "🇫🇷"},
 }
 
 // IsValidTheme, tema kimliginin listede olup olmadigini soyler.

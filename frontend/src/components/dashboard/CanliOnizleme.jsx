@@ -98,7 +98,7 @@ export default function CanliOnizleme({ business, yenile = 0, className = '' }) 
               const bilgi = dilBul(kod)
               return (
                 <option key={kod} value={kod}>
-                  {bilgi.flag} {bilgi.label}
+                  {bilgi.kisa} {bilgi.label}
                 </option>
               )
             })}

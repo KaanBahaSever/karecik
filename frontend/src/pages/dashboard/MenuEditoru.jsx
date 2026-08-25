@@ -446,7 +446,7 @@ export default function MenuEditoru() {
                 }`}
               >
                 <span className="mr-1" aria-hidden="true">
-                  {bilgi.flag}
+                  {bilgi.kisa}
                 </span>
                 {bilgi.label}
               </button>

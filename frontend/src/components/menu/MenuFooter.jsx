@@ -3,20 +3,42 @@ import { Instagram, MapPin, Phone, Wifi } from 'lucide-react'
 import { metin } from '../../locales/index.js'
 
 /**
- * Müşteri menüsünün altı: iletişim bilgileri ve sistemin otomatik ürettiği
- * yasal ibareler.
+ * Müşteri menüsünün altı.
  *
- * footer.price_note ve footer.vat_note metinleri BACKEND tarafından üretilir
- * (bkz. repository/menu.go -> buildFooter). Burada yalnızca gösterilir:
- *   "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
- *   "Fiyatlarımıza KDV dahildir."
- * İşletme bu ibareleri panelden kapatırsa alanlar boş gelir ve satır hiç çizilmez.
+ * İki farklı kapsamda çalışır:
+ *
+ *   kapsam="anasayfa"  Kategori kartlarının olduğu giriş ekranı.
+ *                      Yalnızca "Karecik ile hazırlandı" satırı görünür;
+ *                      adres/wifi/sosyal medya ve yasal ibareler gösterilmez.
+ *
+ *   kapsam="urunler"   Ürünlerin listelendiği/arandığı ekranlar.
+ *                      İletişim bilgileri ve sistemin otomatik ürettiği
+ *                      yasal ibareler burada görünür:
+ *                        "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
+ *                        "Fiyatlarımıza KDV dahildir."
+ *
+ * Bu iki metin BACKEND tarafından üretilir (repository/menu.go -> buildFooter);
+ * burada yalnızca gösterilir. İşletme panelden kapatırsa boş gelir ve satır çizilmez.
  *
  * @param {object} business - PublicMenu.business
  * @param {object} footer   - PublicMenu.footer { price_note, vat_note, powered_by }
  * @param {string} dil      - Aktif dil kodu
+ * @param {string} kapsam   - "anasayfa" | "urunler"
  */
-export default function MenuFooter({ business, footer, dil = 'tr' }) {
+export default function MenuFooter({ business, footer, dil = 'tr', kapsam = 'urunler' }) {
+  const imza = footer?.powered_by?.trim() || metin('poweredBy', dil)
+
+  // Ana sayfa: sade bir imza satırından ibaret.
+  if (kapsam === 'anasayfa') {
+    return (
+      <footer className="mt-10 pt-6 text-center" style={{ color: 'var(--menu-muted)' }}>
+        <p className="pb-6 text-[11px]" style={{ opacity: 0.7 }}>
+          {imza}
+        </p>
+      </footer>
+    )
+  }
+
   const adres = business?.address?.trim()
   const telefon = business?.phone?.trim()
   const wifi = business?.wifi_password?.trim()
@@ -26,7 +48,6 @@ export default function MenuFooter({ business, footer, dil = 'tr' }) {
 
   const fiyatNotu = footer?.price_note?.trim()
   const kdvNotu = footer?.vat_note?.trim()
-  const imza = footer?.powered_by?.trim() || metin('poweredBy', dil)
 
   return (
     <footer

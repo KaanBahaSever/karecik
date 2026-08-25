@@ -1,17 +1,33 @@
 // Menü dilleri, alerjen etiketleri ve müşteri tarafı arayüz metinleri.
 // Kodlar backend'deki internal/utils/appearance.go ile birebir aynıdır.
 
+// NOT: Arayüzde bayrak emojisi (🇬🇧) KULLANMIYORUZ. Windows bu emojileri
+// çizemediği için yerlerine ülke kodunu basıyor ve İngilizce "GB" görünüyor.
+// Bunun yerine her dilin kendi kısa kodunu (TR / EN / DE) gösteriyoruz —
+// her işletim sisteminde aynı ve doğru görünür.
 export const DILLER = [
-  { code: 'tr', label: 'Türkçe', flag: '🇹🇷' },
-  { code: 'en', label: 'English', flag: '🇬🇧' },
-  { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
-  { code: 'ru', label: 'Русский', flag: '🇷🇺' },
-  { code: 'ar', label: 'العربية', flag: '🇸🇦' },
-  { code: 'fr', label: 'Français', flag: '🇫🇷' },
+  { code: 'tr', kisa: 'TR', label: 'Türkçe', flag: '🇹🇷' },
+  { code: 'en', kisa: 'EN', label: 'English', flag: '🇬🇧' },
+  { code: 'de', kisa: 'DE', label: 'Deutsch', flag: '🇩🇪' },
+  { code: 'ru', kisa: 'RU', label: 'Русский', flag: '🇷🇺' },
+  { code: 'ar', kisa: 'AR', label: 'العربية', flag: '🇸🇦' },
+  { code: 'fr', kisa: 'FR', label: 'Français', flag: '🇫🇷' },
 ]
 
 export function dilBul(code) {
-  return DILLER.find((dil) => dil.code === code) || DILLER[0]
+  return (
+    DILLER.find((dil) => dil.code === code) || {
+      code,
+      kisa: String(code || '').toUpperCase(),
+      label: code,
+      flag: '',
+    }
+  )
+}
+
+/** Dilin arayüzde gösterilecek kısa kodu: "tr" -> "TR", "en" -> "EN". */
+export function dilKisa(code) {
+  return dilBul(code).kisa
 }
 
 /** Sağdan sola yazılan diller. */

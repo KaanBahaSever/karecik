@@ -5,10 +5,10 @@ export const TEMALAR = [
   {
     id: 'modern-light',
     label: 'Modern Açık',
-    description: 'Beyaz zemin, yeşil vurgu',
+    description: 'Beyaz zemin, mavi vurgu',
     dark: false,
     renkler: {
-      primary: '#1a7f5a',
+      primary: '#1d4ed8',
       background: '#ffffff',
       surface: '#f6f7f8',
       text: '#111827',
@@ -23,7 +23,7 @@ export const TEMALAR = [
     description: 'Koyu zemin, gece kullanımı',
     dark: true,
     renkler: {
-      primary: '#34d399',
+      primary: '#60a5fa',
       background: '#0f172a',
       surface: '#1e293b',
       text: '#f1f5f9',

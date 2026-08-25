@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS businesses (
     -- Görünüm
     theme            TEXT NOT NULL DEFAULT 'modern-light',
     font_family      TEXT NOT NULL DEFAULT 'inter',
-    primary_color    TEXT NOT NULL DEFAULT '#1a7f5a',
+    primary_color    TEXT NOT NULL DEFAULT '#1d4ed8',
 
     -- Diller
     default_language TEXT NOT NULL DEFAULT 'tr',

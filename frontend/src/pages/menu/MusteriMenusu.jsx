@@ -82,6 +82,23 @@ export default function MusteriMenusu({ slug: slugProp, gomulu = false }) {
     setKarsilamaGoster(true)
   }, [menu, gomulu, slug])
 
+  /* ------------------------------------------- gömülü modda kaydırma çubuğu */
+  // Landing'deki telefon çerçevesi bu sayfayı bir iframe içinde gösteriyor.
+  // iframe'in kendi belge kaydırma çubuğu cihaz görüntüsünü bozduğu için
+  // gömülü modda gizliyoruz — kaydırma işlevi aynen çalışmaya devam eder.
+  useEffect(() => {
+    if (!gomulu) return undefined
+
+    const kok = document.documentElement
+    kok.classList.add('kaydirma-gizli')
+    document.body.classList.add('kaydirma-gizli')
+
+    return () => {
+      kok.classList.remove('kaydirma-gizli')
+      document.body.classList.remove('kaydirma-gizli')
+    }
+  }, [gomulu])
+
   /* ---------------------------------------------------- sekme başlığı */
   useEffect(() => {
     if (gomulu || !menu?.business?.name) return undefined
