@@ -15,9 +15,9 @@ import (
 
 var hexColorPattern = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
-// Meta — GET /api/meta (herkese acik)
-// Panelin ihtiyac duydugu sabit listeler tek kaynaktan gelir:
-// para birimleri, temalar, yazi tipleri, alerjenler, diller, yuvarlama modlari.
+// Meta — GET /api/meta (public)
+// Serves the fixed catalogues the dashboard needs from a single source:
+// currencies, themes, fonts, allergens, languages and rounding modes.
 func (h *Handler) Meta(c *fiber.Ctx) error {
 	currencies := make([]utils.Currency, 0, len(utils.Currencies))
 	for _, code := range []string{"TRY", "USD", "EUR", "GBP", "AZN", "RUB", "SAR", "AED"} {
@@ -55,7 +55,7 @@ func (h *Handler) GetBusiness(c *fiber.Ctx) error {
 }
 
 // UpdateBusiness — PUT /api/business
-// Kismi guncelleme: yalnizca govdede bulunan alanlar uygulanir.
+// Partial update: only the fields present in the body are applied.
 func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(c.Body(), &raw); err != nil {
@@ -65,9 +65,9 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 	businessID := middleware.BusinessID(c)
 	fields := make(map[string]any)
 
-	// --- metin alanlari
-	if v, ok := raw["name"]; ok {
-		name, err := decodeString(v)
+	// --- plain text fields
+	if value, ok := raw["name"]; ok {
+		name, err := decodeString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "İşletme adı metin olmalıdır.")
 		}
@@ -78,8 +78,8 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 		fields["name"] = name
 	}
 
-	if v, ok := raw["slug"]; ok {
-		slug, err := decodeString(v)
+	if value, ok := raw["slug"]; ok {
+		slug, err := decodeString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "Menü adresi metin olmalıdır.")
 		}
@@ -101,10 +101,10 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 		fields["slug"] = slug
 	}
 
-	// --- bosaltilabilir metinler (null -> NULL)
+	// --- clearable text fields (null -> NULL)
 	for _, key := range []string{"logo_url", "cover_url", "phone", "address", "instagram", "wifi_password"} {
-		if v, ok := raw[key]; ok {
-			ptr, err := decodeNullableString(v)
+		if value, ok := raw[key]; ok {
+			ptr, err := decodeNullableString(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı metin veya boş olmalıdır.")
 			}
@@ -112,33 +112,33 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 		}
 	}
 
-	// --- para birimi
-	if v, ok := raw["currency"]; ok {
-		code, err := decodeString(v)
+	// --- currency
+	if value, ok := raw["currency"]; ok {
+		code, err := decodeString(value)
 		if err != nil || !utils.IsValidCurrency(strings.ToUpper(code)) {
 			return utils.Unprocessable(c, "Geçersiz para birimi.")
 		}
 		fields["currency"] = strings.ToUpper(code)
 	}
 
-	// --- gorunum
-	if v, ok := raw["theme"]; ok {
-		theme, err := decodeString(v)
+	// --- appearance
+	if value, ok := raw["theme"]; ok {
+		theme, err := decodeString(value)
 		if err != nil || !utils.IsValidTheme(theme) {
 			return utils.Unprocessable(c, "Geçersiz tasarım teması.")
 		}
 		fields["theme"] = theme
 	}
-	if v, ok := raw["font_family"]; ok {
-		font, err := decodeString(v)
+	if value, ok := raw["font_family"]; ok {
+		font, err := decodeString(value)
 		if err != nil || !utils.IsValidFont(font) {
 			return utils.Unprocessable(c, "Geçersiz yazı tipi.")
 		}
 		fields["font_family"] = font
 	}
 	for _, key := range []string{"primary_color", "splash_bg_color"} {
-		if v, ok := raw[key]; ok {
-			color, err := decodeString(v)
+		if value, ok := raw[key]; ok {
+			color, err := decodeString(value)
 			if err != nil || !hexColorPattern.MatchString(color) {
 				return utils.Unprocessable(c, "Renk değeri #RRGGBB biçiminde olmalıdır.")
 			}
@@ -146,48 +146,48 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 		}
 	}
 
-	// --- diller
-	if v, ok := raw["default_language"]; ok {
-		lang, err := decodeString(v)
+	// --- languages
+	if value, ok := raw["default_language"]; ok {
+		lang, err := decodeString(value)
 		if err != nil || !utils.IsValidLanguage(lang) {
 			return utils.Unprocessable(c, "Geçersiz varsayılan dil.")
 		}
 		fields["default_language"] = lang
 	}
-	if v, ok := raw["languages"]; ok {
-		var langs []string
-		if err := json.Unmarshal(v, &langs); err != nil || len(langs) == 0 {
+	if value, ok := raw["languages"]; ok {
+		var languages []string
+		if err := json.Unmarshal(value, &languages); err != nil || len(languages) == 0 {
 			return utils.Unprocessable(c, "En az bir dil seçmelisiniz.")
 		}
-		for _, l := range langs {
-			if !utils.IsValidLanguage(l) {
-				return utils.Unprocessable(c, "Desteklenmeyen dil kodu: "+l)
+		for _, lang := range languages {
+			if !utils.IsValidLanguage(lang) {
+				return utils.Unprocessable(c, "Desteklenmeyen dil kodu: "+lang)
 			}
 		}
-		fields["languages"] = langs
+		fields["languages"] = languages
 	}
 
-	// --- karsilama animasyonu
+	// --- splash screen and footer switches
 	for _, key := range []string{"splash_enabled", "show_vat_note", "show_price_date", "is_active"} {
-		if v, ok := raw[key]; ok {
-			b, err := decodeBool(v)
+		if value, ok := raw[key]; ok {
+			flag, err := decodeBool(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı true/false olmalıdır.")
 			}
-			fields[key] = b
+			fields[key] = flag
 		}
 	}
-	if v, ok := raw["splash_duration"]; ok {
-		d, err := decodeInt(v)
-		if err != nil || d < 300 || d > 5000 {
+	if value, ok := raw["splash_duration"]; ok {
+		duration, err := decodeInt(value)
+		if err != nil || duration < 300 || duration > 5000 {
 			return utils.Unprocessable(c,
 				"Karşılama süresi 300 ile 5000 milisaniye arasında olmalıdır.")
 		}
-		fields["splash_duration"] = d
+		fields["splash_duration"] = duration
 	}
 	for _, key := range []string{"splash_text", "vat_note_text"} {
-		if v, ok := raw[key]; ok {
-			text, err := decodeString(v)
+		if value, ok := raw[key]; ok {
+			text, err := decodeString(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı metin olmalıdır.")
 			}
@@ -212,7 +212,7 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 	return utils.OK(c, h.withMenuURL(business))
 }
 
-// ------------------------------------------------------- JSON cozumleyiciler
+// ------------------------------------------------------------ JSON decoders
 
 func decodeString(raw json.RawMessage) (string, error) {
 	var s string
@@ -220,7 +220,7 @@ func decodeString(raw json.RawMessage) (string, error) {
 	return s, err
 }
 
-// decodeNullableString, null degerini NULL olarak yorumlar; bos metin de NULL olur.
+// decodeNullableString maps JSON null to NULL; an empty string becomes NULL too.
 func decodeNullableString(raw json.RawMessage) (*string, error) {
 	if string(raw) == "null" {
 		return nil, nil

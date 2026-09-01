@@ -2,211 +2,213 @@ import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 
 import api from '../../lib/api'
-import { fiyatCozumle, fiyatGirdiye, paraSimgesi } from '../../lib/format'
-import { ALERJENLER, dilBul } from '../../locales/index.js'
+import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
+import { ALLERGENS, findLanguage } from '../../locales/index.js'
 import Modal from '../ui/Modal.jsx'
-import GorselYukleyici from '../ui/GorselYukleyici.jsx'
-import { useBildirim } from '../ui/Bildirim.jsx'
+import ImageUploader from '../ui/ImageUploader.jsx'
+import { useToast } from '../ui/Toast.jsx'
 
-const BOS_CEVIRI = { name: '', description: '', ingredients: '' }
+const EMPTY_TRANSLATION = { name: '', description: '', ingredients: '' }
 
-/** "145,00" / "145.00" gibi bir girdinin sayıya çevrilebilir olduğunu doğrular. */
-function fiyatMetniGecerliMi(metin) {
-  const temiz = String(metin ?? '').trim()
-  if (!temiz) return false
-  if (!/^[0-9.,\s]+$/.test(temiz)) return false
-  return /[0-9]/.test(temiz)
+/** Checks that an input such as "145,00" / "145.00" can be parsed as a number. */
+function isValidPriceText(text) {
+  const clean = String(text ?? '').trim()
+  if (!clean) return false
+  if (!/^[0-9.,\s]+$/.test(clean)) return false
+  return /[0-9]/.test(clean)
 }
 
-/** Kategori seçicide gösterilecek ad. */
-function kategoriAdi(kategori, varsayilanDil) {
-  const ceviriler = kategori?.translations || {}
+/** Label shown for a category in the picker. */
+function categoryName(category, defaultLanguage) {
+  const translations = category?.translations || {}
   return (
-    ceviriler[varsayilanDil]?.name ||
-    ceviriler.tr?.name ||
-    Object.values(ceviriler)[0]?.name ||
+    translations[defaultLanguage]?.name ||
+    translations.tr?.name ||
+    Object.values(translations)[0]?.name ||
     'Adsız kategori'
   )
 }
 
 /**
- * Ürün ekleme / düzenleme modalı.
+ * Create / edit dialog for a product.
  *
- * @param {boolean}     acik
- * @param {Function}    kapat
- * @param {object|null} urun               - null ise yeni kayıt
- * @param {Array}       kategoriler
- * @param {string}      seciliKategoriId   - yeni üründe ön seçili kategori
- * @param {string[]}    diller
- * @param {string}      varsayilanDil
- * @param {string}      paraBirimi         - 'TRY', 'EUR' ...
- * @param {Function}    kaydedildi         - (urun) => void
+ * @param {boolean}     open
+ * @param {Function}    onClose
+ * @param {object|null} product            - null creates a new record
+ * @param {Array}       categories
+ * @param {string}      selectedCategoryId - preselected category for new products
+ * @param {string[]}    languages
+ * @param {string}      defaultLanguage
+ * @param {string}      currency           - 'TRY', 'EUR' ...
+ * @param {Function}    onSaved            - (product) => void
  */
-export default function UrunModal({
-  acik,
-  kapat,
-  urun,
-  kategoriler,
-  seciliKategoriId,
-  diller,
-  varsayilanDil,
-  paraBirimi,
-  kaydedildi,
+export default function ProductModal({
+  open,
+  onClose,
+  product,
+  categories,
+  selectedCategoryId,
+  languages,
+  defaultLanguage,
+  currency,
+  onSaved,
 }) {
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  const kategoriListesi = Array.isArray(kategoriler) ? kategoriler : []
-  const dilListesi = Array.isArray(diller) && diller.length > 0 ? diller : ['tr']
-  const anaDil = dilListesi.includes(varsayilanDil) ? varsayilanDil : dilListesi[0]
-  const dilAnahtari = dilListesi.join(',')
-  const simge = paraSimgesi(paraBirimi)
+  const categoryList = Array.isArray(categories) ? categories : []
+  const languageList = Array.isArray(languages) && languages.length > 0 ? languages : ['tr']
+  const primaryLanguage = languageList.includes(defaultLanguage)
+    ? defaultLanguage
+    : languageList[0]
+  const languageKey = languageList.join(',')
+  const symbol = currencySymbol(currency)
 
-  const [kategoriId, setKategoriId] = useState('')
-  const [aktifDil, setAktifDil] = useState(anaDil)
-  const [ceviriler, setCeviriler] = useState({})
-  const [fiyat, setFiyat] = useState('')
-  const [karsilastirmaFiyati, setKarsilastirmaFiyati] = useState('')
-  const [gorselUrl, setGorselUrl] = useState(null)
-  const [alerjenler, setAlerjenler] = useState([])
-  const [menudeGoster, setMenudeGoster] = useState(true)
-  const [oneCikar, setOneCikar] = useState(false)
-  const [hatalar, setHatalar] = useState({})
-  const [kaydediliyor, setKaydediliyor] = useState(false)
+  const [categoryId, setCategoryId] = useState('')
+  const [activeLanguage, setActiveLanguage] = useState(primaryLanguage)
+  const [translations, setTranslations] = useState({})
+  const [price, setPrice] = useState('')
+  const [comparePrice, setComparePrice] = useState('')
+  const [imageUrl, setImageUrl] = useState(null)
+  const [allergens, setAllergens] = useState([])
+  const [visible, setVisible] = useState(true)
+  const [featured, setFeatured] = useState(false)
+  const [errors, setErrors] = useState({})
+  const [saving, setSaving] = useState(false)
 
-  /* Modal açıldığında formu doldur. */
+  /* Fill the form when the dialog opens. */
   useEffect(() => {
-    if (!acik) return
+    if (!open) return
 
-    const baslangic = {}
-    dilListesi.forEach((kod) => {
-      baslangic[kod] = {
-        name: urun?.translations?.[kod]?.name || '',
-        description: urun?.translations?.[kod]?.description || '',
-        ingredients: urun?.translations?.[kod]?.ingredients || '',
+    const initial = {}
+    languageList.forEach((code) => {
+      initial[code] = {
+        name: product?.translations?.[code]?.name || '',
+        description: product?.translations?.[code]?.description || '',
+        ingredients: product?.translations?.[code]?.ingredients || '',
       }
     })
 
-    setCeviriler(baslangic)
-    setKategoriId(urun?.category_id || seciliKategoriId || kategoriListesi[0]?.id || '')
-    setFiyat(urun ? fiyatGirdiye(urun.price) : '')
-    setKarsilastirmaFiyati(
-      urun?.compare_price !== null && urun?.compare_price !== undefined
-        ? fiyatGirdiye(urun.compare_price)
+    setTranslations(initial)
+    setCategoryId(product?.category_id || selectedCategoryId || categoryList[0]?.id || '')
+    setPrice(product ? priceToInput(product.price) : '')
+    setComparePrice(
+      product?.compare_price !== null && product?.compare_price !== undefined
+        ? priceToInput(product.compare_price)
         : '',
     )
-    setGorselUrl(urun?.image_url || null)
-    setAlerjenler(Array.isArray(urun?.allergens) ? [...urun.allergens] : [])
-    setMenudeGoster(urun?.is_active !== false)
-    setOneCikar(Boolean(urun?.is_featured))
-    setAktifDil(anaDil)
-    setHatalar({})
-    setKaydediliyor(false)
+    setImageUrl(product?.image_url || null)
+    setAllergens(Array.isArray(product?.allergens) ? [...product.allergens] : [])
+    setVisible(product?.is_active !== false)
+    setFeatured(Boolean(product?.is_featured))
+    setActiveLanguage(primaryLanguage)
+    setErrors({})
+    setSaving(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [acik, urun, seciliKategoriId, anaDil, dilAnahtari])
+  }, [open, product, selectedCategoryId, primaryLanguage, languageKey])
 
-  function alanDegistir(dilKodu, alan, deger) {
-    setCeviriler((oncekiler) => ({
-      ...oncekiler,
-      [dilKodu]: { ...(oncekiler[dilKodu] || BOS_CEVIRI), [alan]: deger },
+  function updateField(languageCode, field, value) {
+    setTranslations((previous) => ({
+      ...previous,
+      [languageCode]: { ...(previous[languageCode] || EMPTY_TRANSLATION), [field]: value },
     }))
-    if (alan === 'name' && dilKodu === anaDil && deger.trim()) {
-      setHatalar((oncekiler) => ({ ...oncekiler, ad: '' }))
+    if (field === 'name' && languageCode === primaryLanguage && value.trim()) {
+      setErrors((previous) => ({ ...previous, name: '' }))
     }
   }
 
-  function alerjenDegistir(kod) {
-    setAlerjenler((oncekiler) =>
-      oncekiler.includes(kod) ? oncekiler.filter((a) => a !== kod) : [...oncekiler, kod],
+  function toggleAllergen(code) {
+    setAllergens((previous) =>
+      previous.includes(code) ? previous.filter((item) => item !== code) : [...previous, code],
     )
   }
 
-  async function kaydet() {
-    const yeniHatalar = {}
+  async function save() {
+    const found = {}
 
-    if (!kategoriId) yeniHatalar.kategori = 'Ürünün ekleneceği kategoriyi seçin.'
+    if (!categoryId) found.category = 'Ürünün ekleneceği kategoriyi seçin.'
 
-    const anaAd = (ceviriler[anaDil]?.name || '').trim()
-    if (!anaAd) yeniHatalar.ad = 'Ürün adı zorunludur.'
+    const primaryName = (translations[primaryLanguage]?.name || '').trim()
+    if (!primaryName) found.name = 'Ürün adı zorunludur.'
 
-    if (!fiyatMetniGecerliMi(fiyat)) {
-      yeniHatalar.fiyat = 'Geçerli bir fiyat girin. Örn. 145,00'
-    } else if (fiyatCozumle(fiyat) < 0) {
-      yeniHatalar.fiyat = 'Fiyat sıfırdan küçük olamaz.'
+    if (!isValidPriceText(price)) {
+      found.price = 'Geçerli bir fiyat girin. Örn. 145,00'
+    } else if (parsePrice(price) < 0) {
+      found.price = 'Fiyat sıfırdan küçük olamaz.'
     }
 
-    const karsilastirmaDolu = String(karsilastirmaFiyati).trim() !== ''
-    if (karsilastirmaDolu) {
-      if (!fiyatMetniGecerliMi(karsilastirmaFiyati)) {
-        yeniHatalar.karsilastirma = 'Geçerli bir fiyat girin. Örn. 180,00'
-      } else if (fiyatCozumle(karsilastirmaFiyati) < 0) {
-        yeniHatalar.karsilastirma = 'Fiyat sıfırdan küçük olamaz.'
+    const hasComparePrice = String(comparePrice).trim() !== ''
+    if (hasComparePrice) {
+      if (!isValidPriceText(comparePrice)) {
+        found.comparePrice = 'Geçerli bir fiyat girin. Örn. 180,00'
+      } else if (parsePrice(comparePrice) < 0) {
+        found.comparePrice = 'Fiyat sıfırdan küçük olamaz.'
       }
     }
 
-    if (Object.keys(yeniHatalar).length > 0) {
-      setHatalar(yeniHatalar)
-      if (yeniHatalar.ad) setAktifDil(anaDil)
+    if (Object.keys(found).length > 0) {
+      setErrors(found)
+      if (found.name) setActiveLanguage(primaryLanguage)
       return
     }
 
-    // Adı boş olan dilleri gönderme.
-    const translations = {}
-    dilListesi.forEach((kod) => {
-      const ceviri = ceviriler[kod]
-      if (!ceviri) return
-      const ad = (ceviri.name || '').trim()
-      if (!ad) return
-      translations[kod] = {
-        name: ad,
-        description: (ceviri.description || '').trim(),
-        ingredients: (ceviri.ingredients || '').trim(),
+    // Languages left without a name are not sent.
+    const payloadTranslations = {}
+    languageList.forEach((code) => {
+      const translation = translations[code]
+      if (!translation) return
+      const name = (translation.name || '').trim()
+      if (!name) return
+      payloadTranslations[code] = {
+        name,
+        description: (translation.description || '').trim(),
+        ingredients: (translation.ingredients || '').trim(),
       }
     })
 
     const payload = {
-      category_id: kategoriId,
-      translations,
-      price: fiyatCozumle(fiyat),
-      compare_price: karsilastirmaDolu ? fiyatCozumle(karsilastirmaFiyati) : null,
-      image_url: gorselUrl || null,
-      allergens: alerjenler,
-      is_active: menudeGoster,
-      is_featured: oneCikar,
+      category_id: categoryId,
+      translations: payloadTranslations,
+      price: parsePrice(price),
+      compare_price: hasComparePrice ? parsePrice(comparePrice) : null,
+      image_url: imageUrl || null,
+      allergens,
+      is_active: visible,
+      is_featured: featured,
     }
 
-    setKaydediliyor(true)
+    setSaving(true)
     try {
-      const sonuc = urun
-        ? await api.updateProduct(urun.id, payload)
+      const result = product
+        ? await api.updateProduct(product.id, payload)
         : await api.createProduct(payload)
 
-      kaydedildi?.(sonuc)
-      bildirim.basari('Ürün kaydedildi.')
-      kapat?.()
-    } catch (hata) {
-      bildirim.hata(hata.message)
+      onSaved?.(result)
+      toast.success('Ürün kaydedildi.')
+      onClose?.()
+    } catch (error) {
+      toast.error(error.message)
     } finally {
-      setKaydediliyor(false)
+      setSaving(false)
     }
   }
 
-  const aktifCeviri = ceviriler[aktifDil] || BOS_CEVIRI
-  const cokDilli = dilListesi.length > 1
+  const activeTranslation = translations[activeLanguage] || EMPTY_TRANSLATION
+  const multiLanguage = languageList.length > 1
 
   return (
     <Modal
-      acik={acik}
-      kapat={kaydediliyor ? () => {} : kapat}
-      baslik={urun ? 'Ürünü Düzenle' : 'Yeni Ürün'}
-      aciklama="Ürün bilgileri, fiyatı ve alerjen uyarıları."
-      genislik="max-w-2xl"
-      altBilgi={
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title={product ? 'Ürünü Düzenle' : 'Yeni Ürün'}
+      description="Ürün bilgileri, fiyatı ve alerjen uyarıları."
+      width="max-w-2xl"
+      footer={
         <>
-          <button type="button" className="btn-ikincil" onClick={kapat} disabled={kaydediliyor}>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
             İptal
           </button>
-          <button type="button" className="btn-birincil" onClick={kaydet} disabled={kaydediliyor}>
-            {kaydediliyor ? (
+          <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+            {saving ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Kaydediliyor
               </>
@@ -218,221 +220,219 @@ export default function UrunModal({
       }
     >
       <div className="space-y-5">
-        {/* --------------------------------------------------------- kategori */}
+        {/* --------------------------------------------------------- category */}
         <div>
-          <label className="etiket" htmlFor="urun-kategori">
+          <label className="label" htmlFor="product-category">
             Kategori <span className="text-red-500">*</span>
           </label>
           <select
-            id="urun-kategori"
-            className="girdi"
-            value={kategoriId}
-            onChange={(olay) => {
-              setKategoriId(olay.target.value)
-              setHatalar((oncekiler) => ({ ...oncekiler, kategori: '' }))
+            id="product-category"
+            className="input"
+            value={categoryId}
+            onChange={(event) => {
+              setCategoryId(event.target.value)
+              setErrors((previous) => ({ ...previous, category: '' }))
             }}
           >
             <option value="">Kategori seçin</option>
-            {kategoriListesi.map((kategori) => (
-              <option key={kategori.id} value={kategori.id}>
-                {kategori.icon ? `${kategori.icon} ` : ''}
-                {kategoriAdi(kategori, varsayilanDil)}
+            {categoryList.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.icon ? `${category.icon} ` : ''}
+                {categoryName(category, defaultLanguage)}
               </option>
             ))}
           </select>
-          {hatalar.kategori ? <p className="hata-metni">{hatalar.kategori}</p> : null}
+          {errors.category ? <p className="error-text">{errors.category}</p> : null}
         </div>
 
-        {/* ---------------------------------------------------- dil sekmeleri */}
-        {cokDilli ? (
+        {/* ---------------------------------------------------- language tabs */}
+        {multiLanguage ? (
           <div className="flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1">
-            {dilListesi.map((kod) => {
-              const dil = dilBul(kod)
-              const secili = kod === aktifDil
+            {languageList.map((code) => {
+              const language = findLanguage(code)
+              const isSelected = code === activeLanguage
               return (
                 <button
-                  key={kod}
+                  key={code}
                   type="button"
-                  onClick={() => setAktifDil(kod)}
+                  onClick={() => setActiveLanguage(code)}
                   className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${
-                    secili
-                      ? 'bg-white text-gray-900 shadow-kart'
+                    isSelected
+                      ? 'bg-white text-gray-900 shadow-card'
                       : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  <span aria-hidden="true">{dil.kisa}</span>
-                  {dil.label}
-                  {kod === anaDil ? <span className="text-xs text-marka-600">•</span> : null}
+                  <span aria-hidden="true">{language.short}</span>
+                  {language.label}
+                  {code === primaryLanguage ? (
+                    <span className="text-xs text-brand-600">•</span>
+                  ) : null}
                 </button>
               )
             })}
           </div>
         ) : null}
 
-        {/* ------------------------------------------------ çok dilli alanlar */}
+        {/* ------------------------------------------- per-language text fields */}
         <div className="space-y-4">
           <div>
-            <label className="etiket" htmlFor={`urun-ad-${aktifDil}`}>
+            <label className="label" htmlFor={`product-name-${activeLanguage}`}>
               Ürün adı
-              {aktifDil === anaDil ? <span className="text-red-500"> *</span> : null}
+              {activeLanguage === primaryLanguage ? <span className="text-red-500"> *</span> : null}
             </label>
             <input
-              id={`urun-ad-${aktifDil}`}
+              id={`product-name-${activeLanguage}`}
               type="text"
-              className="girdi"
-              value={aktifCeviri.name}
-              onChange={(olay) => alanDegistir(aktifDil, 'name', olay.target.value)}
-              placeholder={aktifDil === 'tr' ? 'Örn. Filtre Kahve' : 'Örn. Filter Coffee'}
+              className="input"
+              value={activeTranslation.name}
+              onChange={(event) => updateField(activeLanguage, 'name', event.target.value)}
+              placeholder={activeLanguage === 'tr' ? 'Örn. Filtre Kahve' : 'Örn. Filter Coffee'}
               maxLength={120}
               autoComplete="off"
             />
-            {aktifDil === anaDil && hatalar.ad ? (
-              <p className="hata-metni">{hatalar.ad}</p>
-            ) : aktifDil !== anaDil ? (
-              <p className="yardim">
-                {dilBul(aktifDil).label} çevirisi boş bırakılırsa bu dil gönderilmez.
+            {activeLanguage === primaryLanguage && errors.name ? (
+              <p className="error-text">{errors.name}</p>
+            ) : activeLanguage !== primaryLanguage ? (
+              <p className="help-text">
+                {findLanguage(activeLanguage).label} çevirisi boş bırakılırsa bu dil gönderilmez.
               </p>
             ) : null}
           </div>
 
           <div>
-            <label className="etiket" htmlFor={`urun-aciklama-${aktifDil}`}>
+            <label className="label" htmlFor={`product-description-${activeLanguage}`}>
               Açıklama (opsiyonel)
             </label>
             <textarea
-              id={`urun-aciklama-${aktifDil}`}
-              className="girdi resize-none"
+              id={`product-description-${activeLanguage}`}
+              className="input resize-none"
               rows={2}
-              value={aktifCeviri.description}
-              onChange={(olay) => alanDegistir(aktifDil, 'description', olay.target.value)}
+              value={activeTranslation.description}
+              onChange={(event) => updateField(activeLanguage, 'description', event.target.value)}
               placeholder="Ürünü kısaca tanıtın"
               maxLength={400}
             />
           </div>
 
           <div>
-            <label className="etiket" htmlFor={`urun-icindekiler-${aktifDil}`}>
+            <label className="label" htmlFor={`product-ingredients-${activeLanguage}`}>
               İçindekiler (opsiyonel)
             </label>
             <textarea
-              id={`urun-icindekiler-${aktifDil}`}
-              className="girdi resize-none"
+              id={`product-ingredients-${activeLanguage}`}
+              className="input resize-none"
               rows={2}
-              value={aktifCeviri.ingredients}
-              onChange={(olay) => alanDegistir(aktifDil, 'ingredients', olay.target.value)}
+              value={activeTranslation.ingredients}
+              onChange={(event) => updateField(activeLanguage, 'ingredients', event.target.value)}
               placeholder="Örn. espresso, süt, kakao"
               maxLength={400}
             />
           </div>
         </div>
 
-        {/* ----------------------------------------------------------- fiyat */}
+        {/* ------------------------------------------------------------ price */}
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="etiket" htmlFor="urun-fiyat">
+            <label className="label" htmlFor="product-price">
               Fiyat <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <input
-                id="urun-fiyat"
+                id="product-price"
                 type="text"
                 inputMode="decimal"
-                className="girdi pr-9"
-                value={fiyat}
-                onChange={(olay) => {
-                  setFiyat(olay.target.value)
-                  setHatalar((oncekiler) => ({ ...oncekiler, fiyat: '' }))
+                className="input pr-9"
+                value={price}
+                onChange={(event) => {
+                  setPrice(event.target.value)
+                  setErrors((previous) => ({ ...previous, price: '' }))
                 }}
                 onBlur={() => {
-                  if (fiyatMetniGecerliMi(fiyat)) setFiyat(fiyatGirdiye(fiyatCozumle(fiyat)))
+                  if (isValidPriceText(price)) setPrice(priceToInput(parsePrice(price)))
                 }}
                 placeholder="145,00"
                 autoComplete="off"
               />
               <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
-                {simge}
+                {symbol}
               </span>
             </div>
-            {hatalar.fiyat ? <p className="hata-metni">{hatalar.fiyat}</p> : null}
+            {errors.price ? <p className="error-text">{errors.price}</p> : null}
           </div>
 
           <div>
-            <label className="etiket" htmlFor="urun-karsilastirma-fiyati">
+            <label className="label" htmlFor="product-compare-price">
               Karşılaştırma fiyatı (opsiyonel)
             </label>
             <div className="relative">
               <input
-                id="urun-karsilastirma-fiyati"
+                id="product-compare-price"
                 type="text"
                 inputMode="decimal"
-                className="girdi pr-9"
-                value={karsilastirmaFiyati}
-                onChange={(olay) => {
-                  setKarsilastirmaFiyati(olay.target.value)
-                  setHatalar((oncekiler) => ({ ...oncekiler, karsilastirma: '' }))
+                className="input pr-9"
+                value={comparePrice}
+                onChange={(event) => {
+                  setComparePrice(event.target.value)
+                  setErrors((previous) => ({ ...previous, comparePrice: '' }))
                 }}
                 onBlur={() => {
-                  if (fiyatMetniGecerliMi(karsilastirmaFiyati)) {
-                    setKarsilastirmaFiyati(fiyatGirdiye(fiyatCozumle(karsilastirmaFiyati)))
+                  if (isValidPriceText(comparePrice)) {
+                    setComparePrice(priceToInput(parsePrice(comparePrice)))
                   }
                 }}
                 placeholder="180,00"
                 autoComplete="off"
               />
               <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
-                {simge}
+                {symbol}
               </span>
             </div>
-            {hatalar.karsilastirma ? (
-              <p className="hata-metni">{hatalar.karsilastirma}</p>
+            {errors.comparePrice ? (
+              <p className="error-text">{errors.comparePrice}</p>
             ) : (
-              <p className="yardim">Üstü çizili eski fiyat. Boş bırakabilirsiniz.</p>
+              <p className="help-text">Üstü çizili eski fiyat. Boş bırakabilirsiniz.</p>
             )}
           </div>
         </div>
 
-        {/* ---------------------------------------------------------- görsel */}
-        <GorselYukleyici
-          deger={gorselUrl}
-          degisti={setGorselUrl}
-          etiket="Ürün görseli (opsiyonel)"
-        />
+        {/* ----------------------------------------------------------- image */}
+        <ImageUploader value={imageUrl} onChange={setImageUrl} label="Ürün görseli (opsiyonel)" />
 
-        {/* -------------------------------------------------------- alerjenler */}
+        {/* -------------------------------------------------------- allergens */}
         <div>
-          <span className="etiket">Alerjen / uyarı etiketleri (opsiyonel)</span>
+          <span className="label">Alerjen / uyarı etiketleri (opsiyonel)</span>
           <div className="flex flex-wrap gap-2">
-            {ALERJENLER.map((alerjen) => {
-              const secili = alerjenler.includes(alerjen.code)
+            {ALLERGENS.map((allergen) => {
+              const isSelected = allergens.includes(allergen.code)
               return (
                 <button
-                  key={alerjen.code}
+                  key={allergen.code}
                   type="button"
-                  onClick={() => alerjenDegistir(alerjen.code)}
-                  aria-pressed={secili}
+                  onClick={() => toggleAllergen(allergen.code)}
+                  aria-pressed={isSelected}
                   className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                    secili
-                      ? 'border-marka-600 bg-marka-50 text-marka-700'
+                    isSelected
+                      ? 'border-brand-600 bg-brand-50 text-brand-700'
                       : 'border-gray-300 text-gray-600 hover:bg-gray-50'
                   }`}
                 >
-                  <span aria-hidden="true">{alerjen.emoji}</span>
-                  {alerjen.tr}
+                  <span aria-hidden="true">{allergen.emoji}</span>
+                  {allergen.tr}
                 </button>
               )
             })}
           </div>
-          <p className="yardim">Seçtikleriniz ürün kartında küçük rozetler olarak görünür.</p>
+          <p className="help-text">Seçtikleriniz ürün kartında küçük rozetler olarak görünür.</p>
         </div>
 
-        {/* -------------------------------------------------------- anahtarlar */}
+        {/* ---------------------------------------------------------- toggles */}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3">
             <input
               type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-marka-600 focus:ring-marka-500"
-              checked={menudeGoster}
-              onChange={(olay) => setMenudeGoster(olay.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              checked={visible}
+              onChange={(event) => setVisible(event.target.checked)}
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium text-gray-700">Menüde göster</span>
@@ -445,9 +445,9 @@ export default function UrunModal({
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3">
             <input
               type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-marka-600 focus:ring-marka-500"
-              checked={oneCikar}
-              onChange={(olay) => setOneCikar(olay.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              checked={featured}
+              onChange={(event) => setFeatured(event.target.checked)}
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium text-gray-700">Öne çıkar</span>

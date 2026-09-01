@@ -1,7 +1,10 @@
-// Para birimi, fiyat ve tarih biçimlendirme yardımcıları.
-// Kodlar backend'deki internal/utils/currency.go ile birebir aynıdır.
+// Currency, price and date formatting helpers.
+// The currency codes mirror backend/internal/utils/currency.go exactly.
+//
+// NOTE: user-facing copy stays Turkish on purpose — Karecik serves Turkish
+// businesses. Only the code (identifiers and comments) is English.
 
-export const PARA_BIRIMLERI = {
+export const CURRENCIES = {
   TRY: { code: 'TRY', symbol: '₺', label: 'Türk Lirası', position: 'suffix' },
   USD: { code: 'USD', symbol: '$', label: 'Amerikan Doları', position: 'prefix' },
   EUR: { code: 'EUR', symbol: '€', label: 'Euro', position: 'prefix' },
@@ -12,52 +15,52 @@ export const PARA_BIRIMLERI = {
   AED: { code: 'AED', symbol: 'د.إ', label: 'BAE Dirhemi', position: 'suffix' },
 }
 
-export const PARA_BIRIMI_LISTESI = Object.values(PARA_BIRIMLERI)
+export const CURRENCY_LIST = Object.values(CURRENCIES)
 
-/** "145" -> "145,00 ₺"  |  "145" (USD) -> "$145.00" */
-export function fiyatBicimle(deger, paraBirimi = 'TRY') {
-  const birim = PARA_BIRIMLERI[paraBirimi] || PARA_BIRIMLERI.TRY
-  const sayi = Number(deger)
-  const guvenli = Number.isFinite(sayi) ? sayi : 0
+/** 145 -> "145,00 ₺"  |  145 (USD) -> "$145.00" */
+export function formatPrice(value, currencyCode = 'TRY') {
+  const currency = CURRENCIES[currencyCode] || CURRENCIES.TRY
+  const parsed = Number(value)
+  const safe = Number.isFinite(parsed) ? parsed : 0
 
-  const yerel = birim.position === 'prefix' ? 'en-US' : 'tr-TR'
-  const metin = guvenli.toLocaleString(yerel, {
+  const locale = currency.position === 'prefix' ? 'en-US' : 'tr-TR'
+  const text = safe.toLocaleString(locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
 
-  return birim.position === 'prefix' ? `${birim.symbol}${metin}` : `${metin} ${birim.symbol}`
+  return currency.position === 'prefix' ? `${currency.symbol}${text}` : `${text} ${currency.symbol}`
 }
 
-/** Para birimi simgesini döndürür. */
-export function paraSimgesi(paraBirimi = 'TRY') {
-  return (PARA_BIRIMLERI[paraBirimi] || PARA_BIRIMLERI.TRY).symbol
+/** Returns the symbol of a currency code. */
+export function currencySymbol(currencyCode = 'TRY') {
+  return (CURRENCIES[currencyCode] || CURRENCIES.TRY).symbol
 }
 
-/** ISO tarih -> "24.08.2026" */
-export function tarihBicimle(isoTarih) {
-  if (!isoTarih) return ''
-  const tarih = new Date(isoTarih)
-  if (Number.isNaN(tarih.getTime())) return ''
+/** ISO date -> "24.08.2026" */
+export function formatDate(isoDate) {
+  if (!isoDate) return ''
+  const date = new Date(isoDate)
+  if (Number.isNaN(date.getTime())) return ''
 
-  const gun = String(tarih.getDate()).padStart(2, '0')
-  const ay = String(tarih.getMonth() + 1).padStart(2, '0')
-  return `${gun}.${ay}.${tarih.getFullYear()}`
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${day}.${month}.${date.getFullYear()}`
 }
 
-/** Girdi metnini sayıya çevirir: "12,50" ve "12.50" ikisini de kabul eder. */
-export function fiyatCozumle(metin) {
-  if (typeof metin === 'number') return metin
-  const temiz = String(metin ?? '')
+/** Parses typed input into a number: accepts both "12,50" and "12.50". */
+export function parsePrice(text) {
+  if (typeof text === 'number') return text
+  const cleaned = String(text ?? '')
     .replace(/\s/g, '')
     .replace(/\./g, '')
     .replace(',', '.')
-  const sayi = Number.parseFloat(temiz)
-  return Number.isFinite(sayi) ? sayi : 0
+  const parsed = Number.parseFloat(cleaned)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
-/** Fiyatı düzenlenebilir girdi biçimine çevirir: 145 -> "145,00" */
-export function fiyatGirdiye(deger) {
-  const sayi = Number(deger)
-  return (Number.isFinite(sayi) ? sayi : 0).toFixed(2).replace('.', ',')
+/** Formats a price for an editable input: 145 -> "145,00" */
+export function priceToInput(value) {
+  const parsed = Number(value)
+  return (Number.isFinite(parsed) ? parsed : 0).toFixed(2).replace('.', ',')
 }

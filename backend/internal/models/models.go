@@ -6,21 +6,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// ---------------------------------------------------------------- ceviriler
+// ------------------------------------------------------------- translations
 
-// Translation, bir kategorinin/urunun tek bir dildeki metinleridir.
+// Translation holds the texts of a category or product in a single language.
 type Translation struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Ingredients string `json:"ingredients,omitempty"`
 }
 
-// Translations, dil kodundan (tr, en, de...) metinlere esleme yapar.
-// Veritabaninda JSONB olarak saklanir.
+// Translations maps a language code (tr, en, de...) to its texts.
+// It is stored as JSONB in the database.
 type Translations map[string]Translation
 
-// Resolve, istenen dildeki metinleri dondurur.
-// Istenen dil yoksa fallback diline, o da yoksa sozlukteki ilk dolu kayda duser.
+// Resolve returns the texts for the requested language.
+// If that language is missing it falls back to `fallback`, and finally to the
+// first non-empty entry in the map.
 func (t Translations) Resolve(lang, fallback string) Translation {
 	if tr, ok := t[lang]; ok && tr.Name != "" {
 		return tr
@@ -36,13 +37,13 @@ func (t Translations) Resolve(lang, fallback string) Translation {
 	return Translation{}
 }
 
-// HasName, verilen dilde dolu bir ad bulunup bulunmadigini soyler.
+// HasName reports whether a non-empty name exists for the given language.
 func (t Translations) HasName(lang string) bool {
 	tr, ok := t[lang]
 	return ok && tr.Name != ""
 }
 
-// ------------------------------------------------------------------- users
+// -------------------------------------------------------------------- users
 
 type User struct {
 	ID           uuid.UUID `json:"id"`
@@ -54,7 +55,7 @@ type User struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// -------------------------------------------------------------- businesses
+// --------------------------------------------------------------- businesses
 
 type Business struct {
 	ID     uuid.UUID `json:"id"`
@@ -93,11 +94,11 @@ type Business struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// Hesaplanan alanlar (veritabaninda sutunu yoktur)
+	// Computed field — it has no column in the database
 	MenuURL string `json:"menu_url,omitempty"`
 }
 
-// -------------------------------------------------------------- categories
+// --------------------------------------------------------------- categories
 
 type Category struct {
 	ID           uuid.UUID    `json:"id"`
@@ -113,7 +114,7 @@ type Category struct {
 	ProductCount int `json:"product_count"`
 }
 
-// ---------------------------------------------------------------- products
+// ----------------------------------------------------------------- products
 
 type Product struct {
 	ID           uuid.UUID    `json:"id"`
@@ -131,9 +132,9 @@ type Product struct {
 	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
-// ----------------------------------------------- musteri tarafi menu ciktisi
-// Public uclarda ceviriler cozulmus olarak doner: translations sozlugu yerine
-// duz name/description alanlari bulunur.
+// ------------------------------------------------ customer-facing menu DTOs
+// On the public endpoints the translations are already resolved: instead of the
+// translations map the payload carries plain name / description fields.
 
 type PublicMenu struct {
 	Business   PublicBusiness   `json:"business"`
@@ -142,15 +143,15 @@ type PublicMenu struct {
 }
 
 type PublicBusiness struct {
-	Name           string   `json:"name"`
-	Slug           string   `json:"slug"`
-	LogoURL        *string  `json:"logo_url"`
-	CoverURL       *string  `json:"cover_url"`
-	Currency       string   `json:"currency"`
-	CurrencySymbol string   `json:"currency_symbol"`
-	Theme          string   `json:"theme"`
-	FontFamily     string   `json:"font_family"`
-	PrimaryColor   string   `json:"primary_color"`
+	Name           string  `json:"name"`
+	Slug           string  `json:"slug"`
+	LogoURL        *string `json:"logo_url"`
+	CoverURL       *string `json:"cover_url"`
+	Currency       string  `json:"currency"`
+	CurrencySymbol string  `json:"currency_symbol"`
+	Theme          string  `json:"theme"`
+	FontFamily     string  `json:"font_family"`
+	PrimaryColor   string  `json:"primary_color"`
 
 	DefaultLanguage string   `json:"default_language"`
 	Languages       []string `json:"languages"`
@@ -200,7 +201,7 @@ type PublicFooter struct {
 	PoweredBy string `json:"powered_by"`
 }
 
-// ------------------------------------------------ toplu fiyat guncelleme
+// --------------------------------------------------------- bulk price update
 
 type PriceChangePreview struct {
 	ID       uuid.UUID `json:"id"`

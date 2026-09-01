@@ -16,23 +16,25 @@ import (
 	"karecik/backend/internal/utils"
 )
 
-// Setup, tum ara katmanlari ve uclari kaydeder.
+// Setup registers every middleware and route.
 //
-// Kayit sirasi onemlidir:
-//  1. Genel (public) /api uclari
-//  2. Korumali /api grubu  -> bu satirdan sonra eklenen tum /api yollari token ister
-//  3. Statik dosyalar ve SPA geri donusu (en sonda)
+// The registration order matters:
+//  1. public /api endpoints
+//  2. the protected /api group -> every /api path added after this line
+//     requires a token
+//  3. static files and the SPA fallback (last)
 func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Use(recover.New())
 	app.Use(logger.New(logger.Config{
 		Format:     "[karecik] ${time} ${status} ${method} ${path} (${latency})\n",
 		TimeFormat: "15:04:05",
 	}))
-	// NOT: Fiber acilista "Both 'AllowOrigins' and 'AllowOriginsFunc' have been
-	// defined" uyarisi verir. Bu beklenen bir durumdur ve sorun degildir:
-	// Fiber once listedeki adresleri dener, eslesme olmazsa AllowOriginsFunc'i
-	// calistirir. Listeyi bos birakirsak Fiber varsayilan olarak "*" kullanir
-	// (herkese acik) — bu yuzden ikisi birlikte tanimlanmistir.
+
+	// NOTE: Fiber logs "Both 'AllowOrigins' and 'AllowOriginsFunc' have been
+	// defined" on start-up. That is expected and harmless: Fiber checks the
+	// listed origins first and calls AllowOriginsFunc only when none matched.
+	// Leaving the list empty would make Fiber default to "*" (open to everyone),
+	// which is why both are defined together.
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(cfg.CORSOrigins, ","),
 		AllowOriginsFunc: func(origin string) bool { return isAllowedOrigin(origin, cfg) },
@@ -41,25 +43,25 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 		MaxAge:           3600,
 	}))
 
-	// Yuklenen gorseller
+	// Uploaded images
 	app.Static("/uploads", cfg.UploadDir, fiber.Static{
 		Browse:    false,
 		MaxAge:    86400,
 		ByteRange: true,
 	})
 
-	// ------------------------------------------------------------ genel uclar
+	// ------------------------------------------------------ public endpoints
 	app.Get("/api/health", h.Health)
 	app.Get("/api/meta", h.Meta)
 
 	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
 
-	// Musteri menusu — token istemez
+	// Customer menu — no token required
 	app.Get("/api/public/menu", h.PublicMenuByHost)
 	app.Get("/api/public/menu/:slug", h.PublicMenuBySlug)
 
-	// --------------------------------------------------------- korumali uclar
+	// --------------------------------------------------- protected endpoints
 	api := app.Group("/api", middleware.Protected(cfg))
 
 	api.Get("/auth/me", h.Me)
@@ -67,14 +69,14 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	api.Get("/business", h.GetBusiness)
 	api.Put("/business", h.UpdateBusiness)
 
-	// Kategoriler — "reorder" yolu ":id" kalibindan ONCE gelmeli
+	// Categories — the "reorder" path must come BEFORE the ":id" pattern
 	api.Get("/categories", h.ListCategories)
 	api.Post("/categories", h.CreateCategory)
 	api.Put("/categories/reorder", h.ReorderCategories)
 	api.Put("/categories/:id", h.UpdateCategory)
 	api.Delete("/categories/:id", h.DeleteCategory)
 
-	// Urunler — sabit yollar ":id" kalibindan ONCE gelmeli
+	// Products — the fixed paths must come BEFORE the ":id" pattern
 	api.Get("/products", h.ListProducts)
 	api.Post("/products", h.CreateProduct)
 	api.Put("/products/reorder", h.ReorderProducts)
@@ -85,15 +87,15 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 
 	api.Post("/uploads", h.Upload)
 
-	// Panel canli onizlemesi
+	// Dashboard live preview
 	api.Get("/preview/menu", h.PreviewMenu)
 
-	// ------------------------------------------------- bilinmeyen /api yollari
+	// ------------------------------------------------- unknown /api requests
 	app.All("/api/*", func(c *fiber.Ctx) error {
 		return utils.NotFound(c, "Böyle bir API ucu yok: "+c.Path())
 	})
 
-	// ------------------------------------- production: derlenmis frontend (SPA)
+	// ------------------------------ production: serve the built frontend (SPA)
 	if cfg.ServeStatic {
 		app.Static("/", cfg.StaticDir, fiber.Static{Browse: false, MaxAge: 3600})
 		app.Get("/*", func(c *fiber.Ctx) error {
@@ -102,9 +104,9 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	}
 }
 
-// isAllowedOrigin, CORS icin kaynak adresini denetler.
-// Listedeki adreslerin yani sira kok alan adinin tum subdomain'lerine izin verir
-// (musteri menuleri <isletme>.karecik.com adresinden acilir).
+// isAllowedOrigin decides whether an origin may call the API.
+// Besides the configured list it allows every subdomain of the root domain,
+// because customer menus are served from <business>.karecik.com.
 func isAllowedOrigin(origin string, cfg *config.Config) bool {
 	parsed, err := url.Parse(origin)
 	if err != nil {

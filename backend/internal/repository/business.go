@@ -20,13 +20,16 @@ const businessColumns = `id, user_id, name, slug, logo_url, cover_url, currency,
 	is_active, created_at, updated_at`
 
 func scanBusiness(row pgx.Row) (*models.Business, error) {
-	var b models.Business
+	var business models.Business
 	err := row.Scan(
-		&b.ID, &b.UserID, &b.Name, &b.Slug, &b.LogoURL, &b.CoverURL, &b.Currency, &b.Theme,
-		&b.FontFamily, &b.PrimaryColor, &b.DefaultLanguage, &b.Languages, &b.SplashEnabled,
-		&b.SplashDuration, &b.SplashBgColor, &b.SplashText, &b.ShowVatNote, &b.VatNoteText,
-		&b.ShowPriceDate, &b.PriceUpdatedAt, &b.Phone, &b.Address, &b.Instagram, &b.WifiPassword,
-		&b.IsActive, &b.CreatedAt, &b.UpdatedAt,
+		&business.ID, &business.UserID, &business.Name, &business.Slug, &business.LogoURL,
+		&business.CoverURL, &business.Currency, &business.Theme, &business.FontFamily,
+		&business.PrimaryColor, &business.DefaultLanguage, &business.Languages,
+		&business.SplashEnabled, &business.SplashDuration, &business.SplashBgColor,
+		&business.SplashText, &business.ShowVatNote, &business.VatNoteText,
+		&business.ShowPriceDate, &business.PriceUpdatedAt, &business.Phone, &business.Address,
+		&business.Instagram, &business.WifiPassword, &business.IsActive,
+		&business.CreatedAt, &business.UpdatedAt,
 	)
 	if err != nil {
 		if isNoRows(err) {
@@ -34,13 +37,13 @@ func scanBusiness(row pgx.Row) (*models.Business, error) {
 		}
 		return nil, err
 	}
-	if b.Languages == nil {
-		b.Languages = []string{b.DefaultLanguage}
+	if business.Languages == nil {
+		business.Languages = []string{business.DefaultLanguage}
 	}
-	return &b, nil
+	return &business, nil
 }
 
-// insertBusiness, yeni kayitta varsayilan ayarlarla isletme olusturur.
+// insertBusiness creates a business with the default settings during sign-up.
 func insertBusiness(ctx context.Context, db DB, userID uuid.UUID, name, slug string) (*models.Business, error) {
 	row := db.QueryRow(ctx, `
 		INSERT INTO businesses (user_id, name, slug, languages)
@@ -48,37 +51,37 @@ func insertBusiness(ctx context.Context, db DB, userID uuid.UUID, name, slug str
 		RETURNING `+businessColumns,
 		userID, name, slug, []string{"tr"})
 
-	b, err := scanBusiness(row)
+	business, err := scanBusiness(row)
 	if err != nil {
 		if IsUniqueViolation(err) {
 			return nil, ErrDuplicate
 		}
-		return nil, fmt.Errorf("isletme olusturulamadi: %w", err)
+		return nil, fmt.Errorf("could not create the business: %w", err)
 	}
-	return b, nil
+	return business, nil
 }
 
-// GetBusinessByID, isletmeyi kimligine gore getirir.
+// GetBusinessByID fetches a business by identifier.
 func GetBusinessByID(ctx context.Context, db DB, id uuid.UUID) (*models.Business, error) {
 	return scanBusiness(db.QueryRow(ctx,
 		`SELECT `+businessColumns+` FROM businesses WHERE id = $1`, id))
 }
 
-// GetBusinessByUserID, kullaniciya ait isletmeyi getirir.
+// GetBusinessByUserID fetches the business that belongs to a user.
 func GetBusinessByUserID(ctx context.Context, db DB, userID uuid.UUID) (*models.Business, error) {
 	return scanBusiness(db.QueryRow(ctx,
 		`SELECT `+businessColumns+` FROM businesses WHERE user_id = $1`, userID))
 }
 
-// GetBusinessBySlug, subdomain'den cozulen slug ile isletmeyi getirir.
-// Yalnizca yayinda (is_active) olan isletmeler doner.
+// GetBusinessBySlug fetches a business by the slug resolved from the subdomain.
+// Only published (is_active) businesses are returned.
 func GetBusinessBySlug(ctx context.Context, db DB, slug string) (*models.Business, error) {
 	return scanBusiness(db.QueryRow(ctx,
 		`SELECT `+businessColumns+` FROM businesses WHERE slug = lower($1) AND is_active = true`,
 		strings.TrimSpace(slug)))
 }
 
-// SlugTaken, slug'in baska bir isletme tarafindan kullanilip kullanilmadigini soyler.
+// SlugTaken reports whether a slug is already used by another business.
 func SlugTaken(ctx context.Context, db DB, slug string, exceptID uuid.UUID) (bool, error) {
 	var exists bool
 	err := db.QueryRow(ctx,
@@ -87,8 +90,8 @@ func SlugTaken(ctx context.Context, db DB, slug string, exceptID uuid.UUID) (boo
 	return exists, err
 }
 
-// businessUpdatableColumns, PUT /api/business ile guncellenebilen sutunlar.
-// Sutun adlari yalnizca bu listeden gelir; SQL enjeksiyonu mumkun degildir.
+// businessUpdatableColumns lists the columns PUT /api/business may change.
+// Column names only ever come from this allowlist, so SQL injection is impossible.
 var businessUpdatableColumns = map[string]bool{
 	"name": true, "slug": true, "logo_url": true, "cover_url": true,
 	"currency": true, "theme": true, "font_family": true, "primary_color": true,
@@ -99,17 +102,17 @@ var businessUpdatableColumns = map[string]bool{
 	"is_active": true,
 }
 
-// UpdateBusiness, verilen sutunlari gunceller ve guncel kaydi dondurur.
+// UpdateBusiness updates the given columns and returns the fresh record.
 func UpdateBusiness(ctx context.Context, db DB, id uuid.UUID, fields map[string]any) (*models.Business, error) {
 	if len(fields) == 0 {
 		return GetBusinessByID(ctx, db, id)
 	}
 
-	// Sabit sira -> okunabilir SQL ve deterministik davranis
+	// A stable order keeps the SQL readable and the behaviour deterministic.
 	columns := make([]string, 0, len(fields))
-	for col := range fields {
-		if businessUpdatableColumns[col] {
-			columns = append(columns, col)
+	for column := range fields {
+		if businessUpdatableColumns[column] {
+			columns = append(columns, column)
 		}
 	}
 	if len(columns) == 0 {
@@ -119,27 +122,27 @@ func UpdateBusiness(ctx context.Context, db DB, id uuid.UUID, fields map[string]
 
 	setParts := make([]string, 0, len(columns))
 	args := make([]any, 0, len(columns)+1)
-	for i, col := range columns {
-		setParts = append(setParts, fmt.Sprintf("%s = $%d", col, i+1))
-		args = append(args, fields[col])
+	for i, column := range columns {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", column, i+1))
+		args = append(args, fields[column])
 	}
 	args = append(args, id)
 
 	query := `UPDATE businesses SET ` + strings.Join(setParts, ", ") +
 		fmt.Sprintf(` WHERE id = $%d RETURNING `, len(args)) + businessColumns
 
-	b, err := scanBusiness(db.QueryRow(ctx, query, args...))
+	business, err := scanBusiness(db.QueryRow(ctx, query, args...))
 	if err != nil {
 		if IsUniqueViolation(err) {
 			return nil, ErrDuplicate
 		}
 		return nil, err
 	}
-	return b, nil
+	return business, nil
 }
 
-// TouchPriceUpdatedAt, toplu fiyat guncellemesinden sonra "fiyat gecerlilik tarihini"
-// simdiye ceker. Musteri menusundeki footer bu degeri kullanir.
+// TouchPriceUpdatedAt moves the "prices valid from" date to now after a bulk
+// price update. The customer menu footer reads this value.
 func TouchPriceUpdatedAt(ctx context.Context, db DB, businessID uuid.UUID) (time.Time, error) {
 	var updatedAt time.Time
 	err := db.QueryRow(ctx,
@@ -148,7 +151,7 @@ func TouchPriceUpdatedAt(ctx context.Context, db DB, businessID uuid.UUID) (time
 	return updatedAt, err
 }
 
-// LogPriceUpdate, toplu fiyat degisiminin denetim kaydini yazar.
+// LogPriceUpdate writes the audit record of a bulk price change.
 func LogPriceUpdate(ctx context.Context, db DB, businessID uuid.UUID,
 	percentage float64, rounding string, affected int) error {
 	_, err := db.Exec(ctx,

@@ -2,137 +2,145 @@ import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 
 import api from '../../lib/api'
-import { dilBul } from '../../locales/index.js'
+import { findLanguage } from '../../locales/index.js'
 import Modal from '../ui/Modal.jsx'
-import GorselYukleyici from '../ui/GorselYukleyici.jsx'
-import { useBildirim } from '../ui/Bildirim.jsx'
+import ImageUploader from '../ui/ImageUploader.jsx'
+import { useToast } from '../ui/Toast.jsx'
 
-/** İkon ızgarasında sunulan emoji seçenekleri (backend TEXT bekliyor). */
-const IKON_SECENEKLERI = [
+/** Emoji offered in the icon grid (the backend column is plain TEXT). */
+const ICON_OPTIONS = [
   '☕', '🥤', '🍽️', '🍰', '🍕', '🍔', '🥗', '🍺', '🍷',
   '🧃', '🥐', '🍳', '🍜', '🌮', '🍦', '🫖', '🧊', '⭐',
 ]
 
 /**
- * Kategori ekleme / düzenleme modalı.
+ * Create / edit dialog for a category.
  *
- * @param {boolean}       acik
- * @param {Function}      kapat
- * @param {object|null}   kategori       - null ise yeni kayıt
- * @param {string[]}      diller         - işletmenin menü dilleri, ör. ['tr','en']
- * @param {string}        varsayilanDil  - ad alanının zorunlu olduğu dil
- * @param {Function}      kaydedildi     - (kategori) => void
+ * @param {boolean}     open
+ * @param {Function}    onClose
+ * @param {object|null} category        - null creates a new record
+ * @param {string[]}    languages       - the business' menu languages, e.g. ['tr','en']
+ * @param {string}      defaultLanguage - the language in which the name is required
+ * @param {Function}    onSaved         - (category) => void
  */
-export default function KategoriModal({
-  acik,
-  kapat,
-  kategori,
-  diller,
-  varsayilanDil,
-  kaydedildi,
+export default function CategoryModal({
+  open,
+  onClose,
+  category,
+  languages,
+  defaultLanguage,
+  onSaved,
 }) {
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  const dilListesi = Array.isArray(diller) && diller.length > 0 ? diller : ['tr']
-  const anaDil = dilListesi.includes(varsayilanDil) ? varsayilanDil : dilListesi[0]
-  const dilAnahtari = dilListesi.join(',')
+  const languageList = Array.isArray(languages) && languages.length > 0 ? languages : ['tr']
+  const primaryLanguage = languageList.includes(defaultLanguage)
+    ? defaultLanguage
+    : languageList[0]
+  const languageKey = languageList.join(',')
 
-  const [aktifDil, setAktifDil] = useState(anaDil)
-  const [ceviriler, setCeviriler] = useState({})
-  const [ikon, setIkon] = useState('')
-  const [gorselUrl, setGorselUrl] = useState(null)
-  const [menudeGoster, setMenudeGoster] = useState(true)
-  const [adHatasi, setAdHatasi] = useState('')
-  const [kaydediliyor, setKaydediliyor] = useState(false)
+  const [activeLanguage, setActiveLanguage] = useState(primaryLanguage)
+  const [translations, setTranslations] = useState({})
+  const [icon, setIcon] = useState('')
+  const [imageUrl, setImageUrl] = useState(null)
+  const [visible, setVisible] = useState(true)
+  const [nameError, setNameError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  /* Modal her açıldığında formu gelen kategoriye göre doldur. */
+  /* Refill the form from the incoming category every time the dialog opens. */
   useEffect(() => {
-    if (!acik) return
+    if (!open) return
 
-    const baslangic = {}
-    dilListesi.forEach((kod) => {
-      baslangic[kod] = {
-        name: kategori?.translations?.[kod]?.name || '',
-        description: kategori?.translations?.[kod]?.description || '',
+    const initial = {}
+    languageList.forEach((code) => {
+      initial[code] = {
+        name: category?.translations?.[code]?.name || '',
+        description: category?.translations?.[code]?.description || '',
       }
     })
 
-    setCeviriler(baslangic)
-    setIkon(kategori?.icon || '')
-    setGorselUrl(kategori?.image_url || null)
-    setMenudeGoster(kategori?.is_active !== false)
-    setAktifDil(anaDil)
-    setAdHatasi('')
-    setKaydediliyor(false)
+    setTranslations(initial)
+    setIcon(category?.icon || '')
+    setImageUrl(category?.image_url || null)
+    setVisible(category?.is_active !== false)
+    setActiveLanguage(primaryLanguage)
+    setNameError('')
+    setSaving(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [acik, kategori, anaDil, dilAnahtari])
+  }, [open, category, primaryLanguage, languageKey])
 
-  function alanDegistir(dilKodu, alan, deger) {
-    setCeviriler((oncekiler) => ({
-      ...oncekiler,
-      [dilKodu]: { ...(oncekiler[dilKodu] || { name: '', description: '' }), [alan]: deger },
+  function updateField(languageCode, field, value) {
+    setTranslations((previous) => ({
+      ...previous,
+      [languageCode]: {
+        ...(previous[languageCode] || { name: '', description: '' }),
+        [field]: value,
+      },
     }))
-    if (alan === 'name' && dilKodu === anaDil && deger.trim()) setAdHatasi('')
+    if (field === 'name' && languageCode === primaryLanguage && value.trim()) setNameError('')
   }
 
-  async function kaydet() {
-    const anaAd = (ceviriler[anaDil]?.name || '').trim()
-    if (!anaAd) {
-      setAktifDil(anaDil)
-      setAdHatasi('Kategori adı zorunludur.')
+  async function save() {
+    const primaryName = (translations[primaryLanguage]?.name || '').trim()
+    if (!primaryName) {
+      setActiveLanguage(primaryLanguage)
+      setNameError('Kategori adı zorunludur.')
       return
     }
 
-    // Adı boş olan dilleri hiç gönderme.
-    const translations = {}
-    dilListesi.forEach((kod) => {
-      const ceviri = ceviriler[kod]
-      if (!ceviri) return
-      const ad = (ceviri.name || '').trim()
-      if (!ad) return
-      translations[kod] = { name: ad, description: (ceviri.description || '').trim() }
+    // Languages left without a name are not sent at all.
+    const payloadTranslations = {}
+    languageList.forEach((code) => {
+      const translation = translations[code]
+      if (!translation) return
+      const name = (translation.name || '').trim()
+      if (!name) return
+      payloadTranslations[code] = {
+        name,
+        description: (translation.description || '').trim(),
+      }
     })
 
     const payload = {
-      translations,
-      icon: ikon || null,
-      image_url: gorselUrl || null,
-      is_active: menudeGoster,
+      translations: payloadTranslations,
+      icon: icon || null,
+      image_url: imageUrl || null,
+      is_active: visible,
     }
 
-    setKaydediliyor(true)
+    setSaving(true)
     try {
-      const sonuc = kategori
-        ? await api.updateCategory(kategori.id, payload)
+      const result = category
+        ? await api.updateCategory(category.id, payload)
         : await api.createCategory(payload)
 
-      kaydedildi?.(sonuc)
-      bildirim.basari('Kategori kaydedildi.')
-      kapat?.()
-    } catch (hata) {
-      bildirim.hata(hata.message)
+      onSaved?.(result)
+      toast.success('Kategori kaydedildi.')
+      onClose?.()
+    } catch (error) {
+      toast.error(error.message)
     } finally {
-      setKaydediliyor(false)
+      setSaving(false)
     }
   }
 
-  const aktifCeviri = ceviriler[aktifDil] || { name: '', description: '' }
-  const cokDilli = dilListesi.length > 1
+  const activeTranslation = translations[activeLanguage] || { name: '', description: '' }
+  const multiLanguage = languageList.length > 1
 
   return (
     <Modal
-      acik={acik}
-      kapat={kaydediliyor ? () => {} : kapat}
-      baslik={kategori ? 'Kategoriyi Düzenle' : 'Yeni Kategori'}
-      aciklama="Kategori adı, görseli ve menüde görünürlüğü."
-      genislik="max-w-lg"
-      altBilgi={
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title={category ? 'Kategoriyi Düzenle' : 'Yeni Kategori'}
+      description="Kategori adı, görseli ve menüde görünürlüğü."
+      width="max-w-lg"
+      footer={
         <>
-          <button type="button" className="btn-ikincil" onClick={kapat} disabled={kaydediliyor}>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
             İptal
           </button>
-          <button type="button" className="btn-birincil" onClick={kaydet} disabled={kaydediliyor}>
-            {kaydediliyor ? (
+          <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+            {saving ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Kaydediliyor
               </>
@@ -144,89 +152,91 @@ export default function KategoriModal({
       }
     >
       <div className="space-y-5">
-        {/* ---------------------------------------------------- dil sekmeleri */}
-        {cokDilli ? (
+        {/* ------------------------------------------------- language tabs */}
+        {multiLanguage ? (
           <div className="flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1">
-            {dilListesi.map((kod) => {
-              const dil = dilBul(kod)
-              const secili = kod === aktifDil
+            {languageList.map((code) => {
+              const language = findLanguage(code)
+              const isSelected = code === activeLanguage
               return (
                 <button
-                  key={kod}
+                  key={code}
                   type="button"
-                  onClick={() => setAktifDil(kod)}
+                  onClick={() => setActiveLanguage(code)}
                   className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${
-                    secili
-                      ? 'bg-white text-gray-900 shadow-kart'
+                    isSelected
+                      ? 'bg-white text-gray-900 shadow-card'
                       : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  <span aria-hidden="true">{dil.kisa}</span>
-                  {dil.label}
-                  {kod === anaDil ? <span className="text-xs text-marka-600">•</span> : null}
+                  <span aria-hidden="true">{language.short}</span>
+                  {language.label}
+                  {code === primaryLanguage ? (
+                    <span className="text-xs text-brand-600">•</span>
+                  ) : null}
                 </button>
               )
             })}
           </div>
         ) : null}
 
-        {/* ------------------------------------------------------ ad/açıklama */}
+        {/* --------------------------------------------- name / description */}
         <div>
-          <label className="etiket" htmlFor={`kategori-ad-${aktifDil}`}>
+          <label className="label" htmlFor={`category-name-${activeLanguage}`}>
             Kategori adı
-            {aktifDil === anaDil ? <span className="text-red-500"> *</span> : null}
+            {activeLanguage === primaryLanguage ? <span className="text-red-500"> *</span> : null}
           </label>
           <input
-            id={`kategori-ad-${aktifDil}`}
+            id={`category-name-${activeLanguage}`}
             type="text"
-            className="girdi"
-            value={aktifCeviri.name}
-            onChange={(olay) => alanDegistir(aktifDil, 'name', olay.target.value)}
-            placeholder={aktifDil === 'tr' ? 'Örn. Sıcak İçecekler' : 'Örn. Hot Drinks'}
+            className="input"
+            value={activeTranslation.name}
+            onChange={(event) => updateField(activeLanguage, 'name', event.target.value)}
+            placeholder={activeLanguage === 'tr' ? 'Örn. Sıcak İçecekler' : 'Örn. Hot Drinks'}
             maxLength={80}
             autoComplete="off"
           />
-          {aktifDil === anaDil && adHatasi ? (
-            <p className="hata-metni">{adHatasi}</p>
+          {activeLanguage === primaryLanguage && nameError ? (
+            <p className="error-text">{nameError}</p>
           ) : (
-            <p className="yardim">
-              {aktifDil === anaDil
+            <p className="help-text">
+              {activeLanguage === primaryLanguage
                 ? 'Menüde bu ad görünür.'
-                : `${dilBul(aktifDil).label} çevirisi boş bırakılırsa bu dil gönderilmez.`}
+                : `${findLanguage(activeLanguage).label} çevirisi boş bırakılırsa bu dil gönderilmez.`}
             </p>
           )}
         </div>
 
         <div>
-          <label className="etiket" htmlFor={`kategori-aciklama-${aktifDil}`}>
+          <label className="label" htmlFor={`category-description-${activeLanguage}`}>
             Açıklama (opsiyonel)
           </label>
           <textarea
-            id={`kategori-aciklama-${aktifDil}`}
-            className="girdi resize-none"
+            id={`category-description-${activeLanguage}`}
+            className="input resize-none"
             rows={2}
-            value={aktifCeviri.description}
-            onChange={(olay) => alanDegistir(aktifDil, 'description', olay.target.value)}
+            value={activeTranslation.description}
+            onChange={(event) => updateField(activeLanguage, 'description', event.target.value)}
             placeholder="Kategori hakkında kısa bir not"
             maxLength={240}
           />
         </div>
 
-        {/* ------------------------------------------------------------ ikon */}
+        {/* ------------------------------------------------------------ icon */}
         <div>
-          <span className="etiket">Kategori ikonu (opsiyonel)</span>
+          <span className="label">Kategori ikonu (opsiyonel)</span>
           <div className="grid grid-cols-9 gap-1.5">
-            {IKON_SECENEKLERI.map((emoji) => {
-              const secili = ikon === emoji
+            {ICON_OPTIONS.map((emoji) => {
+              const isSelected = icon === emoji
               return (
                 <button
                   key={emoji}
                   type="button"
-                  onClick={() => setIkon(secili ? '' : emoji)}
-                  aria-pressed={secili}
+                  onClick={() => setIcon(isSelected ? '' : emoji)}
+                  aria-pressed={isSelected}
                   className={`flex h-9 items-center justify-center rounded-lg border text-lg ${
-                    secili
-                      ? 'border-marka-600 bg-marka-50'
+                    isSelected
+                      ? 'border-brand-600 bg-brand-50'
                       : 'border-gray-200 bg-white hover:bg-gray-50'
                   }`}
                 >
@@ -235,25 +245,25 @@ export default function KategoriModal({
               )
             })}
           </div>
-          <p className="yardim">
-            {ikon ? 'Seçimi kaldırmak için ikona tekrar tıklayın.' : 'İsteğe bağlı.'}
+          <p className="help-text">
+            {icon ? 'Seçimi kaldırmak için ikona tekrar tıklayın.' : 'İsteğe bağlı.'}
           </p>
         </div>
 
-        {/* ---------------------------------------------------------- görsel */}
-        <GorselYukleyici
-          deger={gorselUrl}
-          degisti={setGorselUrl}
-          etiket="Kategori görseli (opsiyonel)"
+        {/* ----------------------------------------------------------- image */}
+        <ImageUploader
+          value={imageUrl}
+          onChange={setImageUrl}
+          label="Kategori görseli (opsiyonel)"
         />
 
-        {/* --------------------------------------------------------- anahtar */}
+        {/* ---------------------------------------------------------- toggle */}
         <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3">
           <input
             type="checkbox"
-            className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-marka-600 focus:ring-marka-500"
-            checked={menudeGoster}
-            onChange={(olay) => setMenudeGoster(olay.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+            checked={visible}
+            onChange={(event) => setVisible(event.target.checked)}
           />
           <span className="min-w-0">
             <span className="block text-sm font-medium text-gray-700">Menüde göster</span>

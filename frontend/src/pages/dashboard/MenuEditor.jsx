@@ -17,391 +17,396 @@ import { LayoutList, Percent, Plus } from 'lucide-react'
 
 import api from '../../lib/api'
 import { useAuth } from '../../lib/auth.jsx'
-import { dilBul } from '../../locales/index.js'
+import { findLanguage } from '../../locales/index.js'
 
-import { useBildirim } from '../../components/ui/Bildirim.jsx'
-import BosDurum from '../../components/ui/BosDurum.jsx'
-import OnayModal from '../../components/ui/OnayModal.jsx'
-import Yukleniyor from '../../components/ui/Yukleniyor.jsx'
+import { useToast } from '../../components/ui/Toast.jsx'
+import EmptyState from '../../components/ui/EmptyState.jsx'
+import ConfirmModal from '../../components/ui/ConfirmModal.jsx'
+import Loading from '../../components/ui/Loading.jsx'
 
-import KategoriSatiri from '../../components/dashboard/KategoriSatiri.jsx'
-import UrunSatiri from '../../components/dashboard/UrunSatiri.jsx'
-import KategoriModal from '../../components/dashboard/KategoriModal.jsx'
-import UrunModal from '../../components/dashboard/UrunModal.jsx'
-import TopluFiyatModal from '../../components/dashboard/TopluFiyatModal.jsx'
-import CanliOnizleme from '../../components/dashboard/CanliOnizleme.jsx'
+import CategoryRow from '../../components/dashboard/CategoryRow.jsx'
+import ProductRow from '../../components/dashboard/ProductRow.jsx'
+import CategoryModal from '../../components/dashboard/CategoryModal.jsx'
+import ProductModal from '../../components/dashboard/ProductModal.jsx'
+import BulkPriceModal from '../../components/dashboard/BulkPriceModal.jsx'
+import LivePreview from '../../components/dashboard/LivePreview.jsx'
 
-/** Ürün dizisini category_id'ye göre gruplar ve her grubu position'a göre sıralar. */
-function urunleriGrupla(urunler) {
-  const harita = {}
-  const liste = Array.isArray(urunler) ? urunler : []
+/** Groups products by category_id and sorts each group by position. */
+function groupProducts(products) {
+  const map = {}
+  const list = Array.isArray(products) ? products : []
 
-  liste.forEach((urun) => {
-    const anahtar = String(urun.category_id)
-    if (!harita[anahtar]) harita[anahtar] = []
-    harita[anahtar].push(urun)
+  list.forEach((product) => {
+    const key = String(product.category_id)
+    if (!map[key]) map[key] = []
+    map[key].push(product)
   })
 
-  Object.keys(harita).forEach((anahtar) => {
-    harita[anahtar].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+  Object.keys(map).forEach((key) => {
+    map[key].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
   })
 
-  return harita
+  return map
 }
 
-/** Seçili dilde kategori adı; yoksa Türkçesine düşer. */
-function kategoriAdiAl(kategori, dil) {
-  if (!kategori) return ''
+/** Category name in the selected language, falling back to Turkish. */
+function getCategoryName(category, language) {
+  if (!category) return ''
   return (
-    kategori.translations?.[dil]?.name || kategori.translations?.tr?.name || 'İsimsiz kategori'
+    category.translations?.[language]?.name ||
+    category.translations?.tr?.name ||
+    'İsimsiz kategori'
   )
 }
 
-/** Seçili dilde ürün adı; yoksa Türkçesine düşer. */
-function urunAdiAl(urun, dil) {
-  if (!urun) return ''
-  return urun.translations?.[dil]?.name || urun.translations?.tr?.name || 'İsimsiz ürün'
+/** Product name in the selected language, falling back to Turkish. */
+function getProductName(product, language) {
+  if (!product) return ''
+  return product.translations?.[language]?.name || product.translations?.tr?.name || 'İsimsiz ürün'
 }
 
-export default function MenuEditoru() {
+export default function MenuEditor() {
   const { business } = useAuth()
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  /* ------------------------------------------------------------- işletme */
+  /* ------------------------------------------------------------ business */
 
-  const diller = useMemo(() => {
-    const liste = business?.languages
-    return Array.isArray(liste) && liste.length > 0 ? liste : ['tr']
+  const languages = useMemo(() => {
+    const list = business?.languages
+    return Array.isArray(list) && list.length > 0 ? list : ['tr']
   }, [business])
 
-  const varsayilanDil = business?.default_language || diller[0] || 'tr'
-  const paraBirimi = business?.currency || 'TRY'
+  const defaultLanguage = business?.default_language || languages[0] || 'tr'
+  const currency = business?.currency || 'TRY'
 
-  const [dil, setDil] = useState(varsayilanDil)
+  const [language, setLanguage] = useState(defaultLanguage)
 
   useEffect(() => {
-    if (!diller.includes(dil)) setDil(varsayilanDil)
-  }, [diller, dil, varsayilanDil])
+    if (!languages.includes(language)) setLanguage(defaultLanguage)
+  }, [languages, language, defaultLanguage])
 
-  /* --------------------------------------------------------------- veri */
+  /* ---------------------------------------------------------------- data */
 
-  const [yukleniyor, setYukleniyor] = useState(true)
-  const [kategoriler, setKategoriler] = useState([])
-  const [urunHaritasi, setUrunHaritasi] = useState({})
-  const [acikIdler, setAcikIdler] = useState([])
-  const [onizlemeSayaci, setOnizlemeSayaci] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [categories, setCategories] = useState([])
+  const [productsByCategory, setProductsByCategory] = useState({})
+  const [expandedIds, setExpandedIds] = useState([])
+  const [previewCounter, setPreviewCounter] = useState(0)
 
-  /* -------------------------------------------------------------- modal */
+  /* -------------------------------------------------------------- modals */
 
-  const [kategoriModalAcik, setKategoriModalAcik] = useState(false)
-  const [duzenlenenKategori, setDuzenlenenKategori] = useState(null)
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false)
+  const [editingCategory, setEditingCategory] = useState(null)
 
-  const [urunModalAcik, setUrunModalAcik] = useState(false)
-  const [duzenlenenUrun, setDuzenlenenUrun] = useState(null)
-  const [seciliKategoriId, setSeciliKategoriId] = useState(null)
+  const [productModalOpen, setProductModalOpen] = useState(false)
+  const [editingProduct, setEditingProduct] = useState(null)
+  const [targetCategoryId, setTargetCategoryId] = useState(null)
 
-  const [topluFiyatAcik, setTopluFiyatAcik] = useState(false)
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false)
 
-  const [silinecekKategori, setSilinecekKategori] = useState(null)
-  const [silinecekUrun, setSilinecekUrun] = useState(null)
-  const [silmeIslemde, setSilmeIslemde] = useState(false)
+  const [categoryToDelete, setCategoryToDelete] = useState(null)
+  const [productToDelete, setProductToDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
-  const onizlemeYenile = useCallback(() => {
-    setOnizlemeSayaci((onceki) => onceki + 1)
+  const refreshPreview = useCallback(() => {
+    setPreviewCounter((previous) => previous + 1)
   }, [])
 
-  /* ------------------------------------------------------------ yükleme */
+  /* ------------------------------------------------------------- loading */
 
-  const veriYukle = useCallback(async () => {
-    setYukleniyor(true)
+  const loadData = useCallback(async () => {
+    setLoading(true)
     try {
-      const [gelenKategoriler, gelenUrunler] = await Promise.all([
+      const [incomingCategories, incomingProducts] = await Promise.all([
         api.listCategories(),
         api.listProducts(),
       ])
 
-      const liste = Array.isArray(gelenKategoriler) ? gelenKategoriler : []
-      setKategoriler(liste)
-      setUrunHaritasi(urunleriGrupla(gelenUrunler))
-      setAcikIdler((oncekiler) =>
-        oncekiler.length > 0 ? oncekiler : liste.slice(0, 1).map((k) => k.id),
+      const list = Array.isArray(incomingCategories) ? incomingCategories : []
+      setCategories(list)
+      setProductsByCategory(groupProducts(incomingProducts))
+      setExpandedIds((previous) =>
+        previous.length > 0 ? previous : list.slice(0, 1).map((category) => category.id),
       )
     } catch (err) {
-      bildirim.hata(err.message)
+      toast.error(err.message)
     } finally {
-      setYukleniyor(false)
+      setLoading(false)
     }
-  }, [bildirim])
+  }, [toast])
 
   useEffect(() => {
-    veriYukle()
-  }, [veriYukle])
+    loadData()
+  }, [loadData])
 
-  const urunleriAl = useCallback(
-    (kategoriId) => urunHaritasi[String(kategoriId)] || [],
-    [urunHaritasi],
+  const getProducts = useCallback(
+    (categoryId) => productsByCategory[String(categoryId)] || [],
+    [productsByCategory],
   )
 
-  const urunBul = useCallback(
-    (urunId) => {
-      const gruplar = Object.values(urunHaritasi)
-      for (let i = 0; i < gruplar.length; i += 1) {
-        const bulunan = gruplar[i].find((u) => u.id === urunId)
-        if (bulunan) return bulunan
+  const findProduct = useCallback(
+    (productId) => {
+      const groups = Object.values(productsByCategory)
+      for (let i = 0; i < groups.length; i += 1) {
+        const found = groups[i].find((product) => product.id === productId)
+        if (found) return found
       }
       return null
     },
-    [urunHaritasi],
+    [productsByCategory],
   )
 
-  /** Tek bir ürünün alanlarını yerel olarak günceller (iyimser güncelleme). */
-  const urunuYerelGuncelle = useCallback((urunId, degisiklikler) => {
-    setUrunHaritasi((oncekiler) => {
-      const yeni = {}
-      Object.keys(oncekiler).forEach((anahtar) => {
-        yeni[anahtar] = oncekiler[anahtar].map((u) =>
-          u.id === urunId ? { ...u, ...degisiklikler } : u,
+  /** Patches a single product locally (optimistic update). */
+  const patchProductLocally = useCallback((productId, changes) => {
+    setProductsByCategory((previous) => {
+      const next = {}
+      Object.keys(previous).forEach((key) => {
+        next[key] = previous[key].map((product) =>
+          product.id === productId ? { ...product, ...changes } : product,
         )
       })
-      return yeni
+      return next
     })
   }, [])
 
-  /* ------------------------------------------------------- sürükle-bırak */
+  /* ------------------------------------------------------ drag and drop */
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  /** Kategori sırası değişti: önce yerel state, sonra sunucu. */
-  async function kategoriSiralandi(olay) {
-    const { active, over } = olay
+  /** Category order changed: local state first, then the server. */
+  async function onCategoryDragEnd(event) {
+    const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const eskiSira = kategoriler
-    const eskiIndex = kategoriler.findIndex((k) => k.id === active.id)
-    const yeniIndex = kategoriler.findIndex((k) => k.id === over.id)
-    if (eskiIndex < 0 || yeniIndex < 0) return
+    const previousOrder = categories
+    const fromIndex = categories.findIndex((category) => category.id === active.id)
+    const toIndex = categories.findIndex((category) => category.id === over.id)
+    if (fromIndex < 0 || toIndex < 0) return
 
-    const yeniSira = arrayMove(kategoriler, eskiIndex, yeniIndex)
-    setKategoriler(yeniSira)
-    onizlemeYenile()
+    const nextOrder = arrayMove(categories, fromIndex, toIndex)
+    setCategories(nextOrder)
+    refreshPreview()
 
     try {
-      await api.reorderCategories(yeniSira.map((k) => k.id))
+      await api.reorderCategories(nextOrder.map((category) => category.id))
     } catch (err) {
-      setKategoriler(eskiSira)
-      onizlemeYenile()
-      bildirim.hata(err.message)
+      setCategories(previousOrder)
+      refreshPreview()
+      toast.error(err.message)
     }
   }
 
-  /** Bir kategorinin ürün sırası değişti. */
-  async function urunSiralandi(kategoriId, olay) {
-    const { active, over } = olay
+  /** Product order changed inside one category. */
+  async function onProductDragEnd(categoryId, event) {
+    const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const anahtar = String(kategoriId)
-    const eskiListe = urunHaritasi[anahtar] || []
-    const eskiIndex = eskiListe.findIndex((u) => u.id === active.id)
-    const yeniIndex = eskiListe.findIndex((u) => u.id === over.id)
-    if (eskiIndex < 0 || yeniIndex < 0) return
+    const key = String(categoryId)
+    const previousList = productsByCategory[key] || []
+    const fromIndex = previousList.findIndex((product) => product.id === active.id)
+    const toIndex = previousList.findIndex((product) => product.id === over.id)
+    if (fromIndex < 0 || toIndex < 0) return
 
-    const yeniListe = arrayMove(eskiListe, eskiIndex, yeniIndex)
-    setUrunHaritasi((oncekiler) => ({ ...oncekiler, [anahtar]: yeniListe }))
-    onizlemeYenile()
+    const nextList = arrayMove(previousList, fromIndex, toIndex)
+    setProductsByCategory((previous) => ({ ...previous, [key]: nextList }))
+    refreshPreview()
 
     try {
-      await api.reorderProducts(kategoriId, yeniListe.map((u) => u.id))
+      await api.reorderProducts(
+        categoryId,
+        nextList.map((product) => product.id),
+      )
     } catch (err) {
-      setUrunHaritasi((oncekiler) => ({ ...oncekiler, [anahtar]: eskiListe }))
-      onizlemeYenile()
-      bildirim.hata(err.message)
+      setProductsByCategory((previous) => ({ ...previous, [key]: previousList }))
+      refreshPreview()
+      toast.error(err.message)
     }
   }
 
-  /* ------------------------------------------------------- satır işlemleri */
+  /* ----------------------------------------------------------- row actions */
 
-  function kategoriAcKapat(kategoriId) {
-    setAcikIdler((oncekiler) =>
-      oncekiler.includes(kategoriId)
-        ? oncekiler.filter((id) => id !== kategoriId)
-        : [...oncekiler, kategoriId],
+  function toggleCategory(categoryId) {
+    setExpandedIds((previous) =>
+      previous.includes(categoryId)
+        ? previous.filter((id) => id !== categoryId)
+        : [...previous, categoryId],
     )
   }
 
-  function kategoriEkleAc() {
-    setDuzenlenenKategori(null)
-    setKategoriModalAcik(true)
+  function openCreateCategory() {
+    setEditingCategory(null)
+    setCategoryModalOpen(true)
   }
 
-  function kategoriDuzenleAc(kategori) {
-    setDuzenlenenKategori(kategori)
-    setKategoriModalAcik(true)
+  function openEditCategory(category) {
+    setEditingCategory(category)
+    setCategoryModalOpen(true)
   }
 
-  function urunEkleAc(kategoriId) {
-    setDuzenlenenUrun(null)
-    setSeciliKategoriId(kategoriId)
-    setUrunModalAcik(true)
+  function openCreateProduct(categoryId) {
+    setEditingProduct(null)
+    setTargetCategoryId(categoryId)
+    setProductModalOpen(true)
   }
 
-  function urunDuzenleAc(urun) {
-    setDuzenlenenUrun(urun)
-    setSeciliKategoriId(urun.category_id)
-    setUrunModalAcik(true)
+  function openEditProduct(product) {
+    setEditingProduct(product)
+    setTargetCategoryId(product.category_id)
+    setProductModalOpen(true)
   }
 
-  function kategoriKaydedildi(kategori) {
-    setKategoriModalAcik(false)
-    setDuzenlenenKategori(null)
+  function onCategorySaved(category) {
+    setCategoryModalOpen(false)
+    setEditingCategory(null)
 
-    if (!kategori || !kategori.id) {
-      veriYukle()
-      onizlemeYenile()
+    if (!category || !category.id) {
+      loadData()
+      refreshPreview()
       return
     }
 
-    setKategoriler((oncekiler) => {
-      const varMi = oncekiler.some((k) => k.id === kategori.id)
-      return varMi
-        ? oncekiler.map((k) => (k.id === kategori.id ? kategori : k))
-        : [...oncekiler, kategori]
+    setCategories((previous) => {
+      const exists = previous.some((item) => item.id === category.id)
+      return exists
+        ? previous.map((item) => (item.id === category.id ? category : item))
+        : [...previous, category]
     })
-    setAcikIdler((oncekiler) =>
-      oncekiler.includes(kategori.id) ? oncekiler : [...oncekiler, kategori.id],
+    setExpandedIds((previous) =>
+      previous.includes(category.id) ? previous : [...previous, category.id],
     )
-    onizlemeYenile()
+    refreshPreview()
   }
 
-  function urunKaydedildi(urun) {
-    setUrunModalAcik(false)
-    setDuzenlenenUrun(null)
+  function onProductSaved(product) {
+    setProductModalOpen(false)
+    setEditingProduct(null)
 
-    if (!urun || !urun.id) {
-      veriYukle()
-      onizlemeYenile()
+    if (!product || !product.id) {
+      loadData()
+      refreshPreview()
       return
     }
 
-    setUrunHaritasi((oncekiler) => {
-      const yeni = {}
-      // Ürün başka kategoriye taşınmış olabilir: önce her yerden çıkar.
-      Object.keys(oncekiler).forEach((anahtar) => {
-        yeni[anahtar] = oncekiler[anahtar].filter((u) => u.id !== urun.id)
+    setProductsByCategory((previous) => {
+      const next = {}
+      // The product may have moved to another category: remove it everywhere first.
+      Object.keys(previous).forEach((key) => {
+        next[key] = previous[key].filter((item) => item.id !== product.id)
       })
 
-      const anahtar = String(urun.category_id)
-      const liste = [...(yeni[anahtar] || []), urun]
-      liste.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      yeni[anahtar] = liste
-      return yeni
+      const key = String(product.category_id)
+      const list = [...(next[key] || []), product]
+      list.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      next[key] = list
+      return next
     })
 
-    setAcikIdler((oncekiler) =>
-      oncekiler.includes(urun.category_id) ? oncekiler : [...oncekiler, urun.category_id],
+    setExpandedIds((previous) =>
+      previous.includes(product.category_id) ? previous : [...previous, product.category_id],
     )
-    onizlemeYenile()
+    refreshPreview()
   }
 
-  /** Satır içi hızlı fiyat düzenleme. */
-  async function urunFiyatiDegisti(urunId, yeniFiyat) {
-    const mevcut = urunBul(urunId)
-    const eskiFiyat = mevcut ? mevcut.price : 0
+  /** Inline quick price editing. */
+  async function onProductPriceChange(productId, nextPrice) {
+    const current = findProduct(productId)
+    const previousPrice = current ? current.price : 0
 
-    urunuYerelGuncelle(urunId, { price: yeniFiyat })
-    onizlemeYenile()
+    patchProductLocally(productId, { price: nextPrice })
+    refreshPreview()
 
     try {
-      const guncel = await api.updateProductPrice(urunId, yeniFiyat)
-      if (guncel && guncel.id) urunuYerelGuncelle(urunId, guncel)
-      bildirim.basari('Fiyat güncellendi.')
+      const updated = await api.updateProductPrice(productId, nextPrice)
+      if (updated && updated.id) patchProductLocally(productId, updated)
+      toast.success('Fiyat güncellendi.')
     } catch (err) {
-      urunuYerelGuncelle(urunId, { price: eskiFiyat })
-      onizlemeYenile()
-      bildirim.hata(err.message)
+      patchProductLocally(productId, { price: previousPrice })
+      refreshPreview()
+      toast.error(err.message)
     }
   }
 
-  /** Göz ikonu ile menüde göster / gizle. */
-  async function urunAktifligiDegisti(urunId, yeniDurum) {
-    urunuYerelGuncelle(urunId, { is_active: yeniDurum })
-    onizlemeYenile()
+  /** Show / hide a product from the menu via the eye icon. */
+  async function onProductActiveChange(productId, nextState) {
+    patchProductLocally(productId, { is_active: nextState })
+    refreshPreview()
 
     try {
-      const guncel = await api.updateProduct(urunId, { is_active: yeniDurum })
-      if (guncel && guncel.id) urunuYerelGuncelle(urunId, guncel)
+      const updated = await api.updateProduct(productId, { is_active: nextState })
+      if (updated && updated.id) patchProductLocally(productId, updated)
     } catch (err) {
-      urunuYerelGuncelle(urunId, { is_active: !yeniDurum })
-      onizlemeYenile()
-      bildirim.hata(err.message)
+      patchProductLocally(productId, { is_active: !nextState })
+      refreshPreview()
+      toast.error(err.message)
     }
   }
 
-  async function kategoriSilOnayla() {
-    if (!silinecekKategori) return
-    const hedef = silinecekKategori
-    setSilmeIslemde(true)
+  async function confirmCategoryDelete() {
+    if (!categoryToDelete) return
+    const target = categoryToDelete
+    setDeleting(true)
 
     try {
-      await api.deleteCategory(hedef.id)
+      await api.deleteCategory(target.id)
 
-      setKategoriler((oncekiler) => oncekiler.filter((k) => k.id !== hedef.id))
-      setUrunHaritasi((oncekiler) => {
-        const yeni = { ...oncekiler }
-        delete yeni[String(hedef.id)]
-        return yeni
+      setCategories((previous) => previous.filter((category) => category.id !== target.id))
+      setProductsByCategory((previous) => {
+        const next = { ...previous }
+        delete next[String(target.id)]
+        return next
       })
-      setAcikIdler((oncekiler) => oncekiler.filter((id) => id !== hedef.id))
+      setExpandedIds((previous) => previous.filter((id) => id !== target.id))
 
-      setSilinecekKategori(null)
-      onizlemeYenile()
-      bildirim.basari('Kategori silindi.')
+      setCategoryToDelete(null)
+      refreshPreview()
+      toast.success('Kategori silindi.')
     } catch (err) {
-      bildirim.hata(err.message)
+      toast.error(err.message)
     } finally {
-      setSilmeIslemde(false)
+      setDeleting(false)
     }
   }
 
-  async function urunSilOnayla() {
-    if (!silinecekUrun) return
-    const hedef = silinecekUrun
-    setSilmeIslemde(true)
+  async function confirmProductDelete() {
+    if (!productToDelete) return
+    const target = productToDelete
+    setDeleting(true)
 
     try {
-      await api.deleteProduct(hedef.id)
+      await api.deleteProduct(target.id)
 
-      setUrunHaritasi((oncekiler) => {
-        const yeni = {}
-        Object.keys(oncekiler).forEach((anahtar) => {
-          yeni[anahtar] = oncekiler[anahtar].filter((u) => u.id !== hedef.id)
+      setProductsByCategory((previous) => {
+        const next = {}
+        Object.keys(previous).forEach((key) => {
+          next[key] = previous[key].filter((product) => product.id !== target.id)
         })
-        return yeni
+        return next
       })
 
-      setSilinecekUrun(null)
-      onizlemeYenile()
-      bildirim.basari('Ürün silindi.')
+      setProductToDelete(null)
+      refreshPreview()
+      toast.success('Ürün silindi.')
     } catch (err) {
-      bildirim.hata(err.message)
+      toast.error(err.message)
     } finally {
-      setSilmeIslemde(false)
+      setDeleting(false)
     }
   }
 
-  function topluFiyatUygulandi() {
-    setTopluFiyatAcik(false)
-    veriYukle()
-    onizlemeYenile()
+  function onBulkPriceApplied() {
+    setBulkPriceOpen(false)
+    loadData()
+    refreshPreview()
   }
 
   /* --------------------------------------------------------------- render */
 
   return (
     <div>
-      {/* --------------------------------------------------------- başlık */}
+      {/* --------------------------------------------------------- header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold text-gray-900">Menü Yönetimi</h1>
@@ -411,141 +416,136 @@ export default function MenuEditoru() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn-ikincil"
-            onClick={() => setTopluFiyatAcik(true)}
-          >
+          <button type="button" className="btn-secondary" onClick={() => setBulkPriceOpen(true)}>
             <Percent className="h-4 w-4" aria-hidden="true" />
             Toplu Fiyat Güncelle
           </button>
 
-          <button type="button" className="btn-birincil" onClick={kategoriEkleAc}>
+          <button type="button" className="btn-primary" onClick={openCreateCategory}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             Kategori Ekle
           </button>
         </div>
       </div>
 
-      {/* --------------------------------------------------- dil seçici */}
-      {diller.length > 1 ? (
+      {/* ------------------------------------------------- language picker */}
+      {languages.length > 1 ? (
         <div className="mt-4 inline-flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
-          {diller.map((kod) => {
-            const bilgi = dilBul(kod)
-            const seciliMi = kod === dil
+          {languages.map((code) => {
+            const info = findLanguage(code)
+            const isSelected = code === language
             return (
               <button
-                key={kod}
+                key={code}
                 type="button"
-                onClick={() => setDil(kod)}
-                aria-pressed={seciliMi}
+                onClick={() => setLanguage(code)}
+                aria-pressed={isSelected}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                  seciliMi
-                    ? 'bg-white text-gray-900 shadow-kart'
+                  isSelected
+                    ? 'bg-white text-gray-900 shadow-card'
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
                 <span className="mr-1" aria-hidden="true">
-                  {bilgi.kisa}
+                  {info.short}
                 </span>
-                {bilgi.label}
+                {info.label}
               </button>
             )
           })}
         </div>
       ) : null}
 
-      {/* ----------------------------------------------------- ana düzen */}
+      {/* ------------------------------------------------------ main layout */}
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        {/* ------------------------------------------------------ editör */}
+        {/* ------------------------------------------------------- editor */}
         <div className="min-w-0">
-          {yukleniyor ? (
-            <Yukleniyor metin="Menü yükleniyor..." />
-          ) : kategoriler.length === 0 ? (
-            <BosDurum
-              ikon={LayoutList}
-              baslik="Henüz kategori eklemediniz"
-              aciklama="Menünüzü oluşturmak için ilk kategoriyi ekleyin. Örn: Sıcak İçecekler, Tatlılar"
-              aksiyon={
-                <button type="button" className="btn-birincil" onClick={kategoriEkleAc}>
+          {loading ? (
+            <Loading text="Menü yükleniyor..." />
+          ) : categories.length === 0 ? (
+            <EmptyState
+              icon={LayoutList}
+              title="Henüz kategori eklemediniz"
+              description="Menünüzü oluşturmak için ilk kategoriyi ekleyin. Örn: Sıcak İçecekler, Tatlılar"
+              action={
+                <button type="button" className="btn-primary" onClick={openCreateCategory}>
                   <Plus className="h-4 w-4" aria-hidden="true" />
                   Kategori Ekle
                 </button>
               }
             />
           ) : (
-            /* 1. DndContext — yalnızca kategori sıralaması */
+            /* 1st DndContext — category ordering only */
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
-              onDragEnd={kategoriSiralandi}
+              onDragEnd={onCategoryDragEnd}
             >
               <SortableContext
-                items={kategoriler.map((k) => k.id)}
+                items={categories.map((category) => category.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <div className="flex flex-col gap-3">
-                  {kategoriler.map((kategori) => {
-                    const urunler = urunleriAl(kategori.id)
-                    const acik = acikIdler.includes(kategori.id)
+                  {categories.map((category) => {
+                    const products = getProducts(category.id)
+                    const expanded = expandedIds.includes(category.id)
 
                     return (
-                      <KategoriSatiri
-                        key={kategori.id}
-                        kategori={kategori}
-                        urunler={urunler}
-                        acik={acik}
-                        acKapat={() => kategoriAcKapat(kategori.id)}
-                        dil={dil}
-                        duzenle={() => kategoriDuzenleAc(kategori)}
-                        sil={() => setSilinecekKategori(kategori)}
-                        urunEkle={() => urunEkleAc(kategori.id)}
-                        cocuklar={
-                          <div className="border-t border-gray-100 bg-gray-50/70 px-2 py-3 sm:px-3">
-                            {urunler.length === 0 ? (
-                              <p className="py-3 text-center text-sm text-gray-500">
-                                Bu kategoride henüz ürün yok.
-                              </p>
-                            ) : (
-                              /* 2. DndContext — yalnızca bu kategorinin ürünleri */
-                              <DndContext
-                                sensors={sensors}
-                                collisionDetection={closestCenter}
-                                onDragEnd={(olay) => urunSiralandi(kategori.id, olay)}
-                              >
-                                <SortableContext
-                                  items={urunler.map((u) => u.id)}
-                                  strategy={verticalListSortingStrategy}
-                                >
-                                  <div className="flex flex-col gap-2">
-                                    {urunler.map((urun) => (
-                                      <UrunSatiri
-                                        key={urun.id}
-                                        urun={urun}
-                                        dil={dil}
-                                        paraBirimi={paraBirimi}
-                                        duzenle={() => urunDuzenleAc(urun)}
-                                        sil={() => setSilinecekUrun(urun)}
-                                        fiyatDegisti={urunFiyatiDegisti}
-                                        aktiflikDegisti={urunAktifligiDegisti}
-                                      />
-                                    ))}
-                                  </div>
-                                </SortableContext>
-                              </DndContext>
-                            )}
-
-                            <button
-                              type="button"
-                              className="btn-ikincil btn-kucuk mt-3 w-full"
-                              onClick={() => urunEkleAc(kategori.id)}
+                      <CategoryRow
+                        key={category.id}
+                        category={category}
+                        products={products}
+                        open={expanded}
+                        onToggle={() => toggleCategory(category.id)}
+                        language={language}
+                        onEdit={() => openEditCategory(category)}
+                        onDelete={() => setCategoryToDelete(category)}
+                        onAddProduct={() => openCreateProduct(category.id)}
+                      >
+                        <div className="border-t border-gray-100 bg-gray-50/70 px-2 py-3 sm:px-3">
+                          {products.length === 0 ? (
+                            <p className="py-3 text-center text-sm text-gray-500">
+                              Bu kategoride henüz ürün yok.
+                            </p>
+                          ) : (
+                            /* 2nd DndContext — products of this category only */
+                            <DndContext
+                              sensors={sensors}
+                              collisionDetection={closestCenter}
+                              onDragEnd={(event) => onProductDragEnd(category.id, event)}
                             >
-                              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                              Ürün Ekle
-                            </button>
-                          </div>
-                        }
-                      />
+                              <SortableContext
+                                items={products.map((product) => product.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                <div className="flex flex-col gap-2">
+                                  {products.map((product) => (
+                                    <ProductRow
+                                      key={product.id}
+                                      product={product}
+                                      language={language}
+                                      currency={currency}
+                                      onEdit={() => openEditProduct(product)}
+                                      onDelete={() => setProductToDelete(product)}
+                                      onPriceChange={onProductPriceChange}
+                                      onActiveChange={onProductActiveChange}
+                                    />
+                                  ))}
+                                </div>
+                              </SortableContext>
+                            </DndContext>
+                          )}
+
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm mt-3 w-full"
+                            onClick={() => openCreateProduct(category.id)}
+                          >
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            Ürün Ekle
+                          </button>
+                        </div>
+                      </CategoryRow>
                     )
                   })}
                 </div>
@@ -554,76 +554,78 @@ export default function MenuEditoru() {
           )}
         </div>
 
-        {/* -------------------------------------------------- canlı önizleme */}
+        {/* ------------------------------------------------------ live preview */}
         <div className="hidden xl:block">
           <div className="sticky top-6">
-            <CanliOnizleme business={business} yenile={onizlemeSayaci} />
+            <LivePreview business={business} refresh={previewCounter} />
           </div>
         </div>
       </div>
 
-      {/* --------------------------------------------------------- modaller */}
-      <KategoriModal
-        acik={kategoriModalAcik}
-        kapat={() => {
-          setKategoriModalAcik(false)
-          setDuzenlenenKategori(null)
+      {/* ---------------------------------------------------------- modals */}
+      <CategoryModal
+        open={categoryModalOpen}
+        onClose={() => {
+          setCategoryModalOpen(false)
+          setEditingCategory(null)
         }}
-        kategori={duzenlenenKategori}
-        diller={diller}
-        varsayilanDil={varsayilanDil}
-        kaydedildi={kategoriKaydedildi}
+        category={editingCategory}
+        languages={languages}
+        defaultLanguage={defaultLanguage}
+        onSaved={onCategorySaved}
       />
 
-      <UrunModal
-        acik={urunModalAcik}
-        kapat={() => {
-          setUrunModalAcik(false)
-          setDuzenlenenUrun(null)
+      <ProductModal
+        open={productModalOpen}
+        onClose={() => {
+          setProductModalOpen(false)
+          setEditingProduct(null)
         }}
-        urun={duzenlenenUrun}
-        kategoriler={kategoriler}
-        seciliKategoriId={seciliKategoriId}
-        diller={diller}
-        varsayilanDil={varsayilanDil}
-        paraBirimi={paraBirimi}
-        kaydedildi={urunKaydedildi}
+        product={editingProduct}
+        categories={categories}
+        selectedCategoryId={targetCategoryId}
+        languages={languages}
+        defaultLanguage={defaultLanguage}
+        currency={currency}
+        onSaved={onProductSaved}
       />
 
-      <TopluFiyatModal
-        acik={topluFiyatAcik}
-        kapat={() => setTopluFiyatAcik(false)}
-        kategoriler={kategoriler}
-        paraBirimi={paraBirimi}
-        uygulandi={topluFiyatUygulandi}
+      <BulkPriceModal
+        open={bulkPriceOpen}
+        onClose={() => setBulkPriceOpen(false)}
+        categories={categories}
+        currency={currency}
+        onApplied={onBulkPriceApplied}
       />
 
-      <OnayModal
-        acik={Boolean(silinecekKategori)}
-        kapat={() => setSilinecekKategori(null)}
-        onayla={kategoriSilOnayla}
-        baslik="Kategoriyi sil"
-        mesaj={
-          silinecekKategori
-            ? `"${kategoriAdiAl(silinecekKategori, dil)}" kategorisi ve içindeki ${
-                urunleriAl(silinecekKategori.id).length
+      <ConfirmModal
+        open={Boolean(categoryToDelete)}
+        onClose={() => setCategoryToDelete(null)}
+        onConfirm={confirmCategoryDelete}
+        title="Kategoriyi sil"
+        message={
+          categoryToDelete
+            ? `"${getCategoryName(categoryToDelete, language)}" kategorisi ve içindeki ${
+                getProducts(categoryToDelete.id).length
               } ürün kalıcı olarak silinecek.`
             : ''
         }
-        onayMetni="Sil"
-        islemde={silmeIslemde}
+        confirmText="Sil"
+        busy={deleting}
       />
 
-      <OnayModal
-        acik={Boolean(silinecekUrun)}
-        kapat={() => setSilinecekUrun(null)}
-        onayla={urunSilOnayla}
-        baslik="Ürünü sil"
-        mesaj={
-          silinecekUrun ? `"${urunAdiAl(silinecekUrun, dil)}" ürünü kalıcı olarak silinecek.` : ''
+      <ConfirmModal
+        open={Boolean(productToDelete)}
+        onClose={() => setProductToDelete(null)}
+        onConfirm={confirmProductDelete}
+        title="Ürünü sil"
+        message={
+          productToDelete
+            ? `"${getProductName(productToDelete, language)}" ürünü kalıcı olarak silinecek.`
+            : ''
         }
-        onayMetni="Sil"
-        islemde={silmeIslemde}
+        confirmText="Sil"
+        busy={deleting}
       />
     </div>
   )

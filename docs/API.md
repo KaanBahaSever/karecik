@@ -1,56 +1,61 @@
-# Karecik API Sözleşmesi
+# Karecik API Contract
 
-Base URL (geliştirme): `http://localhost:8080`
+Base URL (development): `http://localhost:8080`
 
-Tüm yanıtlar JSON. Hata yanıtları tek biçimdir:
+Every response is JSON. Errors share one shape:
 
 ```json
-{ "error": "Insan tarafından okunabilir mesaj", "code": "VALIDATION_ERROR" }
+{ "error": "Human readable message", "code": "VALIDATION_ERROR" }
 ```
 
-Hata kodları: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
+> The `error` text is written in **Turkish**, because it is displayed directly
+> to the end user. The `code` is a stable machine-readable identifier.
+
+Error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
 `CONFLICT`, `INTERNAL_ERROR`, `PAYLOAD_TOO_LARGE`.
 
-Korumalı uçlar `Authorization: Bearer <token>` başlığı ister.
+Protected endpoints require an `Authorization: Bearer <token>` header.
 
 ---
 
-## Ortak Tipler
+## Shared types
 
-### Çeviri sözlüğü (`translations`)
+### Translation map (`translations`)
 
-Kategori ve ürün adları çok dillidir. Şema:
+Category and product names are multilingual. The shape is:
 
 ```json
 { "tr": { "name": "Türk Kahvesi", "description": "Geleneksel..." },
   "en": { "name": "Turkish Coffee", "description": "Traditional..." } }
 ```
 
-Okuma sırasında istenen dil yoksa işletmenin `default_language` değerine düşülür.
+When reading, a missing language falls back to the business'
+`default_language`.
 
-### Para birimi kodları
+### Currency codes
 
-| Kod | Simge | Konum |
+| Code | Symbol | Position |
 |---|---|---|
-| `TRY` | ₺ | son (`100,00 ₺`) |
-| `USD` | $ | baş (`$100.00`) |
-| `EUR` | € | baş |
-| `GBP` | £ | baş |
-| `AZN` | ₼ | son |
-| `RUB` | ₽ | son |
-| `SAR` | ﷼ | son |
-| `AED` | د.إ | son |
+| `TRY` | ₺ | suffix (`100,00 ₺`) |
+| `USD` | $ | prefix (`$100.00`) |
+| `EUR` | € | prefix |
+| `GBP` | £ | prefix |
+| `AZN` | ₼ | suffix |
+| `RUB` | ₽ | suffix |
+| `SAR` | ﷼ | suffix |
+| `AED` | د.إ | suffix |
 
-Varsayılan: `TRY`.
+Default: `TRY`.
 
-### Alerjenler (`allergens`) — sabit kod listesi
+### Allergens (`allergens`) — fixed code list
 
-`gluten`, `sut`, `yumurta`, `findik`, `yer_fistigi`, `soya`, `balik`, `kabuklu_deniz`,
-`susam`, `hardal`, `kereviz`, `sulfit`, `aci`, `vejetaryen`, `vegan`, `alkol`, `kafein`
+`gluten`, `sut`, `yumurta`, `findik`, `yer_fistigi`, `soya`, `balik`,
+`kabuklu_deniz`, `susam`, `hardal`, `kereviz`, `sulfit`, `aci`, `vejetaryen`,
+`vegan`, `alkol`, `kafein`
 
 ---
 
-## 1. Sağlık
+## 1. Health
 
 ### `GET /api/health`
 
@@ -60,45 +65,45 @@ Varsayılan: `TRY`.
 
 ---
 
-## 2. Kimlik Doğrulama
+## 2. Authentication
 
 ### `POST /api/auth/register`
 
-İstek:
+Request:
 ```json
 { "business_name": "Kahve Durağı", "email": "info@kahve.com", "password": "sifre1234" }
 ```
 
-Kurallar: `business_name` 2–100 karakter, `email` geçerli ve benzersiz,
-`password` en az 8 karakter.
+Rules: `business_name` 2–100 characters, `email` valid and unique,
+`password` at least 8 characters.
 
-Kayıt sırasında işletme kaydı ve `slug` (subdomain) otomatik üretilir:
-`Kahve Durağı` → `kahve-duragi`. Çakışma olursa sonuna `-2`, `-3` eklenir.
+The business record and its `slug` (subdomain) are generated automatically:
+`Kahve Durağı` → `kahve-duragi`. On a collision `-2`, `-3` … is appended.
 
-Yanıt `201`:
+Response `201`:
 ```json
 {
   "token": "eyJhbGciOi...",
   "user": { "id": "uuid", "email": "info@kahve.com", "business_name": "Kahve Durağı" },
-  "business": { "...Business nesnesi..." }
+  "business": { "...Business object..." }
 }
 ```
 
-Hata `409`: e-posta zaten kayıtlı.
+Error `409`: the email is already registered.
 
 ### `POST /api/auth/login`
 
-İstek: `{ "email": "...", "password": "..." }`
-Yanıt `200`: register ile aynı gövde.
-Hata `401`: `E-posta veya şifre hatalı.`
+Request: `{ "email": "...", "password": "..." }`
+Response `200`: the same body as register.
+Error `401`: `E-posta veya şifre hatalı.`
 
 ### `GET /api/auth/me` 🔒
 
-Yanıt: `{ "user": {...}, "business": {...} }`
+Response: `{ "user": {...}, "business": {...} }`
 
 ---
 
-## 3. İşletme (Business) 🔒
+## 3. Business 🔒
 
 ### `GET /api/business`
 
@@ -112,7 +117,7 @@ Yanıt: `{ "user": {...}, "business": {...} }`
   "currency": "TRY",
   "theme": "modern-light",
   "font_family": "inter",
-  "primary_color": "#1a7f5a",
+  "primary_color": "#1d4ed8",
   "default_language": "tr",
   "languages": ["tr", "en"],
   "splash_enabled": true,
@@ -135,29 +140,30 @@ Yanıt: `{ "user": {...}, "business": {...} }`
 
 ### `PUT /api/business`
 
-Kısmi güncelleme (gönderilen alanlar uygulanır). Güncellenebilir alanlar:
-`name`, `slug`, `logo_url`, `cover_url`, `currency`, `theme`, `font_family`,
-`primary_color`, `default_language`, `languages`, `splash_enabled`, `splash_duration`,
-`splash_bg_color`, `splash_text`, `show_vat_note`, `vat_note_text`, `show_price_date`,
-`phone`, `address`, `instagram`, `wifi_password`.
+Partial update (only the fields present in the body are applied). Updatable
+fields: `name`, `slug`, `logo_url`, `cover_url`, `currency`, `theme`,
+`font_family`, `primary_color`, `default_language`, `languages`,
+`splash_enabled`, `splash_duration`, `splash_bg_color`, `splash_text`,
+`show_vat_note`, `vat_note_text`, `show_price_date`, `phone`, `address`,
+`instagram`, `wifi_password`.
 
-`slug` değişirse benzersizlik kontrol edilir → çakışırsa `409`.
+A changed `slug` is checked for uniqueness → `409` on a collision.
 
-Yanıt: güncel Business nesnesi.
+Response: the updated Business object.
 
 ---
 
-## 4. Kategoriler 🔒
+## 4. Categories 🔒
 
-Business nesnesi token'dan çözülür; hiçbir uçta `business_id` gönderilmez.
+The business is resolved from the token; no endpoint accepts a `business_id`.
 
 ### `GET /api/categories`
 
-`position ASC` sıralı dizi. Her kategori `product_count` içerir.
+An array ordered by `position ASC`. Each category carries `product_count`.
 
 ```json
 [ { "id": "uuid", "translations": {"tr":{"name":"Sıcak İçecekler","description":""}},
-    "image_url": null, "icon": "coffee", "position": 0, "is_active": true,
+    "image_url": null, "icon": "☕", "position": 0, "is_active": true,
     "product_count": 8, "created_at": "...", "updated_at": "..." } ]
 ```
 
@@ -165,40 +171,41 @@ Business nesnesi token'dan çözülür; hiçbir uçta `business_id` gönderilmez
 
 ```json
 { "translations": { "tr": { "name": "Tatlılar", "description": "" } },
-  "icon": "cake", "image_url": null, "is_active": true }
+  "icon": "🍰", "image_url": null, "is_active": true }
 ```
 
-`position` otomatik olarak son sıra + 1 atanır. Yanıt `201`: kategori nesnesi.
-Varsayılan dilde `name` boşsa `422`.
+`position` is assigned automatically as the current maximum + 1.
+Response `201`: the category object.
+An empty `name` in the default language yields `422`.
 
 ### `PUT /api/categories/:id`
 
-Kısmi güncelleme: `translations`, `icon`, `image_url`, `is_active`.
+Partial update: `translations`, `icon`, `image_url`, `is_active`.
 
 ### `DELETE /api/categories/:id`
 
-Kategoriye bağlı ürünler de silinir (`ON DELETE CASCADE`). Yanıt `200`:
-`{ "success": true, "deleted_products": 8 }`
+The products of the category are deleted too (`ON DELETE CASCADE`).
+Response `200`: `{ "success": true, "deleted_products": 8 }`
 
 ### `PUT /api/categories/reorder`
 
-Sürükle-bırak sonrası çağrılır.
+Called after a drag and drop.
 
 ```json
 { "ids": ["uuid-3", "uuid-1", "uuid-2"] }
 ```
 
-Dizideki sıra `position` olarak yazılır (0,1,2...). Tek transaction.
-Yanıt: güncel kategori dizisi.
+The array order is written into `position` (0, 1, 2 …) in a single transaction.
+Response: the updated category array.
 
 ---
 
-## 5. Ürünler 🔒
+## 5. Products 🔒
 
 ### `GET /api/products`
 
-Query: `?category_id=uuid` (opsiyonel), `?search=metin` (opsiyonel).
-Sıralama: `category position ASC, product position ASC`.
+Query: `?category_id=uuid` (optional), `?search=text` (optional).
+Ordering: `category position ASC, product position ASC`.
 
 ```json
 [ { "id": "uuid", "category_id": "uuid",
@@ -208,7 +215,7 @@ Sıralama: `category position ASC, product position ASC`.
     "position": 0, "created_at": "...", "updated_at": "..." } ]
 ```
 
-> `price` JSON'da **number** olarak döner (string değil), 2 ondalık hassasiyet.
+> `price` is a JSON **number** (not a string) with 2 decimal precision.
 
 ### `POST /api/products`
 
@@ -219,23 +226,23 @@ Sıralama: `category position ASC, product position ASC`.
   "allergens": ["sut"], "is_active": true, "is_featured": false }
 ```
 
-`category_id` zorunlu ve aynı işletmeye ait olmalı (değilse `403`).
-`price >= 0` zorunlu. Yanıt `201`.
+`category_id` is required and must belong to the same business (otherwise `403`).
+`price >= 0` is required. Response `201`.
 
 ### `PUT /api/products/:id`
 
-Kısmi güncelleme: `category_id` (başka kategoriye taşıma), `translations`, `price`,
-`compare_price`, `image_url`, `allergens`, `is_active`, `is_featured`.
+Partial update: `category_id` (move to another category), `translations`,
+`price`, `compare_price`, `image_url`, `allergens`, `is_active`, `is_featured`.
 
 ### `PATCH /api/products/:id/price`
 
-Hızlı fiyat değişimi (menü editöründeki satır içi düzenleme).
+Quick price change (the inline editing in the menu editor).
 
-İstek: `{ "price": 155.50 }` → Yanıt: güncel ürün.
+Request: `{ "price": 155.50 }` → Response: the updated product.
 
 ### `DELETE /api/products/:id`
 
-Yanıt: `{ "success": true }`
+Response: `{ "success": true }`
 
 ### `PUT /api/products/reorder`
 
@@ -243,11 +250,12 @@ Yanıt: `{ "success": true }`
 { "category_id": "uuid", "ids": ["uuid-2", "uuid-1"] }
 ```
 
-Ürünler `category_id` içindeki sıraya göre yeniden konumlanır. Sürükleyerek **başka
-kategoriye taşıma** da bu uçla yapılır: ürünün `category_id`'si listede verilen
-kategoriye güncellenir. Yanıt: o kategorinin güncel ürün dizisi.
+Products are repositioned according to the order inside `category_id`. **Moving
+a product to another category** goes through the same endpoint: the product's
+`category_id` is set to the one given in the request. Response: the updated
+product array of that category.
 
-### `POST /api/products/bulk-price` — Toplu Fiyat Güncelleme
+### `POST /api/products/bulk-price` — bulk price update
 
 ```json
 { "percentage": 10,
@@ -256,59 +264,60 @@ kategoriye güncellenir. Yanıt: o kategorinin güncel ürün dizisi.
   "apply": true }
 ```
 
-| Alan | Açıklama |
+| Field | Meaning |
 |---|---|
-| `percentage` | −90 … +1000 arası. `10` → %10 zam, `-15` → %15 indirim |
-| `rounding` | `none`, `integer` (tam sayı), `nearest_5` (5'in katı), `nearest_10`, `ends_99` (…,99), `ends_95`, `ends_50` (0,50'nin katı) |
-| `category_ids` | Boş/eksikse **tüm** ürünler |
-| `apply` | `false` → sadece önizleme, veritabanı değişmez |
+| `percentage` | −90 … +1000. `10` → +10%, `-15` → −15% |
+| `rounding` | `none`, `integer`, `nearest_5`, `nearest_10`, `ends_99`, `ends_95`, `ends_50` |
+| `category_ids` | Empty or missing → **every** product |
+| `apply` | `false` → preview only, nothing is written |
 
-Hesap sırası: `yeni = eski * (1 + yüzde/100)` → sonra yuvarlama → `max(0, sonuç)`.
+Order of operations: `new = old * (1 + percentage/100)` → rounding → `max(0, result)`.
 
-Yanıt:
+Response:
 ```json
 { "applied": true, "affected": 42,
   "preview": [ { "id": "uuid", "name": "Latte", "old_price": 145.00, "new_price": 160.00 } ],
   "price_updated_at": "2026-08-24T12:30:00Z" }
 ```
 
-`apply: true` ise `businesses.price_updated_at` = şimdi olarak güncellenir
-(müşteri menüsündeki "Fiyatlarımız … tarihinden itibaren geçerlidir" satırını besler).
+When `apply: true`, `businesses.price_updated_at` is set to now, which feeds the
+"Fiyatlarımız … tarihinden itibaren geçerlidir" line in the customer menu.
 
 ---
 
-## 6. Dosya Yükleme 🔒
+## 6. File upload 🔒
 
 ### `POST /api/uploads`
 
-`multipart/form-data`, alan adı: `file`.
-İzinli tipler: `image/jpeg`, `image/png`, `image/webp`, `image/gif`. Maksimum **5 MB**.
+`multipart/form-data`, field name: `file`.
+Accepted types: `image/jpeg`, `image/png`, `image/webp`, `image/gif`. Max **5 MB**.
 
-Yanıt `201`: `{ "url": "/uploads/1724500000-a1b2c3.webp", "size": 84213 }`
+Response `201`: `{ "url": "/uploads/1724500000-a1b2c3.webp", "size": 84213 }`
 
-Dosyalar `UPLOAD_DIR` altına kaydedilir, `GET /uploads/*` ile statik sunulur.
+Files are written under `UPLOAD_DIR` and served statically at `GET /uploads/*`.
 
 ---
 
-## 7. Genel (Public) Menü — token istemez
+## 7. Public menu — no token required
 
 ### `GET /api/public/menu/:slug`
 
-Query: `?lang=tr` (opsiyonel, varsayılan işletmenin `default_language` değeri).
+Query: `?lang=tr` (optional, defaults to the business' `default_language`).
 
-### `GET /api/public/menu` (subdomain ile)
+### `GET /api/public/menu` (via subdomain)
 
-`Host` başlığından subdomain çözülür: `kahve-duragi.karecik.com` → slug `kahve-duragi`.
-Subdomain yoksa/`www` ise `404`.
+The subdomain is resolved from the `Host` header:
+`kahve-duragi.karecik.com` → slug `kahve-duragi`. A missing or `www` subdomain
+yields `404`.
 
-Her iki uç da aynı gövdeyi döner:
+Both endpoints return the same body:
 
 ```json
 {
   "business": {
     "name": "Kahve Durağı", "slug": "kahve-duragi", "logo_url": "/uploads/logo.png",
     "currency": "TRY", "currency_symbol": "₺", "theme": "modern-light",
-    "font_family": "inter", "primary_color": "#1a7f5a",
+    "font_family": "inter", "primary_color": "#1d4ed8",
     "default_language": "tr", "languages": ["tr", "en"],
     "splash_enabled": true, "splash_duration": 1200,
     "splash_bg_color": "#0f172a", "splash_text": "Hoş geldiniz",
@@ -317,7 +326,7 @@ Her iki uç da aynı gövdeyi döner:
     "phone": "...", "address": "...", "instagram": "...", "wifi_password": "..."
   },
   "categories": [
-    { "id": "uuid", "name": "Sıcak İçecekler", "description": "", "icon": "coffee",
+    { "id": "uuid", "name": "Sıcak İçecekler", "description": "", "icon": "☕",
       "image_url": null,
       "products": [
         { "id": "uuid", "name": "Latte", "description": "...", "ingredients": "...",
@@ -331,31 +340,34 @@ Her iki uç da aynı gövdeyi döner:
 }
 ```
 
-Önemli: public uçta **çeviriler çözülmüştür** — `translations` sözlüğü yerine düz
-`name`/`description` alanları döner. `is_active = false` olan kategori/ürünler
-**hiç görünmez**. Kategoriler ve ürünler `position ASC` sıralıdır.
+Important: on the public endpoints **translations are already resolved** — the
+payload carries plain `name` / `description` fields instead of the
+`translations` map. Categories and products with `is_active = false` are
+**omitted entirely**. Both lists are ordered by `position ASC`.
 
-`footer.price_note` backend'de `price_updated_at` alanından `dd.MM.yyyy` biçiminde üretilir.
+`footer.price_note` is generated on the backend from `price_updated_at` in
+`dd.MM.yyyy` format.
 
 ### `GET /api/preview/menu` 🔒
 
-Yönetim panelindeki **Canlı Önizleme** için. Public menü ile birebir aynı gövdeyi
-döner, farkı: token'daki işletmeyi kullanır ve `is_active = false` kayıtları da
-`"is_active": false` işaretiyle döndürür (panelde soluk gösterilir).
+Backs the **live preview** in the dashboard. It returns exactly the same body as
+the public menu, with one difference: it uses the business from the token and
+also includes inactive records, flagged with `"is_active": false` so the
+dashboard can dim them.
 
 ---
 
-## Durum Kodları Özeti
+## Status code summary
 
-| Kod | Anlam |
+| Code | Meaning |
 |---|---|
-| 200 | Başarılı |
-| 201 | Oluşturuldu |
-| 400 | Bozuk istek gövdesi |
-| 401 | Token yok/geçersiz |
-| 403 | Başka işletmenin kaydına erişim |
-| 404 | Kayıt/işletme yok |
-| 409 | E-posta veya slug çakışması |
-| 413 | Dosya çok büyük |
-| 422 | Doğrulama hatası (zorunlu alan, geçersiz fiyat vb.) |
-| 500 | Sunucu hatası |
+| 200 | Success |
+| 201 | Created |
+| 400 | Malformed request body |
+| 401 | Missing or invalid token |
+| 403 | Access to another business' record |
+| 404 | Record or business not found |
+| 409 | Email or slug collision |
+| 413 | File too large |
+| 422 | Validation error (required field, invalid price, …) |
+| 500 | Server error |

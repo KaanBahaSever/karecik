@@ -3,31 +3,31 @@ import { CSS } from '@dnd-kit/utilities'
 import { ChevronDown, ChevronRight, GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 
 /**
- * Menü editöründeki sürüklenebilir kategori kartı (akordeon).
+ * Draggable category card (accordion) in the menu editor.
  *
- * @param {object}   kategori  - Category nesnesi
- * @param {Array}    urunler   - Bu kategorideki ürünler (rozet sayısı için)
- * @param {boolean}  acik      - Akordeon açık mı
- * @param {Function} acKapat   - Aç/kapat çağrısı
- * @param {string}   dil       - Düzenleme dili (translations anahtarı)
- * @param {Function} duzenle   - Kategori düzenleme modalini açar
- * @param {Function} sil       - Silme onayını açar
- * @param {Function} urunEkle  - Bu kategoriye ürün ekleme modalini açar
- * @param {node}     cocuklar  - Açıkken gösterilen içerik (ürün listesi + "Ürün Ekle")
+ * @param {object}   category     - Category object
+ * @param {Array}    products     - Products of this category (for the count badge)
+ * @param {boolean}  open         - Whether the accordion is expanded
+ * @param {Function} onToggle     - Expand/collapse callback
+ * @param {string}   language     - Editing language (key inside translations)
+ * @param {Function} onEdit       - Opens the category modal
+ * @param {Function} onDelete     - Opens the delete confirmation
+ * @param {Function} onAddProduct - Opens the product modal for this category
+ * @param {node}     children     - Content shown while expanded (product list + add button)
  */
-export default function KategoriSatiri({
-  kategori,
-  urunler = [],
-  acik = false,
-  acKapat,
-  dil = 'tr',
-  duzenle,
-  sil,
-  urunEkle,
-  cocuklar,
+export default function CategoryRow({
+  category,
+  products = [],
+  open = false,
+  onToggle,
+  language = 'tr',
+  onEdit,
+  onDelete,
+  onAddProduct,
+  children,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: kategori.id,
+    id: category.id,
   })
 
   const style = {
@@ -35,31 +35,29 @@ export default function KategoriSatiri({
     transition,
   }
 
-  const ad =
-    kategori.translations?.[dil]?.name ||
-    kategori.translations?.tr?.name ||
+  const name =
+    category.translations?.[language]?.name ||
+    category.translations?.tr?.name ||
     'İsimsiz kategori'
 
-  // icon alanı "coffee" gibi bir kod ya da doğrudan emoji olabilir.
-  // Yalnızca emoji ise başlıkta gösteriyoruz.
-  const ikonEmoji =
-    typeof kategori.icon === 'string' &&
-    kategori.icon.trim() !== '' &&
-    (kategori.icon.codePointAt(0) || 0) > 127
-      ? kategori.icon
+  // The icon field may hold either a code such as "coffee" or an emoji.
+  // Only emoji are rendered in the header.
+  const iconEmoji =
+    typeof category.icon === 'string' &&
+    category.icon.trim() !== '' &&
+    (category.icon.codePointAt(0) || 0) > 127
+      ? category.icon
       : null
 
-  const AcKapatIkonu = acik ? ChevronDown : ChevronRight
+  const ToggleIcon = open ? ChevronDown : ChevronRight
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`kart overflow-hidden ${
-        isDragging ? 'surukleniyor relative z-10 shadow-panel' : ''
-      }`}
+      className={`card overflow-hidden ${isDragging ? 'dragging relative z-10 shadow-panel' : ''}`}
     >
-      {/* ---------------------------------------------------------- başlık */}
+      {/* ---------------------------------------------------------- header */}
       <div className="flex items-center gap-1 px-2 py-2 sm:gap-2 sm:px-3">
         <button
           type="button"
@@ -74,29 +72,29 @@ export default function KategoriSatiri({
 
         <button
           type="button"
-          onClick={acKapat}
-          aria-expanded={acik}
+          onClick={onToggle}
+          aria-expanded={open}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-left hover:bg-gray-50"
         >
-          {ikonEmoji ? (
+          {iconEmoji ? (
             <span className="shrink-0 text-base leading-none" aria-hidden="true">
-              {ikonEmoji}
+              {iconEmoji}
             </span>
           ) : null}
-          <span className="truncate text-sm font-semibold text-gray-900">{ad}</span>
+          <span className="truncate text-sm font-semibold text-gray-900">{name}</span>
         </button>
 
-        <span className="rozet shrink-0 bg-marka-50 text-marka-700">{urunler.length} ürün</span>
+        <span className="badge shrink-0 bg-brand-50 text-brand-700">{products.length} ürün</span>
 
-        {kategori.is_active === false ? (
-          <span className="rozet shrink-0 bg-gray-100 text-gray-600">Gizli</span>
+        {category.is_active === false ? (
+          <span className="badge shrink-0 bg-gray-100 text-gray-600">Gizli</span>
         ) : null}
 
         <div className="flex shrink-0 items-center">
           <button
             type="button"
-            onClick={urunEkle}
-            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-marka-600"
+            onClick={onAddProduct}
+            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600"
             aria-label="Bu kategoriye ürün ekle"
             title="Ürün ekle"
           >
@@ -105,7 +103,7 @@ export default function KategoriSatiri({
 
           <button
             type="button"
-            onClick={duzenle}
+            onClick={onEdit}
             className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
             aria-label="Kategoriyi düzenle"
             title="Düzenle"
@@ -115,7 +113,7 @@ export default function KategoriSatiri({
 
           <button
             type="button"
-            onClick={sil}
+            onClick={onDelete}
             className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
             aria-label="Kategoriyi sil"
             title="Sil"
@@ -125,18 +123,18 @@ export default function KategoriSatiri({
 
           <button
             type="button"
-            onClick={acKapat}
+            onClick={onToggle}
             className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-            aria-label={acik ? 'Kategoriyi kapat' : 'Kategoriyi aç'}
-            aria-expanded={acik}
+            aria-label={open ? 'Kategoriyi kapat' : 'Kategoriyi aç'}
+            aria-expanded={open}
           >
-            <AcKapatIkonu className="h-4 w-4" aria-hidden="true" />
+            <ToggleIcon className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      {/* ------------------------------------------------------- ürün listesi */}
-      {acik ? <div>{cocuklar}</div> : null}
+      {/* ---------------------------------------------------- product list */}
+      {open ? <div>{children}</div> : null}
     </div>
   )
 }

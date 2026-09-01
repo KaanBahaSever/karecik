@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Karecik — QR menü SaaS platformu arayüzü",
+  "description": "Karecik — QR menu SaaS platform frontend",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

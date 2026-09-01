@@ -4,8 +4,9 @@ import api, { clearToken, getToken, setToken } from './api'
 const AuthContext = createContext(null)
 
 /**
- * Oturum durumunu (kullanıcı + işletme) uygulama genelinde paylaşır.
- * Token localStorage'da tutulur; sayfa yenilendiğinde /api/auth/me ile doğrulanır.
+ * Shares the session state (user + business) across the whole application.
+ * The token lives in localStorage and is re-validated through /api/auth/me
+ * whenever the page reloads.
  */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
@@ -13,32 +14,32 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(Boolean(getToken()))
 
   useEffect(() => {
-    let iptal = false
+    let cancelled = false
 
-    async function oturumuYukle() {
+    async function loadSession() {
       if (!getToken()) {
         setLoading(false)
         return
       }
       try {
         const data = await api.me()
-        if (iptal) return
+        if (cancelled) return
         setUser(data.user)
         setBusiness(data.business)
       } catch {
         clearToken()
-        if (!iptal) {
+        if (!cancelled) {
           setUser(null)
           setBusiness(null)
         }
       } finally {
-        if (!iptal) setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
-    oturumuYukle()
+    loadSession()
     return () => {
-      iptal = true
+      cancelled = true
     }
   }, [])
 
@@ -68,7 +69,7 @@ export function AuthProvider({ children }) {
     setBusiness(null)
   }, [])
 
-  /** İşletme ayarlarını günceller ve context'i tazeler (canlı önizleme buna bakar). */
+  /** Persists business settings and refreshes the context (live preview reads this). */
   const saveBusiness = useCallback(async (payload) => {
     const updated = await api.updateBusiness(payload)
     setBusiness(updated)
@@ -102,7 +103,7 @@ export function AuthProvider({ children }) {
 export function useAuth() {
   const context = useContext(AuthContext)
   if (!context) {
-    throw new Error('useAuth yalnızca <AuthProvider> içinde kullanılabilir.')
+    throw new Error('useAuth can only be used inside <AuthProvider>.')
   }
   return context
 }

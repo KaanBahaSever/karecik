@@ -9,13 +9,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config, .env dosyasindan ve ortam degiskenlerinden okunan tum ayarlari tutar.
+// Config holds every setting read from the .env file and the environment.
 type Config struct {
 	DatabaseURL    string
 	JWTSecret      string
 	Port           string
-	AppDomain      string   // canlidaki kok alan adi, orn. karecik.com
-	DevDomain      string   // yerelde kok alan adi, orn. localhost
+	AppDomain      string // production root domain, e.g. karecik.com
+	DevDomain      string // local root domain, e.g. localhost
 	CORSOrigins    []string
 	UploadDir      string
 	MaxUploadBytes int64
@@ -25,13 +25,14 @@ type Config struct {
 	Env            string
 }
 
-// Load, .env dosyasini okur ve Config nesnesini doldurur.
-// .env bulunamazsa hata vermez; degerler ortam degiskenlerinden/varsayilanlardan gelir.
+// Load reads the .env file and fills in the Config.
+// A missing .env is not an error; values then come from the environment or the
+// defaults below.
 func Load() *Config {
-	// Calisma dizini cmd/api ya da backend olabilir; iki olasiligi da dene.
+	// The working directory may be cmd/api or backend; try both.
 	for _, path := range []string{".env", "../.env", "../../.env"} {
 		if err := godotenv.Load(path); err == nil {
-			log.Printf("[karecik] .env yuklendi (%s)", path)
+			log.Printf("[karecik] loaded .env (%s)", path)
 			break
 		}
 	}
@@ -53,16 +54,16 @@ func Load() *Config {
 
 	if cfg.JWTSecret == "" {
 		if cfg.Env == "production" {
-			log.Fatal("[karecik] HATA: production ortaminda JWT_SECRET zorunludur")
+			log.Fatal("[karecik] FATAL: JWT_SECRET is required in production")
 		}
-		cfg.JWTSecret = "karecik-gelistirme-anahtari-uretimde-degistir"
-		log.Println("[karecik] UYARI: JWT_SECRET tanimli degil, gelistirme anahtari kullaniliyor")
+		cfg.JWTSecret = "karecik-development-secret-change-me-in-production"
+		log.Println("[karecik] WARNING: JWT_SECRET is unset, using the development secret")
 	}
 
 	return cfg
 }
 
-// IsProduction, uygulamanin uretim modunda olup olmadigini soyler.
+// IsProduction reports whether the app runs in production mode.
 func (c *Config) IsProduction() bool { return c.Env == "production" }
 
 func env(key, fallback string) string {

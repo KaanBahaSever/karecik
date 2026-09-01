@@ -1,6 +1,13 @@
 package utils
 
-// Theme, musteri menusunun gorunum temasi.
+// This file is the single source of truth for the appearance catalogues that
+// both the dashboard and the customer menu rely on. It is served through
+// GET /api/meta and mirrored by frontend/src/themes and frontend/src/locales.
+//
+// NOTE: every Label / Description below is shown in the interface and is
+// therefore written in Turkish on purpose.
+
+// Theme describes one visual theme of the customer menu.
 type Theme struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
@@ -14,8 +21,8 @@ type Theme struct {
 	Dark        bool   `json:"dark"`
 }
 
-// Themes, panelde secilebilen tasarim tarzlari.
-// Frontend'deki src/themes/themes.js ile ayni kimlikleri (id) kullanir.
+// Themes lists the styles selectable in the dashboard.
+// The ids match frontend/src/themes/themes.js exactly.
 var Themes = []Theme{
 	{ID: "modern-light", Label: "Modern Açık", Description: "Beyaz zemin, mavi vurgu",
 		Primary: "#1d4ed8", Background: "#ffffff", Surface: "#f6f7f8", Text: "#111827",
@@ -37,16 +44,16 @@ var Themes = []Theme{
 		Muted: "#6d6a8a", Border: "#ddd6fe", Dark: false},
 }
 
-// Font, menude kullanilabilen yazi tipi.
+// Font describes a typeface usable in the menu.
 type Font struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
 	Stack  string `json:"stack"`  // CSS font-family
-	Google string `json:"google"` // Google Fonts aile adi (bos ise sistem fontu)
+	Google string `json:"google"` // Google Fonts family name (empty = system font)
 }
 
-// Fonts, panelde secilebilen yazi tipleri.
-// Frontend'deki src/themes/fonts.js ile ayni kimlikleri kullanir.
+// Fonts lists the typefaces selectable in the dashboard.
+// The ids match frontend/src/themes/fonts.js exactly.
 var Fonts = []Font{
 	{ID: "inter", Label: "Inter", Stack: "'Inter', system-ui, sans-serif", Google: "Inter"},
 	{ID: "poppins", Label: "Poppins", Stack: "'Poppins', system-ui, sans-serif", Google: "Poppins"},
@@ -58,14 +65,14 @@ var Fonts = []Font{
 	{ID: "space-grotesk", Label: "Space Grotesk", Stack: "'Space Grotesk', system-ui, sans-serif", Google: "Space+Grotesk"},
 }
 
-// Allergen, urunlere eklenebilen uyari etiketi.
+// Allergen is a warning label that can be attached to a product.
 type Allergen struct {
 	Code  string `json:"code"`
 	Label string `json:"label"`
 	Icon  string `json:"icon"`
 }
 
-// Allergens, sabit alerjen/uyari listesi.
+// Allergens is the fixed list of allergen / warning labels.
 var Allergens = []Allergen{
 	{Code: "gluten", Label: "Gluten", Icon: "wheat"},
 	{Code: "sut", Label: "Süt", Icon: "milk"},
@@ -86,11 +93,11 @@ var Allergens = []Allergen{
 	{Code: "kafein", Label: "Kafein", Icon: "coffee"},
 }
 
-// Language, desteklenen menu dilleri.
+// Language is one of the supported menu languages.
 //
-// Short: arayuzde gosterilen kisa kod (TR/EN/DE). Bayrak emojisi yerine bunu
-// kullaniyoruz: Windows bayrak emojilerini cizemedigi icin yerlerine ulke kodu
-// basiyor ve Ingilizce "GB" olarak gorunuyordu.
+// Short is the compact code shown in the interface (TR/EN/DE). We use it
+// instead of a flag emoji: Windows cannot render regional-indicator emoji and
+// prints the country code instead, which made English show up as "GB".
 type Language struct {
 	Code  string `json:"code"`
 	Short string `json:"short"`
@@ -98,7 +105,7 @@ type Language struct {
 	Flag  string `json:"flag"`
 }
 
-// Languages, menuye eklenebilecek diller.
+// Languages lists the languages a menu can be published in.
 var Languages = []Language{
 	{Code: "tr", Short: "TR", Label: "Türkçe", Flag: "🇹🇷"},
 	{Code: "en", Short: "EN", Label: "English", Flag: "🇬🇧"},
@@ -108,40 +115,40 @@ var Languages = []Language{
 	{Code: "fr", Short: "FR", Label: "Français", Flag: "🇫🇷"},
 }
 
-// IsValidTheme, tema kimliginin listede olup olmadigini soyler.
+// IsValidTheme reports whether a theme id exists in the catalogue.
 func IsValidTheme(id string) bool {
-	for _, t := range Themes {
-		if t.ID == id {
+	for _, theme := range Themes {
+		if theme.ID == id {
 			return true
 		}
 	}
 	return false
 }
 
-// IsValidFont, yazi tipi kimliginin listede olup olmadigini soyler.
+// IsValidFont reports whether a font id exists in the catalogue.
 func IsValidFont(id string) bool {
-	for _, f := range Fonts {
-		if f.ID == id {
+	for _, font := range Fonts {
+		if font.ID == id {
 			return true
 		}
 	}
 	return false
 }
 
-// IsValidLanguage, dil kodunun desteklenip desteklenmedigini soyler.
+// IsValidLanguage reports whether a language code is supported.
 func IsValidLanguage(code string) bool {
-	for _, l := range Languages {
-		if l.Code == code {
+	for _, language := range Languages {
+		if language.Code == code {
 			return true
 		}
 	}
 	return false
 }
 
-// IsValidAllergen, alerjen kodunun listede olup olmadigini soyler.
+// IsValidAllergen reports whether an allergen code exists in the catalogue.
 func IsValidAllergen(code string) bool {
-	for _, a := range Allergens {
-		if a.Code == code {
+	for _, allergen := range Allergens {
+		if allergen.Code == code {
 			return true
 		}
 	}

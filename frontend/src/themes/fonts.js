@@ -1,9 +1,9 @@
-// Menüde kullanılabilen yazı tipleri.
-// Kimlikler backend'deki internal/utils/appearance.go ile birebir aynıdır.
+// Fonts available for the customer menu.
+// The ids mirror backend/internal/utils/appearance.go exactly.
 //
-// Fontlar sayfa açılışında değil, seçildiklerinde Google Fonts'tan yüklenir.
+// Fonts are not loaded on page start but on demand, when one is selected.
 
-export const FONTLAR = [
+export const FONTS = [
   { id: 'inter', label: 'Inter', stack: "'Inter', system-ui, sans-serif", google: 'Inter:wght@400;500;600;700' },
   { id: 'poppins', label: 'Poppins', stack: "'Poppins', system-ui, sans-serif", google: 'Poppins:wght@400;500;600;700' },
   { id: 'montserrat', label: 'Montserrat', stack: "'Montserrat', system-ui, sans-serif", google: 'Montserrat:wght@400;500;600;700' },
@@ -14,36 +14,36 @@ export const FONTLAR = [
   { id: 'space-grotesk', label: 'Space Grotesk', stack: "'Space Grotesk', system-ui, sans-serif", google: 'Space+Grotesk:wght@400;500;700' },
 ]
 
-export const VARSAYILAN_FONT = FONTLAR[0]
+export const DEFAULT_FONT = FONTS[0]
 
-/** Kimliğe göre fontu bulur; bulunamazsa Inter döner. */
-export function fontBul(id) {
-  return FONTLAR.find((font) => font.id === id) || VARSAYILAN_FONT
+/** Finds a font by id, falling back to Inter. */
+export function findFont(id) {
+  return FONTS.find((font) => font.id === id) || DEFAULT_FONT
 }
 
-/** Font kimliğinden CSS font-family değeri. */
+/** CSS font-family value for a font id. */
 export function fontStack(id) {
-  return fontBul(id).stack
+  return findFont(id).stack
 }
 
-const yuklenenler = new Set(['inter']) // Inter index.html'de zaten yüklü
+const loaded = new Set(['inter']) // Inter is already linked from index.html
 
 /**
- * Seçilen yazı tipini Google Fonts'tan bir kez yükler.
- * Panelde font değiştirildiğinde canlı önizleme anında doğru fontu gösterir.
+ * Loads the selected font from Google Fonts exactly once, so that changing the
+ * font in the dashboard updates the live preview immediately.
  */
-export function fontYukle(id) {
-  const font = fontBul(id)
-  if (!font.google || yuklenenler.has(font.id)) return
+export function loadFont(id) {
+  const font = findFont(id)
+  if (!font.google || loaded.has(font.id)) return
 
   const link = document.createElement('link')
   link.rel = 'stylesheet'
   link.href = `https://fonts.googleapis.com/css2?family=${font.google}&display=swap`
   document.head.appendChild(link)
-  yuklenenler.add(font.id)
+  loaded.add(font.id)
 }
 
-/** Tüm menü fontlarını önceden yükler (tasarım sekmesinde önizleme için). */
-export function tumFontlariYukle() {
-  FONTLAR.forEach((font) => fontYukle(font.id))
+/** Preloads every menu font (used by the design page previews). */
+export function loadAllFonts() {
+  FONTS.forEach((font) => loadFont(font.id))
 }

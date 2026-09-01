@@ -1,22 +1,22 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
-title Karecik - Baslatici
+title Karecik - Launcher
 cd /d "%~dp0"
-set "PROJE=%~dp0"
+set "PROJECT=%~dp0"
 
-REM Windows komutlarini tam yolla cagiriyoruz: Git Bash gibi ortamlar
-REM ayni isimde farkli komutlar tasiyabiliyor.
+REM Windows commands are called by their full path: environments such as
+REM Git Bash may shadow them with different tools of the same name.
 set "NETSTAT=%SystemRoot%\System32\netstat.exe"
-set "BUL=%SystemRoot%\System32\findstr.exe"
-REM Bekleme icin ping kullaniyoruz; timeout.exe stdin yonlendirilince hata verir.
-set "BEKLE1=%SystemRoot%\System32\ping.exe -n 2 127.0.0.1"
-set "BEKLE3=%SystemRoot%\System32\ping.exe -n 4 127.0.0.1"
-set "BEKLE5=%SystemRoot%\System32\ping.exe -n 6 127.0.0.1"
+set "FIND=%SystemRoot%\System32\findstr.exe"
+REM Waiting is done with ping; timeout.exe fails when stdin is redirected.
+set "WAIT1=%SystemRoot%\System32\ping.exe -n 2 127.0.0.1"
+set "WAIT3=%SystemRoot%\System32\ping.exe -n 4 127.0.0.1"
+set "WAIT5=%SystemRoot%\System32\ping.exe -n 6 127.0.0.1"
 
 echo.
 echo  ==========================================
-echo    KARECIK - QR Menu Platformu
+echo    KARECIK - QR Menu Platform
 echo  ==========================================
 echo.
 
@@ -25,16 +25,16 @@ where go >nul 2>&1
 if errorlevel 1 (
     if exist "C:\Program Files\Go\bin\go.exe" (
         set "PATH=C:\Program Files\Go\bin;!PATH!"
-        echo  [+] Go bulundu ^(Program Files^)
+        echo  [+] Go found ^(Program Files^)
     ) else (
-        echo  [HATA] Go kurulu degil.
-        echo         Indir: https://go.dev/dl/
+        echo  [ERROR] Go is not installed.
+        echo          Download: https://go.dev/dl/
         echo.
         pause
         exit /b 1
     )
 ) else (
-    echo  [+] Go hazir
+    echo  [+] Go ready
 )
 
 REM -------------------------------------------------------------- Node.js
@@ -42,129 +42,130 @@ where node >nul 2>&1
 if errorlevel 1 (
     if exist "C:\Program Files\nodejs\node.exe" (
         set "PATH=C:\Program Files\nodejs;!PATH!"
-        echo  [+] Node.js bulundu ^(Program Files^)
+        echo  [+] Node.js found ^(Program Files^)
     ) else (
-        echo  [HATA] Node.js kurulu degil.
-        echo         Indir: https://nodejs.org/en/download
+        echo  [ERROR] Node.js is not installed.
+        echo          Download: https://nodejs.org/en/download
         echo.
         pause
         exit /b 1
     )
 ) else (
-    echo  [+] Node.js hazir
+    echo  [+] Node.js ready
 )
 
 REM ----------------------------------------------------------- PostgreSQL
-%NETSTAT% -an | %BUL% ":5432 " | %BUL% "LISTENING" >nul
+%NETSTAT% -an | %FIND% ":5432 " | %FIND% "LISTENING" >nul
 if errorlevel 1 (
-    echo  [*] PostgreSQL calismiyor, baslatiliyor...
+    echo  [*] PostgreSQL is not running, starting it...
     net start postgresql-18 >nul 2>&1
     if errorlevel 1 net start postgresql-x64-18 >nul 2>&1
     if errorlevel 1 net start postgresql-17 >nul 2>&1
     if errorlevel 1 net start postgresql-x64-16 >nul 2>&1
 
-    %BEKLE3% >nul
-    %NETSTAT% -an | %BUL% ":5432 " | %BUL% "LISTENING" >nul
+    %WAIT3% >nul
+    %NETSTAT% -an | %FIND% ":5432 " | %FIND% "LISTENING" >nul
     if errorlevel 1 (
         echo.
-        echo  [HATA] PostgreSQL baslatilamadi.
-        echo         Windows arama ^> "Hizmetler" ^> postgresql-18 ^> sag tik ^> Baslat
-        echo         ^(Bu dosyayi yonetici olarak calistirman gerekebilir.^)
+        echo  [ERROR] PostgreSQL could not be started.
+        echo          Windows search ^> "Services" ^> postgresql-18 ^> right click ^> Start
+        echo          ^(You may need to run this file as administrator.^)
         echo.
         pause
         exit /b 1
     )
-    echo  [+] PostgreSQL baslatildi
+    echo  [+] PostgreSQL started
 ) else (
-    echo  [+] PostgreSQL hazir
+    echo  [+] PostgreSQL ready
 )
 
-REM ------------------------------------------------------------ .env kontrol
-if not exist "%PROJE%backend\.env" (
-    echo  [*] backend\.env yok, ornekten olusturuluyor...
-    copy /y "%PROJE%backend\.env.example" "%PROJE%backend\.env" >nul
+REM ------------------------------------------------------------ .env check
+if not exist "%PROJECT%backend\.env" (
+    echo  [*] backend\.env is missing, creating it from the example...
+    copy /y "%PROJECT%backend\.env.example" "%PROJECT%backend\.env" >nul
     echo.
     echo  ------------------------------------------------------------
-    echo   ONEMLI: Acilan Not Defteri'nde su satirdaki sifreyi kendi
-    echo   PostgreSQL sifrenle degistir, kaydet ve kapat:
+    echo   IMPORTANT: in the Notepad window that opens, replace the
+    echo   password on this line with your own PostgreSQL password,
+    echo   then save and close:
     echo.
-    echo     DATABASE_URL=postgres://postgres:SIFREN@localhost:5432/karecik
+    echo     DATABASE_URL=postgres://postgres:YOURPASSWORD@localhost:5432/karecik
     echo  ------------------------------------------------------------
     echo.
-    notepad "%PROJE%backend\.env"
+    notepad "%PROJECT%backend\.env"
 )
 
-REM -------------------------------------------------- npm paketleri kontrol
-if not exist "%PROJE%frontend\node_modules" (
-    echo  [*] Frontend paketleri eksik, kuruluyor ^(bir kereye mahsus, ~1 dk^)...
-    pushd "%PROJE%frontend"
+REM -------------------------------------------------- npm packages check
+if not exist "%PROJECT%frontend\node_modules" (
+    echo  [*] Frontend packages are missing, installing ^(one time, ~1 min^)...
+    pushd "%PROJECT%frontend"
     call npm install
     popd
     if errorlevel 1 (
-        echo  [HATA] npm install basarisiz oldu.
+        echo  [ERROR] npm install failed.
         pause
         exit /b 1
     )
-    echo  [+] Paketler kuruldu
+    echo  [+] Packages installed
 ) else (
-    echo  [+] Frontend paketleri hazir
+    echo  [+] Frontend packages ready
 )
 
-REM ---------------------------------------------- zaten calisiyor mu kontrol
-%NETSTAT% -an | %BUL% ":8080 " | %BUL% "LISTENING" >nul
+REM ------------------------------------------------ already running check
+%NETSTAT% -an | %FIND% ":8080 " | %FIND% "LISTENING" >nul
 if not errorlevel 1 (
     echo.
-    echo  [*] Karecik zaten calisiyor. Tarayici aciliyor...
-    echo      Yeniden baslatmak istersen once durdur.bat calistir.
+    echo  [*] Karecik is already running. Opening the browser...
+    echo      Run stop.bat first if you want to restart it.
     echo.
     start "" "http://localhost:5173"
-    %BEKLE3% >nul
+    %WAIT3% >nul
     exit /b 0
 )
 
-REM --------------------------------------------------- sunuculari baslat
+REM ------------------------------------------------------ start the servers
 echo.
-echo  Sunucular baslatiliyor...
-start "Karecik Backend" cmd /k "cd /d "%PROJE%backend" && go run ./cmd/api"
-start "Karecik Frontend" cmd /k "cd /d "%PROJE%frontend" && npm run dev"
+echo  Starting the servers...
+start "Karecik Backend" cmd /k "cd /d "%PROJECT%backend" && go run ./cmd/api"
+start "Karecik Frontend" cmd /k "cd /d "%PROJECT%frontend" && npm run dev"
 
-REM ------------------------------------------------ hazir olmasini bekle
-echo  Hazir olmasi bekleniyor ^(ilk acilista derleme biraz surer^)...
-set /a SAYAC=0
+REM ------------------------------------------------- wait until they are up
+echo  Waiting for them to become ready ^(the first build takes a moment^)...
+set /a COUNTER=0
 
-:BEKLEME_DONGUSU
-%BEKLE1% >nul
-set /a SAYAC+=1
+:WAIT_LOOP
+%WAIT1% >nul
+set /a COUNTER+=1
 
-%NETSTAT% -an | %BUL% ":5173 " | %BUL% "LISTENING" >nul
-if errorlevel 1 goto DEVAM_ET
-%NETSTAT% -an | %BUL% ":8080 " | %BUL% "LISTENING" >nul
-if not errorlevel 1 goto HAZIR
+%NETSTAT% -an | %FIND% ":5173 " | %FIND% "LISTENING" >nul
+if errorlevel 1 goto KEEP_WAITING
+%NETSTAT% -an | %FIND% ":8080 " | %FIND% "LISTENING" >nul
+if not errorlevel 1 goto READY
 
-:DEVAM_ET
-if !SAYAC! lss 90 goto BEKLEME_DONGUSU
+:KEEP_WAITING
+if !COUNTER! lss 90 goto WAIT_LOOP
 
 echo.
-echo  [*] Sunucular 90 saniyede acilmadi.
-echo      Acilan iki pencerede hata mesaji var mi kontrol et.
-echo      En sik sebep: backend\.env icindeki veritabani sifresi yanlis.
+echo  [*] The servers did not come up within 90 seconds.
+echo      Check the two windows that opened for an error message.
+echo      Most common cause: a wrong database password in backend\.env
 echo.
 pause
 exit /b 1
 
-:HAZIR
+:READY
 echo.
 echo  ==========================================
-echo    HAZIR
+echo    READY
 echo  ==========================================
 echo.
-echo    Site         : http://localhost:5173
-echo    Demo giris   : demo@karecik.com  /  demo1234
-echo    Musteri menu : http://demo-kafe.localhost:5173
+echo    Site          : http://localhost:5173
+echo    Demo sign-in  : demo@karecik.com  /  demo1234
+echo    Customer menu : http://demo-kafe.localhost:5173
 echo.
-echo    Durdurmak icin: durdur.bat
+echo    To stop it: stop.bat
 echo.
 
 start "" "http://localhost:5173"
-%BEKLE5% >nul
+%WAIT5% >nul
 exit /b 0

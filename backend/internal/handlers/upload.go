@@ -12,7 +12,7 @@ import (
 	"karecik/backend/internal/utils"
 )
 
-// Izinli gorsel tipleri ve uzantilari
+// Accepted image content types and their file extensions.
 var allowedImageTypes = map[string]string{
 	"image/jpeg": ".jpg",
 	"image/jpg":  ".jpg",
@@ -21,8 +21,8 @@ var allowedImageTypes = map[string]string{
 	"image/gif":  ".gif",
 }
 
-// Upload — POST /api/uploads (multipart/form-data, alan adi: "file")
-// Logo ve urun gorsellerini kaydeder, erisim adresini dondurur.
+// Upload — POST /api/uploads (multipart/form-data, field name: "file")
+// Stores logos and product images and returns the URL to reach them.
 func (h *Handler) Upload(c *fiber.Ctx) error {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -38,13 +38,13 @@ func (h *Handler) Upload(c *fiber.Ctx) error {
 	contentType := strings.ToLower(strings.TrimSpace(
 		strings.Split(fileHeader.Header.Get("Content-Type"), ";")[0]))
 
-	ext, ok := allowedImageTypes[contentType]
+	extension, ok := allowedImageTypes[contentType]
 	if !ok {
-		// Bazi tarayicilar tipi bos gonderir; uzantidan cozmeyi dene
-		ext = strings.ToLower(filepath.Ext(fileHeader.Filename))
+		// Some browsers send an empty type; fall back to the file extension.
+		extension = strings.ToLower(filepath.Ext(fileHeader.Filename))
 		valid := false
 		for _, allowed := range allowedImageTypes {
-			if ext == allowed {
+			if extension == allowed {
 				valid = true
 				break
 			}
@@ -55,11 +55,11 @@ func (h *Handler) Upload(c *fiber.Ctx) error {
 		}
 	}
 
-	filename := fmt.Sprintf("%d-%s%s", time.Now().Unix(), uuid.NewString()[:8], ext)
+	filename := fmt.Sprintf("%d-%s%s", time.Now().Unix(), uuid.NewString()[:8], extension)
 	destination := filepath.Join(h.Cfg.UploadDir, filename)
 
 	if err := c.SaveFile(fileHeader, destination); err != nil {
-		return utils.Internal(c, fmt.Errorf("dosya kaydedilemedi: %w", err))
+		return utils.Internal(c, fmt.Errorf("could not save the uploaded file: %w", err))
 	}
 
 	return utils.Created(c, fiber.Map{

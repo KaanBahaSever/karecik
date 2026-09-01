@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Turkce karakterleri ASCII karsiliklarina cevirir.
+// Maps Turkish characters to their ASCII equivalents.
 var turkishReplacer = strings.NewReplacer(
 	"ç", "c", "Ç", "c",
 	"ğ", "g", "Ğ", "g",
@@ -20,22 +20,22 @@ var turkishReplacer = strings.NewReplacer(
 )
 
 var (
-	nonSlugChars  = regexp.MustCompile(`[^a-z0-9-]+`)
-	multipleDashs = regexp.MustCompile(`-{2,}`)
+	nonSlugChars   = regexp.MustCompile(`[^a-z0-9-]+`)
+	repeatedDashes = regexp.MustCompile(`-{2,}`)
 )
 
-// Slugify, isletme adini subdomain'e uygun bir slug'a cevirir.
+// Slugify turns a business name into a subdomain-safe slug.
 //
 //	"Kahve Durağı"   -> "kahve-duragi"
 //	"Çınar Restoran" -> "cinar-restoran"
 //
-// Bos ya da tamamen gecersiz girdide "isletme" dondurur.
+// Empty or fully invalid input yields "isletme".
 func Slugify(input string) string {
 	s := strings.ToLower(strings.TrimSpace(input))
 	s = turkishReplacer.Replace(s)
-	s = strings.ToLower(s) // replacer sonrasi kalan buyuk harfler icin
+	s = strings.ToLower(s) // catch any uppercase left by the replacer
 	s = nonSlugChars.ReplaceAllString(s, "-")
-	s = multipleDashs.ReplaceAllString(s, "-")
+	s = repeatedDashes.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
 
 	if s == "" {
@@ -47,7 +47,7 @@ func Slugify(input string) string {
 	return s
 }
 
-// Ayrilmis subdomain'ler — isletmelere verilemez.
+// Subdomains reserved by the system — they are never handed out to businesses.
 var reservedSlugs = map[string]bool{
 	"www": true, "api": true, "admin": true, "app": true, "panel": true,
 	"mail": true, "ftp": true, "blog": true, "help": true, "destek": true,
@@ -55,12 +55,12 @@ var reservedSlugs = map[string]bool{
 	"dashboard": true, "login": true, "register": true, "demo": true,
 }
 
-// IsReservedSlug, slug'in sistem tarafindan ayrilmis olup olmadigini soyler.
+// IsReservedSlug reports whether a slug is reserved by the system.
 func IsReservedSlug(slug string) bool {
 	return reservedSlugs[strings.ToLower(slug)]
 }
 
-// IsValidSlug, slug'in subdomain kurallarina uyup uymadigini denetler.
+// IsValidSlug checks a slug against the subdomain rules.
 func IsValidSlug(slug string) bool {
 	if len(slug) < 2 || len(slug) > 60 {
 		return false

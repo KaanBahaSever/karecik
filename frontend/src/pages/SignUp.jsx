@@ -3,11 +3,11 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 
 import { useAuth } from '../lib/auth.jsx'
-import { useBildirim } from '../components/ui/Bildirim.jsx'
-import Yukleniyor from '../components/ui/Yukleniyor.jsx'
+import { useToast } from '../components/ui/Toast.jsx'
+import Loading from '../components/ui/Loading.jsx'
 
-/* Türkçe harflerin ASCII karşılıkları — slug üretiminde kullanılır. */
-const TURKCE_ASCII = {
+/* ASCII equivalents of Turkish letters — used when building the slug. */
+const TURKISH_ASCII = {
   ç: 'c',
   Ç: 'c',
   ğ: 'g',
@@ -25,16 +25,18 @@ const TURKCE_ASCII = {
 }
 
 /**
- * İşletme adından menü adresi (slug) üretir.
+ * Builds the menu address (slug) from a business name.
  * "Kahve Durağı" -> "kahve-duragi"
+ *
+ * Mirrors Slugify() in backend/internal/utils/slug.go.
  */
-function slugUret(metin) {
-  const asciye = String(metin || '')
+function buildSlug(text) {
+  const ascii = String(text || '')
     .split('')
-    .map((harf) => TURKCE_ASCII[harf] || harf)
+    .map((letter) => TURKISH_ASCII[letter] || letter)
     .join('')
 
-  return asciye
+  return ascii
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/-{2,}/g, '-')
@@ -42,11 +44,11 @@ function slugUret(metin) {
     .replace(/-+$/, '')
 }
 
-/** Karecik markası: küçük QR benzeri işaret + kalın yazı. */
-function KarecikLogosu() {
+/** Karecik brand lockup: small QR-like mark plus the wordmark. */
+function BrandLogo() {
   return (
     <Link to="/" className="inline-flex items-center gap-2.5">
-      <svg viewBox="0 0 32 32" className="h-9 w-9 text-marka-600" aria-hidden="true">
+      <svg viewBox="0 0 32 32" className="h-9 w-9 text-brand-600" aria-hidden="true">
         <rect className="fill-current" width="32" height="32" rx="8" />
         <g fill="#ffffff">
           <path d="M7 7h7v7H7V7zm2 2v3h3V9H9z" />
@@ -63,66 +65,66 @@ function KarecikLogosu() {
   )
 }
 
-export default function Kayit() {
-  const { isAuthenticated, loading: oturumYukleniyor, register } = useAuth()
+export default function SignUp() {
+  const { isAuthenticated, loading: sessionLoading, register } = useAuth()
   const navigate = useNavigate()
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  const [isletmeAdi, setIsletmeAdi] = useState('')
-  const [eposta, setEposta] = useState('')
-  const [sifre, setSifre] = useState('')
-  const [sifreGorunsun, setSifreGorunsun] = useState(false)
-  const [gonderiliyor, setGonderiliyor] = useState(false)
-  const [hata, setHata] = useState('')
+  const [businessName, setBusinessName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
-  const slug = slugUret(isletmeAdi)
+  const slug = buildSlug(businessName)
 
-  async function gonder(olay) {
-    olay.preventDefault()
-    if (gonderiliyor) return
+  async function onSubmit(event) {
+    event.preventDefault()
+    if (submitting) return
 
-    const temizAd = isletmeAdi.trim()
-    const temizEposta = eposta.trim()
+    const trimmedName = businessName.trim()
+    const trimmedEmail = email.trim()
 
-    if (!temizAd) {
-      setHata('Lütfen işletmenizin adını girin.')
+    if (!trimmedName) {
+      setError('Lütfen işletmenizin adını girin.')
       return
     }
     if (!slug) {
-      setHata('İşletme adı en az bir harf veya rakam içermelidir.')
+      setError('İşletme adı en az bir harf veya rakam içermelidir.')
       return
     }
-    if (!temizEposta) {
-      setHata('Lütfen e-posta adresinizi girin.')
+    if (!trimmedEmail) {
+      setError('Lütfen e-posta adresinizi girin.')
       return
     }
-    if (sifre.length < 8) {
-      setHata('Şifreniz en az 8 karakter olmalıdır.')
+    if (password.length < 8) {
+      setError('Şifreniz en az 8 karakter olmalıdır.')
       return
     }
 
-    setHata('')
-    setGonderiliyor(true)
+    setError('')
+    setSubmitting(true)
     try {
-      await register(temizAd, temizEposta, sifre)
-      bildirim.basari('Hesabınız oluşturuldu. Karecik\u2019e hoş geldiniz!')
+      await register(trimmedName, trimmedEmail, password)
+      toast.success('Hesabınız oluşturuldu. Karecik’e hoş geldiniz!')
       navigate('/panel', { replace: true })
     } catch (err) {
-      setHata(err.message)
-      bildirim.hata(err.message)
-      setGonderiliyor(false)
+      setError(err.message)
+      toast.error(err.message)
+      setSubmitting(false)
     }
   }
 
-  // Oturum doğrulanırken formu göstermeyelim, boşuna yanıp sönmesin.
-  if (oturumYukleniyor) return <Yukleniyor tamEkran metin="Oturum kontrol ediliyor..." />
+  // Hide the form while the session is being verified, to avoid a flash.
+  if (sessionLoading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   if (isAuthenticated) return <Navigate to="/panel" replace />
 
   return (
     <div className="min-h-screen bg-white px-4 py-12 sm:py-16">
       <div className="mx-auto w-full max-w-md">
         <div className="mb-8 text-center">
-          <KarecikLogosu />
+          <BrandLogo />
         </div>
 
         <div className="rounded-2xl border border-gray-200 p-6 sm:p-8">
@@ -133,28 +135,28 @@ export default function Kayit() {
             Kredi kartı gerekmez. Menünüz birkaç dakikada hazır.
           </p>
 
-          {hata ? (
+          {error ? (
             <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {hata}
+              {error}
             </div>
           ) : null}
 
-          <form onSubmit={gonder} className="mt-6 space-y-4" noValidate>
+          <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
             <div>
-              <label htmlFor="isletme-adi" className="etiket">
+              <label htmlFor="signup-business-name" className="label">
                 İşletme Adı
               </label>
               <input
-                id="isletme-adi"
+                id="signup-business-name"
                 type="text"
-                className="girdi"
+                className="input"
                 placeholder="Kahve Durağı"
                 autoComplete="organization"
-                value={isletmeAdi}
-                onChange={(olay) => setIsletmeAdi(olay.target.value)}
-                disabled={gonderiliyor}
+                value={businessName}
+                onChange={(event) => setBusinessName(event.target.value)}
+                disabled={submitting}
               />
-              <p className="yardim">
+              <p className="help-text">
                 Menü adresiniz:{' '}
                 <span className="font-medium text-gray-700">
                   {slug || 'isletmeniz'}.karecik.com
@@ -163,60 +165,60 @@ export default function Kayit() {
             </div>
 
             <div>
-              <label htmlFor="eposta" className="etiket">
+              <label htmlFor="signup-email" className="label">
                 E-posta
               </label>
               <input
-                id="eposta"
+                id="signup-email"
                 type="email"
-                className="girdi"
+                className="input"
                 placeholder="ornek@isletmeniz.com"
                 autoComplete="email"
-                value={eposta}
-                onChange={(olay) => setEposta(olay.target.value)}
-                disabled={gonderiliyor}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                disabled={submitting}
               />
             </div>
 
             <div>
-              <label htmlFor="sifre" className="etiket">
+              <label htmlFor="signup-password" className="label">
                 Şifre
               </label>
               <div className="relative">
                 <input
-                  id="sifre"
-                  type={sifreGorunsun ? 'text' : 'password'}
-                  className="girdi pr-11"
+                  id="signup-password"
+                  type={passwordVisible ? 'text' : 'password'}
+                  className="input pr-11"
                   placeholder="En az 8 karakter"
                   autoComplete="new-password"
-                  value={sifre}
-                  onChange={(olay) => setSifre(olay.target.value)}
-                  disabled={gonderiliyor}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  disabled={submitting}
                 />
                 <button
                   type="button"
-                  onClick={() => setSifreGorunsun((onceki) => !onceki)}
+                  onClick={() => setPasswordVisible((previous) => !previous)}
                   className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-gray-400 hover:text-gray-600"
-                  aria-label={sifreGorunsun ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                  aria-label={passwordVisible ? 'Şifreyi gizle' : 'Şifreyi göster'}
                 >
-                  {sifreGorunsun ? (
+                  {passwordVisible ? (
                     <EyeOff className="h-4 w-4" aria-hidden="true" />
                   ) : (
                     <Eye className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
-              <p className="yardim">Şifreniz en az 8 karakter olmalıdır.</p>
+              <p className="help-text">Şifreniz en az 8 karakter olmalıdır.</p>
             </div>
 
-            <button type="submit" className="btn-birincil w-full" disabled={gonderiliyor}>
-              {gonderiliyor ? 'Hesap oluşturuluyor...' : 'Hesabımı oluştur'}
+            <button type="submit" className="btn-primary w-full" disabled={submitting}>
+              {submitting ? 'Hesap oluşturuluyor...' : 'Hesabımı oluştur'}
             </button>
           </form>
 
           <p className="mt-6 text-center text-sm text-gray-600">
             Zaten hesabınız var mı?{' '}
-            <Link to="/giris" className="font-medium text-marka-600 hover:text-marka-700">
+            <Link to="/giris" className="font-medium text-brand-600 hover:text-brand-700">
               Giriş yapın
             </Link>
           </p>

@@ -1,142 +1,146 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Search, Star } from 'lucide-react'
 
-import { fiyatBicimle } from '../../lib/format'
-import { temaDegiskenleri } from '../../themes/themes'
-import { fontStack, fontYukle } from '../../themes/fonts'
-import { alerjenBul, dilBul, metin, sagdanSolaMi } from '../../locales/index.js'
-import UrunDetayModal from './UrunDetayModal.jsx'
+import { formatPrice } from '../../lib/format'
+import { themeVariables } from '../../themes/themes'
+import { fontStack, loadFont } from '../../themes/fonts'
+import { findAllergen, findLanguage, isRtl, t } from '../../locales/index.js'
+import ProductDetailModal from './ProductDetailModal.jsx'
 import MenuFooter from './MenuFooter.jsx'
 
 /**
- * Müşteri menüsünün asıl ekranı.
+ * The main screen of the customer menu.
  *
- * İki bileşen tarafından kullanılır:
- *   1. pages/menu/MusteriMenusu.jsx  — QR ile açılan gerçek menü
- *   2. components/dashboard/CanliOnizleme.jsx — paneldeki canlı önizleme
- * Bu yüzden prop imzası SABİTTİR, değiştirme.
+ * Two components render it:
+ *   1. pages/menu/CustomerMenu.jsx            — the real menu behind a QR code
+ *   2. components/dashboard/LivePreview.jsx   — the dashboard live preview
+ * The prop signature is therefore FIXED; do not change it.
  *
- * Renkler Tailwind sınıflarıyla değil, temadan üretilen CSS değişkenleriyle
- * verilir (--menu-bg, --menu-text, --menu-primary ...). Böylece altı temanın
- * tamamı tek bir bileşen ağacıyla çalışır.
+ * Colours come from theme-derived CSS custom properties rather than Tailwind
+ * classes, so all six themes work with a single component tree.
  *
- * @param {object}   menu       - { business, categories, footer }
- * @param {string}   dil        - Aktif dil kodu
- * @param {function} dilDegisti - Dil değiştirildiğinde çağrılır
- * @param {boolean}  gomulu     - Dar alanda (panel önizlemesi / iframe) kompakt render
+ * @param {object}   menu             - { business, categories, footer }
+ * @param {string}   language         - Active language code
+ * @param {Function} onLanguageChange - Called when the language changes
+ * @param {boolean}  embedded         - Compact rendering for narrow containers
  */
 
-/** Vurgu rengi üzerinde okunaklı metin rengi seçer. */
-function okunakliMetinRengi(hex) {
-  const temiz = String(hex || '').trim().replace('#', '')
+/** Picks a readable text colour to sit on top of the accent colour. */
+function readableTextColor(hex) {
+  const clean = String(hex || '').trim().replace('#', '')
   let r
   let g
   let b
 
-  if (temiz.length === 3) {
-    r = Number.parseInt(temiz[0] + temiz[0], 16)
-    g = Number.parseInt(temiz[1] + temiz[1], 16)
-    b = Number.parseInt(temiz[2] + temiz[2], 16)
-  } else if (temiz.length === 6) {
-    r = Number.parseInt(temiz.slice(0, 2), 16)
-    g = Number.parseInt(temiz.slice(2, 4), 16)
-    b = Number.parseInt(temiz.slice(4, 6), 16)
+  if (clean.length === 3) {
+    r = Number.parseInt(clean[0] + clean[0], 16)
+    g = Number.parseInt(clean[1] + clean[1], 16)
+    b = Number.parseInt(clean[2] + clean[2], 16)
+  } else if (clean.length === 6) {
+    r = Number.parseInt(clean.slice(0, 2), 16)
+    g = Number.parseInt(clean.slice(2, 4), 16)
+    b = Number.parseInt(clean.slice(4, 6), 16)
   } else {
     return '#ffffff'
   }
 
   if ([r, g, b].some(Number.isNaN)) return '#ffffff'
 
-  const parlaklik = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return parlaklik > 0.6 ? '#111827' : '#ffffff'
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luminance > 0.6 ? '#111827' : '#ffffff'
 }
 
-/** Türkçe duyarlı küçük harfe çevirme (arama için). */
-function kucult(metinDegeri) {
-  return String(metinDegeri || '').toLocaleLowerCase('tr')
+/** Turkish-aware lowercasing, used for search. */
+function lower(value) {
+  return String(value || '').toLocaleLowerCase('tr')
 }
 
-/** İki satırdan sonra kırpma — Tailwind eklentisi olmadan. */
-const IKI_SATIR = {
+/** Clamp to two lines without needing the Tailwind line-clamp plugin. */
+const TWO_LINES = {
   display: '-webkit-box',
   WebkitLineClamp: 2,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
 }
 
-export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = false }) {
+export default function MenuContent({
+  menu,
+  language = 'tr',
+  onLanguageChange,
+  embedded = false,
+}) {
   const business = menu?.business || {}
-  const kategoriler = useMemo(() => menu?.categories || [], [menu])
+  const categories = useMemo(() => menu?.categories || [], [menu])
 
-  const [seciliKategoriId, setSeciliKategoriId] = useState(null)
-  const [arama, setArama] = useState('')
-  const [seciliUrun, setSeciliUrun] = useState(null)
+  const [selectedCategoryId, setSelectedCategoryId] = useState(null)
+  const [search, setSearch] = useState('')
+  const [selectedProduct, setSelectedProduct] = useState(null)
 
-  // Seçilen yazı tipini yükle
+  // Load the selected font
   useEffect(() => {
-    if (business.font_family) fontYukle(business.font_family)
+    if (business.font_family) loadFont(business.font_family)
   }, [business.font_family])
 
-  // Menü değişirse (dil değişimi vb.) seçili kategori geçersiz kalmasın
+  // Drop a stale selection when the menu changes (e.g. after a language switch)
   useEffect(() => {
-    if (seciliKategoriId && !kategoriler.some((k) => k.id === seciliKategoriId)) {
-      setSeciliKategoriId(null)
+    if (selectedCategoryId && !categories.some((category) => category.id === selectedCategoryId)) {
+      setSelectedCategoryId(null)
     }
-  }, [kategoriler, seciliKategoriId])
+  }, [categories, selectedCategoryId])
 
-  const stil = temaDegiskenleri(
+  const style = themeVariables(
     business.theme,
     business.primary_color,
     fontStack(business.font_family),
   )
 
-  const vurguUzeriMetin = okunakliMetinRengi(business.primary_color)
-  const diller = Array.isArray(business.languages) ? business.languages : []
-  const aramaMetni = arama.trim()
-  const aramaAktif = aramaMetni.length > 0
+  const onAccentText = readableTextColor(business.primary_color)
+  const languages = Array.isArray(business.languages) ? business.languages : []
+  const searchTerm = search.trim()
+  const searching = searchTerm.length > 0
 
-  const urunAdedi = (n) => (dil === 'tr' ? `${n} ürün` : `${n} items`)
+  const productCountLabel = (count) => (language === 'tr' ? `${count} ürün` : `${count} items`)
 
-  /* ------------------------------------------------------------ arama */
+  /* ----------------------------------------------------------------- search */
 
-  const aramaSonuclari = useMemo(() => {
-    if (!aramaAktif) return []
-    const anahtar = kucult(aramaMetni)
+  const searchResults = useMemo(() => {
+    if (!searching) return []
+    const needle = lower(searchTerm)
 
-    return kategoriler.flatMap((kategori) =>
-      (kategori.products || [])
-        .filter((urun) =>
-          [urun.name, urun.description, urun.ingredients].some((alan) =>
-            kucult(alan).includes(anahtar),
+    return categories.flatMap((category) =>
+      (category.products || [])
+        .filter((product) =>
+          [product.name, product.description, product.ingredients].some((field) =>
+            lower(field).includes(needle),
           ),
         )
-        .map((urun) => ({ urun, kategoriAdi: kategori.name })),
+        .map((product) => ({ product, categoryName: category.name })),
     )
-  }, [aramaAktif, aramaMetni, kategoriler])
+  }, [searching, searchTerm, categories])
 
-  const seciliKategori = kategoriler.find((k) => k.id === seciliKategoriId) || null
+  const selectedCategory = categories.find((category) => category.id === selectedCategoryId) || null
 
-  /* ------------------------------------------------------- alt parçalar */
+  /* ------------------------------------------------------------- fragments */
 
-  function UrunSatiri({ urun, kategoriAdi }) {
-    const alerjenler = Array.isArray(urun.allergens) ? urun.allergens : []
+  function ProductRow({ product, categoryName }) {
+    const allergens = Array.isArray(product.allergens) ? product.allergens : []
 
     return (
       <button
         type="button"
-        onClick={() => setSeciliUrun(urun)}
+        onClick={() => setSelectedProduct(product)}
         className="flex w-full items-start gap-3 p-3 text-left"
         style={{
           backgroundColor: 'var(--menu-surface)',
           borderRadius: 'var(--menu-radius)',
           border: '1px solid var(--menu-border)',
           boxShadow: 'var(--menu-shadow)',
-          opacity: urun.is_active === false ? 0.5 : 1,
+          opacity: product.is_active === false ? 0.5 : 1,
         }}
       >
-        {urun.image_url ? (
+        {product.image_url ? (
           <img
-            src={urun.image_url}
+            src={product.image_url}
             alt=""
             className="h-[72px] w-[72px] shrink-0 object-cover"
             style={{ borderRadius: 'calc(var(--menu-radius) * 0.7)' }}
@@ -147,52 +151,52 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="font-medium leading-snug" style={{ color: 'var(--menu-text)' }}>
-                {urun.name}
+                {product.name}
               </p>
-              {kategoriAdi ? (
+              {categoryName ? (
                 <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
-                  {kategoriAdi}
+                  {categoryName}
                 </p>
               ) : null}
             </div>
 
             <div className="shrink-0 text-right">
-              {urun.compare_price ? (
+              {product.compare_price ? (
                 <p className="text-[11px] line-through" style={{ color: 'var(--menu-muted)' }}>
-                  {fiyatBicimle(urun.compare_price, business.currency)}
+                  {formatPrice(product.compare_price, business.currency)}
                 </p>
               ) : null}
               <p className="font-semibold" style={{ color: 'var(--menu-primary)' }}>
-                {fiyatBicimle(urun.price, business.currency)}
+                {formatPrice(product.price, business.currency)}
               </p>
             </div>
           </div>
 
-          {urun.description ? (
+          {product.description ? (
             <p
               className="mt-1 text-xs leading-relaxed"
-              style={{ ...IKI_SATIR, color: 'var(--menu-muted)' }}
+              style={{ ...TWO_LINES, color: 'var(--menu-muted)' }}
             >
-              {urun.description}
+              {product.description}
             </p>
           ) : null}
 
-          {(alerjenler.length > 0 || urun.is_featured || urun.is_active === false) && (
+          {(allergens.length > 0 || product.is_featured || product.is_active === false) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {urun.is_featured ? (
+              {product.is_featured ? (
                 <span
                   className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
                   style={{
                     backgroundColor: 'var(--menu-primary)',
-                    color: vurguUzeriMetin,
+                    color: onAccentText,
                   }}
                 >
                   <Star className="h-2.5 w-2.5" aria-hidden="true" />
-                  {metin('oneCikan', dil)}
+                  {t('featured', language)}
                 </span>
               ) : null}
 
-              {urun.is_active === false ? (
+              {product.is_active === false ? (
                 <span
                   className="rounded-full px-2 py-0.5 text-[10px] font-medium"
                   style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
@@ -201,12 +205,16 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                 </span>
               ) : null}
 
-              {alerjenler.map((kod) => {
-                const bilgi = alerjenBul(kod)
-                if (!bilgi) return null
+              {allergens.map((code) => {
+                const allergen = findAllergen(code)
+                if (!allergen) return null
                 return (
-                  <span key={kod} title={dil === 'tr' ? bilgi.tr : bilgi.en} className="text-xs">
-                    {bilgi.emoji}
+                  <span
+                    key={code}
+                    title={language === 'tr' ? allergen.tr : allergen.en}
+                    className="text-xs"
+                  >
+                    {allergen.emoji}
                   </span>
                 )
               })}
@@ -217,20 +225,20 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
     )
   }
 
-  function KategoriSeridi() {
+  function CategoryStrip() {
     return (
-      <div className="kaydirma-gizli -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
-        {kategoriler.map((kategori) => {
-          const secili = kategori.id === seciliKategoriId
+      <div className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
+        {categories.map((category) => {
+          const isSelected = category.id === selectedCategoryId
           return (
             <button
-              key={kategori.id}
+              key={category.id}
               type="button"
-              onClick={() => setSeciliKategoriId(kategori.id)}
+              onClick={() => setSelectedCategoryId(category.id)}
               className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm"
               style={
-                secili
-                  ? { backgroundColor: 'var(--menu-primary)', color: vurguUzeriMetin }
+                isSelected
+                  ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
                   : {
                       backgroundColor: 'var(--menu-surface)',
                       color: 'var(--menu-text)',
@@ -238,8 +246,8 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                     }
               }
             >
-              {kategori.icon ? `${kategori.icon} ` : ''}
-              {kategori.name}
+              {category.icon ? `${category.icon} ` : ''}
+              {category.name}
             </button>
           )
         })}
@@ -247,10 +255,10 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
     )
   }
 
-  function BosMetin({ yazi }) {
+  function EmptyLine({ text }) {
     return (
       <p className="py-10 text-center text-sm" style={{ color: 'var(--menu-muted)' }}>
-        {yazi}
+        {text}
       </p>
     )
   }
@@ -259,12 +267,12 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
 
   return (
     <div
-      className={gomulu ? 'min-h-full w-full' : 'min-h-screen w-full'}
-      style={stil}
-      dir={sagdanSolaMi(dil) ? 'rtl' : 'ltr'}
+      className={embedded ? 'min-h-full w-full' : 'min-h-screen w-full'}
+      style={style}
+      dir={isRtl(language) ? 'rtl' : 'ltr'}
     >
       <div className="mx-auto max-w-lg px-4 py-5">
-        {/* ---------------------------------------------- başlık: logo SOL ÜSTTE */}
+        {/* ------------------------------------ header: logo in the TOP LEFT */}
         <header className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             {business.logo_url ? (
@@ -279,7 +287,7 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                 className="flex h-12 w-12 shrink-0 items-center justify-center text-lg font-semibold"
                 style={{
                   backgroundColor: 'var(--menu-primary)',
-                  color: vurguUzeriMetin,
+                  color: onAccentText,
                   borderRadius: 'calc(var(--menu-radius) * 0.6)',
                 }}
                 aria-hidden="true"
@@ -303,27 +311,29 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
             </div>
           </div>
 
-          {diller.length > 1 ? (
+          {languages.length > 1 ? (
             <div className="flex shrink-0 items-center gap-1">
-              {diller.map((kod) => {
-                const bilgi = dilBul(kod)
-                const secili = kod === dil
+              {languages.map((code) => {
+                const info = findLanguage(code)
+                const isSelected = code === language
                 return (
                   <button
-                    key={kod}
+                    key={code}
                     type="button"
-                    onClick={() => dilDegisti?.(kod)}
-                    aria-label={bilgi.label}
-                    title={bilgi.label}
+                    onClick={() => onLanguageChange?.(code)}
+                    aria-label={info.label}
+                    title={info.label}
                     className="rounded-full px-2 py-1 text-xs font-semibold leading-none"
                     style={{
-                      opacity: secili ? 1 : 0.45,
-                      border: secili ? '1px solid var(--menu-border)' : '1px solid transparent',
+                      opacity: isSelected ? 1 : 0.45,
+                      border: isSelected
+                        ? '1px solid var(--menu-border)'
+                        : '1px solid transparent',
                     }}
                   >
-                    {/* Bayrak emojisi yerine dil kodu: Windows bayrakları
-                        çizemediği için İngilizce "GB" olarak görünüyordu. */}
-                    {bilgi.kisa}
+                    {/* Short code instead of a flag emoji: Windows cannot draw
+                        flags and rendered English as "GB". */}
+                    {info.short}
                   </button>
                 )
               })}
@@ -331,8 +341,8 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
           ) : null}
         </header>
 
-        {/* ------------------------------------------------------------ arama */}
-        {kategoriler.length > 0 ? (
+        {/* --------------------------------------------------------- search */}
+        {categories.length > 0 ? (
           <div className="relative mt-4">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
@@ -341,9 +351,9 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
             />
             <input
               type="search"
-              value={arama}
-              onChange={(olay) => setArama(olay.target.value)}
-              placeholder={metin('ara', dil)}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t('search', language)}
               className="w-full py-2.5 pl-9 pr-3 text-sm outline-none"
               style={{
                 backgroundColor: 'var(--menu-surface)',
@@ -356,25 +366,25 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
         ) : null}
 
         <div className="mt-4">
-          {/* ------------------------------------------------- 1) arama sonuçları */}
-          {aramaAktif ? (
-            aramaSonuclari.length === 0 ? (
-              <BosMetin yazi={metin('sonucYok', dil)} />
+          {/* --------------------------------------------- 1) search results */}
+          {searching ? (
+            searchResults.length === 0 ? (
+              <EmptyLine text={t('noResults', language)} />
             ) : (
               <div className="flex flex-col gap-2.5">
-                {aramaSonuclari.map(({ urun, kategoriAdi }) => (
-                  <UrunSatiri key={urun.id} urun={urun} kategoriAdi={kategoriAdi} />
+                {searchResults.map(({ product, categoryName }) => (
+                  <ProductRow key={product.id} product={product} categoryName={categoryName} />
                 ))}
               </div>
             )
-          ) : seciliKategori ? (
-            /* ------------------------------------------- 2) ürün listesi görünümü */
+          ) : selectedCategory ? (
+            /* ------------------------------------------- 2) product listing */
             <>
               <div className="mb-3 flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setSeciliKategoriId(null)}
-                  aria-label={dil === 'tr' ? 'Kategorilere dön' : 'Back to categories'}
+                  onClick={() => setSelectedCategoryId(null)}
+                  aria-label={language === 'tr' ? 'Kategorilere dön' : 'Back to categories'}
                   className="flex h-8 w-8 shrink-0 items-center justify-center"
                   style={{
                     backgroundColor: 'var(--menu-surface)',
@@ -383,66 +393,72 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                     color: 'var(--menu-text)',
                   }}
                 >
-                  <ArrowLeft className="h-4 w-4" style={{ transform: sagdanSolaMi(dil) ? 'scaleX(-1)' : 'none' }} />
+                  <ArrowLeft
+                    className="h-4 w-4"
+                    style={{ transform: isRtl(language) ? 'scaleX(-1)' : 'none' }}
+                  />
                 </button>
 
-                <h2 className="truncate text-base font-semibold" style={{ color: 'var(--menu-text)' }}>
-                  {seciliKategori.icon ? `${seciliKategori.icon} ` : ''}
-                  {seciliKategori.name}
+                <h2
+                  className="truncate text-base font-semibold"
+                  style={{ color: 'var(--menu-text)' }}
+                >
+                  {selectedCategory.icon ? `${selectedCategory.icon} ` : ''}
+                  {selectedCategory.name}
                 </h2>
               </div>
 
-              <KategoriSeridi />
+              <CategoryStrip />
 
-              {seciliKategori.description ? (
+              {selectedCategory.description ? (
                 <p className="mb-3 text-xs" style={{ color: 'var(--menu-muted)' }}>
-                  {seciliKategori.description}
+                  {selectedCategory.description}
                 </p>
               ) : null}
 
-              {(seciliKategori.products || []).length === 0 ? (
-                <BosMetin yazi={metin('bosKategori', dil)} />
+              {(selectedCategory.products || []).length === 0 ? (
+                <EmptyLine text={t('emptyCategory', language)} />
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  {seciliKategori.products.map((urun) => (
-                    <UrunSatiri key={urun.id} urun={urun} />
+                  {selectedCategory.products.map((product) => (
+                    <ProductRow key={product.id} product={product} />
                   ))}
                 </div>
               )}
             </>
-          ) : kategoriler.length === 0 ? (
-            /* ---------------------------------------------------- 3) menü boş */
-            <BosMetin yazi={metin('bosMenu', dil)} />
+          ) : categories.length === 0 ? (
+            /* ------------------------------------------------ 3) empty menu */
+            <EmptyLine text={t('emptyMenu', language)} />
           ) : (
-            /* ------------------------------------------------ 4) kategori kartları */
+            /* --------------------------------------------- 4) category grid */
             <div className="grid grid-cols-2 gap-3">
-              {kategoriler.map((kategori) => (
+              {categories.map((category) => (
                 <button
-                  key={kategori.id}
+                  key={category.id}
                   type="button"
-                  onClick={() => setSeciliKategoriId(kategori.id)}
+                  onClick={() => setSelectedCategoryId(category.id)}
                   className="flex flex-col overflow-hidden text-left"
                   style={{
                     backgroundColor: 'var(--menu-surface)',
                     border: '1px solid var(--menu-border)',
                     borderRadius: 'var(--menu-radius)',
                     boxShadow: 'var(--menu-shadow)',
-                    opacity: kategori.is_active === false ? 0.5 : 1,
+                    opacity: category.is_active === false ? 0.5 : 1,
                   }}
                 >
-                  {kategori.image_url ? (
+                  {category.image_url ? (
                     <img
-                      src={kategori.image_url}
+                      src={category.image_url}
                       alt=""
-                      className={gomulu ? 'h-20 w-full object-cover' : 'h-24 w-full object-cover'}
+                      className={embedded ? 'h-20 w-full object-cover' : 'h-24 w-full object-cover'}
                     />
                   ) : (
                     <div
                       className={`flex w-full items-center justify-center text-4xl ${
-                        gomulu ? 'h-20' : 'h-24'
+                        embedded ? 'h-20' : 'h-24'
                       }`}
                     >
-                      {kategori.icon || '🍽️'}
+                      {category.icon || '🍽️'}
                     </div>
                   )}
 
@@ -451,10 +467,10 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
                       className="truncate text-sm font-medium"
                       style={{ color: 'var(--menu-text)' }}
                     >
-                      {kategori.name}
+                      {category.name}
                     </p>
                     <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
-                      {urunAdedi((kategori.products || []).length)}
+                      {productCountLabel((category.products || []).length)}
                     </p>
                   </div>
                 </button>
@@ -464,23 +480,23 @@ export default function MenuIcerik({ menu, dil = 'tr', dilDegisti, gomulu = fals
         </div>
 
         {/*
-          Ana sayfada (kategori kartları) yalnızca "Karecik ile hazırlandı"
-          görünür. Fiyat tarihi, KDV ibaresi ve iletişim bilgileri ürünlerin
-          listelendiği ekranlara taşındı.
+          On the home view only "Karecik ile hazırlandı" is shown. The price
+          date, the VAT notice and the contact details live on the screens that
+          list products.
         */}
         <MenuFooter
           business={business}
           footer={menu?.footer}
-          dil={dil}
-          kapsam={aramaAktif || seciliKategori ? 'urunler' : 'anasayfa'}
+          language={language}
+          scope={searching || selectedCategory ? 'products' : 'home'}
         />
       </div>
 
-      <UrunDetayModal
-        urun={seciliUrun}
+      <ProductDetailModal
+        product={selectedProduct}
         business={business}
-        dil={dil}
-        kapat={() => setSeciliUrun(null)}
+        language={language}
+        onClose={() => setSelectedProduct(null)}
       />
     </div>
   )

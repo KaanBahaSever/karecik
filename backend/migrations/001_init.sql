@@ -1,7 +1,10 @@
--- Karecik — ilk şema
--- PostgreSQL 13+ gerekir (gen_random_uuid() çekirdekte gelir, eklenti gerekmez).
+-- Karecik — initial schema
+-- Requires PostgreSQL 13+ (gen_random_uuid() ships in core, no extension needed).
+--
+-- NOTE: default values such as the VAT notice are customer-facing copy and are
+-- therefore stored in Turkish on purpose.
 
--- updated_at sütununu her UPDATE'te otomatik tazeleyen tetikleyici fonksiyonu
+-- Trigger function that refreshes the updated_at column on every UPDATE
 CREATE OR REPLACE FUNCTION karecik_set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -21,7 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- E-posta benzersizliği büyük/küçük harf duyarsız olmalı
+-- Email uniqueness must be case-insensitive
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email));
 
 DROP TRIGGER IF EXISTS users_set_updated_at ON users;
@@ -29,7 +32,7 @@ CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION karecik_set_updated_at();
 
 -- ----------------------------------------------------------- businesses
--- Bir kullanıcı = bir işletme (tenant). Subdomain 'slug' sütunundan çözülür.
+-- One user = one business (tenant). The subdomain is resolved from 'slug'.
 CREATE TABLE IF NOT EXISTS businesses (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id          UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -39,32 +42,32 @@ CREATE TABLE IF NOT EXISTS businesses (
     logo_url         TEXT,
     cover_url        TEXT,
 
-    -- Para birimi
+    -- Currency
     currency         TEXT NOT NULL DEFAULT 'TRY'
                      CHECK (currency IN ('TRY','USD','EUR','GBP','AZN','RUB','SAR','AED')),
 
-    -- Görünüm
+    -- Appearance
     theme            TEXT NOT NULL DEFAULT 'modern-light',
     font_family      TEXT NOT NULL DEFAULT 'inter',
     primary_color    TEXT NOT NULL DEFAULT '#1d4ed8',
 
-    -- Diller
+    -- Languages
     default_language TEXT NOT NULL DEFAULT 'tr',
     languages        JSONB NOT NULL DEFAULT '["tr"]'::jsonb,
 
-    -- Karşılama (splash) animasyonu — yalnızca müşteri menüsünde
+    -- Splash screen — shown only in the customer menu
     splash_enabled   BOOLEAN NOT NULL DEFAULT true,
     splash_duration  INTEGER NOT NULL DEFAULT 1200 CHECK (splash_duration BETWEEN 300 AND 5000),
     splash_bg_color  TEXT NOT NULL DEFAULT '#0f172a',
     splash_text      TEXT NOT NULL DEFAULT '',
 
-    -- Yasal ibareler (footer)
+    -- Legal notices in the footer
     show_vat_note    BOOLEAN NOT NULL DEFAULT true,
     vat_note_text    TEXT NOT NULL DEFAULT 'Fiyatlarımıza KDV dahildir.',
     show_price_date  BOOLEAN NOT NULL DEFAULT true,
     price_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- İletişim
+    -- Contact details
     phone            TEXT,
     address          TEXT,
     instagram        TEXT,
@@ -130,7 +133,7 @@ CREATE TRIGGER products_set_updated_at BEFORE UPDATE ON products
     FOR EACH ROW EXECUTE FUNCTION karecik_set_updated_at();
 
 -- --------------------------------------------------- price_update_logs
--- Toplu fiyat güncellemelerinin denetim kaydı
+-- Audit trail of the bulk price updates
 CREATE TABLE IF NOT EXISTS price_update_logs (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     business_id UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,

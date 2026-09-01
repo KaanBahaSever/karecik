@@ -1,11 +1,11 @@
--- Karecik — marka rengi güncellemesi
+-- Karecik — brand colour update
 --
--- Ana tema rengi yeşilden (#1a7f5a) kurumsal maviye (#1d4ed8) çevrildi.
--- 001_init.sql'deki sütun varsayılanı yeni kurulumlar için güncellendi;
--- bu migration ise ZATEN OLUŞTURULMUŞ veritabanlarını hizaya getirir.
+-- The main theme colour changed from green (#1a7f5a) to the corporate blue
+-- (#1d4ed8). The column default in 001_init.sql was updated for fresh installs;
+-- this migration brings ALREADY CREATED databases in line.
 --
--- Yalnızca eski varsayılanı taşıyan kayıtlar değişir. İşletme panelden
--- kendi rengini seçtiyse (ör. #7c3aed) ona dokunulmaz.
+-- Only rows still carrying the old default are touched. A business that picked
+-- its own colour in the dashboard (e.g. #7c3aed) is left alone.
 
 ALTER TABLE businesses ALTER COLUMN primary_color SET DEFAULT '#1d4ed8';
 

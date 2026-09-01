@@ -15,8 +15,10 @@ const (
 	ctxBusinessID = "karecik_business_id"
 )
 
-// Protected, Authorization: Bearer <token> basligini dogrular ve
-// kullanici/isletme kimligini istek baglamina yazar.
+// Protected validates the "Authorization: Bearer <token>" header and stores the
+// user and business identifiers on the request context.
+//
+// NOTE: the error messages are shown to the end user and stay Turkish.
 func Protected(cfg *config.Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		header := strings.TrimSpace(c.Get("Authorization"))
@@ -49,14 +51,15 @@ func Protected(cfg *config.Config) fiber.Handler {
 	}
 }
 
-// UserID, Protected middleware'inin yazdigi kullanici kimligini dondurur.
+// UserID returns the user identifier stored by the Protected middleware.
 func UserID(c *fiber.Ctx) uuid.UUID {
 	id, _ := c.Locals(ctxUserID).(uuid.UUID)
 	return id
 }
 
-// BusinessID, Protected middleware'inin yazdigi isletme kimligini dondurur.
-// Tum panel uclari isletme kapsamini buradan alir; istemci asla business_id gondermez.
+// BusinessID returns the business identifier stored by the Protected middleware.
+// Every dashboard endpoint derives its tenant scope from here; the client never
+// sends a business_id itself.
 func BusinessID(c *fiber.Ctx) uuid.UUID {
 	id, _ := c.Locals(ctxBusinessID).(uuid.UUID)
 	return id

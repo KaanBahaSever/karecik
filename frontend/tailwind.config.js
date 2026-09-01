@@ -7,9 +7,9 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
       },
       colors: {
-        // Karecik kurumsal paleti (landing + panel)
-        // Kurumsal, tok mavi — 600 ana ton, 700 hover tonudur.
-        marka: {
+        // Karecik corporate palette (landing page + dashboard).
+        // 600 is the main tone, 700 the hover tone.
+        brand: {
           50: '#eff5ff',
           100: '#dbe7fe',
           200: '#bfd5fe',
@@ -23,11 +23,11 @@ export default {
         },
       },
       boxShadow: {
-        kart: '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.06)',
+        card: '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.06)',
         panel: '0 4px 16px -2px rgb(0 0 0 / 0.08)',
       },
       maxWidth: {
-        icerik: '1200px',
+        content: '1200px',
       },
     },
   },

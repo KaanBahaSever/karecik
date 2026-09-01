@@ -3,178 +3,178 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AlertCircle, Eye, EyeOff } from 'lucide-react'
 
 import Modal from '../ui/Modal.jsx'
-import { useBildirim } from '../ui/Bildirim.jsx'
+import { useToast } from '../ui/Toast.jsx'
 import { useAuth } from '../../lib/auth.jsx'
 
-const EPOSTA_DESENI = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
 /**
- * Açılış sayfasındaki hızlı kayıt penceresi.
+ * Quick sign-up dialog opened from the landing page.
  *
- * @param {boolean}  acik
- * @param {Function} kapat
+ * @param {boolean}  open
+ * @param {Function} onClose
  */
-export default function KayitModal({ acik, kapat }) {
+export default function SignUpModal({ open, onClose }) {
   const { register } = useAuth()
-  const bildirim = useBildirim()
-  const gezin = useNavigate()
+  const toast = useToast()
+  const navigate = useNavigate()
 
-  const [isletmeAdi, setIsletmeAdi] = useState('')
-  const [eposta, setEposta] = useState('')
-  const [sifre, setSifre] = useState('')
-  const [sifreGorunur, setSifreGorunur] = useState(false)
-  const [hatalar, setHatalar] = useState({})
-  const [genelHata, setGenelHata] = useState('')
-  const [gonderiliyor, setGonderiliyor] = useState(false)
+  const [businessName, setBusinessName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
+  const [errors, setErrors] = useState({})
+  const [generalError, setGeneralError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  // Pencere her açıldığında önceki hata izlerini temizle.
+  // Clear any leftover errors every time the dialog opens.
   useEffect(() => {
-    if (!acik) return
-    setHatalar({})
-    setGenelHata('')
-    setGonderiliyor(false)
-    setSifreGorunur(false)
-  }, [acik])
+    if (!open) return
+    setErrors({})
+    setGeneralError('')
+    setSubmitting(false)
+    setPasswordVisible(false)
+  }, [open])
 
-  /** İstemci tarafı doğrulama; alan adı -> hata metni sözlüğü döner. */
-  function dogrula() {
-    const yeniHatalar = {}
+  /** Client-side validation; returns a field name -> message dictionary. */
+  function validate() {
+    const found = {}
 
-    if (!isletmeAdi.trim()) {
-      yeniHatalar.isletmeAdi = 'İşletme adını girin.'
-    } else if (isletmeAdi.trim().length < 2) {
-      yeniHatalar.isletmeAdi = 'İşletme adı en az 2 karakter olmalı.'
+    if (!businessName.trim()) {
+      found.businessName = 'İşletme adını girin.'
+    } else if (businessName.trim().length < 2) {
+      found.businessName = 'İşletme adı en az 2 karakter olmalı.'
     }
 
-    if (!eposta.trim()) {
-      yeniHatalar.eposta = 'E-posta adresinizi girin.'
-    } else if (!EPOSTA_DESENI.test(eposta.trim())) {
-      yeniHatalar.eposta = 'Geçerli bir e-posta adresi girin.'
+    if (!email.trim()) {
+      found.email = 'E-posta adresinizi girin.'
+    } else if (!EMAIL_PATTERN.test(email.trim())) {
+      found.email = 'Geçerli bir e-posta adresi girin.'
     }
 
-    if (!sifre) {
-      yeniHatalar.sifre = 'Bir şifre belirleyin.'
-    } else if (sifre.length < 8) {
-      yeniHatalar.sifre = 'Şifre en az 8 karakter olmalı.'
+    if (!password) {
+      found.password = 'Bir şifre belirleyin.'
+    } else if (password.length < 8) {
+      found.password = 'Şifre en az 8 karakter olmalı.'
     }
 
-    return yeniHatalar
+    return found
   }
 
-  async function gonder(olay) {
-    olay.preventDefault()
-    if (gonderiliyor) return
+  async function onSubmit(event) {
+    event.preventDefault()
+    if (submitting) return
 
-    setGenelHata('')
-    const yeniHatalar = dogrula()
-    setHatalar(yeniHatalar)
-    if (Object.keys(yeniHatalar).length > 0) return
+    setGeneralError('')
+    const found = validate()
+    setErrors(found)
+    if (Object.keys(found).length > 0) return
 
-    setGonderiliyor(true)
+    setSubmitting(true)
     try {
-      await register(isletmeAdi.trim(), eposta.trim(), sifre)
-      bildirim.basari('Hoş geldiniz! Menünüzü oluşturmaya başlayabilirsiniz.')
-      kapat?.()
-      gezin('/panel')
-    } catch (hata) {
-      setGenelHata(hata.message)
-      bildirim.hata(hata.message)
-      setGonderiliyor(false)
+      await register(businessName.trim(), email.trim(), password)
+      toast.success('Hoş geldiniz! Menünüzü oluşturmaya başlayabilirsiniz.')
+      onClose?.()
+      navigate('/panel')
+    } catch (error) {
+      setGeneralError(error.message)
+      toast.error(error.message)
+      setSubmitting(false)
     }
   }
 
   return (
     <Modal
-      acik={acik}
-      kapat={gonderiliyor ? () => {} : kapat}
-      baslik="Ücretsiz hesabınızı oluşturun"
-      aciklama="Birkaç saniyede QR menünüzü hazırlamaya başlayın."
-      genislik="max-w-md"
-      altBilgi={
+      open={open}
+      onClose={submitting ? () => {} : onClose}
+      title="Ücretsiz hesabınızı oluşturun"
+      description="Birkaç saniyede QR menünüzü hazırlamaya başlayın."
+      width="max-w-md"
+      footer={
         <button
           type="submit"
-          form="karecik-kayit-formu"
-          disabled={gonderiliyor}
-          className="btn-birincil w-full sm:w-auto"
+          form="karecik-signup-form"
+          disabled={submitting}
+          className="btn-primary w-full sm:w-auto"
         >
-          {gonderiliyor ? 'Hesap oluşturuluyor...' : 'Hesabımı oluştur'}
+          {submitting ? 'Hesap oluşturuluyor...' : 'Hesabımı oluştur'}
         </button>
       }
     >
-      <form id="karecik-kayit-formu" onSubmit={gonder} noValidate className="space-y-4">
-        {genelHata ? (
+      <form id="karecik-signup-form" onSubmit={onSubmit} noValidate className="space-y-4">
+        {generalError ? (
           <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <p className="leading-snug">{genelHata}</p>
+            <p className="leading-snug">{generalError}</p>
           </div>
         ) : null}
 
         <div>
-          <label className="etiket" htmlFor="kayit-isletme-adi">
+          <label className="label" htmlFor="signup-business-name">
             İşletme Adı
           </label>
           <input
-            id="kayit-isletme-adi"
+            id="signup-business-name"
             type="text"
-            className="girdi"
+            className="input"
             placeholder="Örn. Kahve Durağı"
             autoComplete="organization"
-            value={isletmeAdi}
-            disabled={gonderiliyor}
-            onChange={(olay) => setIsletmeAdi(olay.target.value)}
+            value={businessName}
+            disabled={submitting}
+            onChange={(event) => setBusinessName(event.target.value)}
           />
-          {hatalar.isletmeAdi ? <p className="hata-metni">{hatalar.isletmeAdi}</p> : null}
+          {errors.businessName ? <p className="error-text">{errors.businessName}</p> : null}
         </div>
 
         <div>
-          <label className="etiket" htmlFor="kayit-eposta">
+          <label className="label" htmlFor="signup-email">
             E-posta
           </label>
           <input
-            id="kayit-eposta"
+            id="signup-email"
             type="email"
-            className="girdi"
+            className="input"
             placeholder="ornek@isletmem.com"
             autoComplete="email"
-            value={eposta}
-            disabled={gonderiliyor}
-            onChange={(olay) => setEposta(olay.target.value)}
+            value={email}
+            disabled={submitting}
+            onChange={(event) => setEmail(event.target.value)}
           />
-          {hatalar.eposta ? <p className="hata-metni">{hatalar.eposta}</p> : null}
+          {errors.email ? <p className="error-text">{errors.email}</p> : null}
         </div>
 
         <div>
-          <label className="etiket" htmlFor="kayit-sifre">
+          <label className="label" htmlFor="signup-password">
             Şifre
           </label>
           <div className="relative">
             <input
-              id="kayit-sifre"
-              type={sifreGorunur ? 'text' : 'password'}
-              className="girdi pr-11"
+              id="signup-password"
+              type={passwordVisible ? 'text' : 'password'}
+              className="input pr-11"
               placeholder="En az 8 karakter"
               autoComplete="new-password"
-              value={sifre}
-              disabled={gonderiliyor}
-              onChange={(olay) => setSifre(olay.target.value)}
+              value={password}
+              disabled={submitting}
+              onChange={(event) => setPassword(event.target.value)}
             />
             <button
               type="button"
-              onClick={() => setSifreGorunur((onceki) => !onceki)}
+              onClick={() => setPasswordVisible((previous) => !previous)}
               className="absolute right-1 top-1/2 -translate-y-1/2 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-              aria-label={sifreGorunur ? 'Şifreyi gizle' : 'Şifreyi göster'}
+              aria-label={passwordVisible ? 'Şifreyi gizle' : 'Şifreyi göster'}
             >
-              {sifreGorunur ? (
+              {passwordVisible ? (
                 <EyeOff className="h-4 w-4" aria-hidden="true" />
               ) : (
                 <Eye className="h-4 w-4" aria-hidden="true" />
               )}
             </button>
           </div>
-          {hatalar.sifre ? (
-            <p className="hata-metni">{hatalar.sifre}</p>
+          {errors.password ? (
+            <p className="error-text">{errors.password}</p>
           ) : (
-            <p className="yardim">Şifreniz en az 8 karakter olmalı.</p>
+            <p className="help-text">Şifreniz en az 8 karakter olmalı.</p>
           )}
         </div>
 
@@ -182,8 +182,8 @@ export default function KayitModal({ acik, kapat }) {
           Zaten hesabınız var mı?{' '}
           <Link
             to="/giris"
-            onClick={() => kapat?.()}
-            className="font-medium text-marka-600 hover:text-marka-700"
+            onClick={() => onClose?.()}
+            className="font-medium text-brand-600 hover:text-brand-700"
           >
             Giriş yapın
           </Link>

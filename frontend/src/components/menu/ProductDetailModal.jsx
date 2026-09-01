@@ -1,94 +1,94 @@
 import { useEffect } from 'react'
 
-import { fiyatBicimle } from '../../lib/format'
-import { alerjenBul, alerjenEtiketi, metin } from '../../locales/index.js'
+import { formatPrice } from '../../lib/format'
+import { allergenLabel, findAllergen, t } from '../../locales/index.js'
 
 /**
- * Müşteri menüsünde ürüne dokununca alttan açılan detay paneli.
+ * Bottom sheet shown when a product is tapped in the customer menu.
  *
- * @param {object|null} urun     - Seçili ürün (null ise hiçbir şey render edilmez)
- * @param {object}      business - PublicMenu.business (para birimi vb.)
- * @param {string}      dil      - Aktif dil kodu
- * @param {function}    kapat    - Paneli kapatır
+ * @param {object|null} product  - Selected product (renders nothing when null)
+ * @param {object}      business - PublicMenu.business (currency and colours)
+ * @param {string}      language - Active language code
+ * @param {Function}    onClose  - Closes the sheet
  */
 
-const ANIMASYON_STILI = `
-@keyframes panelYukari {
+const ANIMATION_STYLE = `
+@keyframes karecikSheetUp {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 `
 
-/** Vurgu rengi üzerinde okunaklı metin rengi seçer. */
-function okunakliMetinRengi(hex) {
-  const temiz = String(hex || '').trim().replace('#', '')
+/** Picks a readable text colour to sit on top of the accent colour. */
+function readableTextColor(hex) {
+  const clean = String(hex || '').trim().replace('#', '')
   let r
   let g
   let b
 
-  if (temiz.length === 3) {
-    r = Number.parseInt(temiz[0] + temiz[0], 16)
-    g = Number.parseInt(temiz[1] + temiz[1], 16)
-    b = Number.parseInt(temiz[2] + temiz[2], 16)
-  } else if (temiz.length === 6) {
-    r = Number.parseInt(temiz.slice(0, 2), 16)
-    g = Number.parseInt(temiz.slice(2, 4), 16)
-    b = Number.parseInt(temiz.slice(4, 6), 16)
+  if (clean.length === 3) {
+    r = Number.parseInt(clean[0] + clean[0], 16)
+    g = Number.parseInt(clean[1] + clean[1], 16)
+    b = Number.parseInt(clean[2] + clean[2], 16)
+  } else if (clean.length === 6) {
+    r = Number.parseInt(clean.slice(0, 2), 16)
+    g = Number.parseInt(clean.slice(2, 4), 16)
+    b = Number.parseInt(clean.slice(4, 6), 16)
   } else {
     return '#ffffff'
   }
 
   if ([r, g, b].some(Number.isNaN)) return '#ffffff'
 
-  const parlaklik = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return parlaklik > 0.6 ? '#111827' : '#ffffff'
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luminance > 0.6 ? '#111827' : '#ffffff'
 }
 
-export default function UrunDetayModal({ urun, business, dil = 'tr', kapat }) {
-  // Escape ile kapatma — ürün yokken de güvenle çalışsın diye koşulsuz kurulur.
+export default function ProductDetailModal({ product, business, language = 'tr', onClose }) {
+  // Close on Escape — registered unconditionally so the hook order stays stable.
   useEffect(() => {
-    if (!urun) return undefined
+    if (!product) return undefined
 
-    function tusaBasildi(olay) {
-      if (olay.key === 'Escape') kapat?.()
+    function onKeyDown(event) {
+      if (event.key === 'Escape') onClose?.()
     }
 
-    window.addEventListener('keydown', tusaBasildi)
-    return () => window.removeEventListener('keydown', tusaBasildi)
-  }, [urun, kapat])
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [product, onClose])
 
-  if (!urun) return null
+  if (!product) return null
 
-  const paraBirimi = business?.currency || 'TRY'
-  const vurguMetni = okunakliMetinRengi(business?.primary_color)
+  const currency = business?.currency || 'TRY'
+  const onAccentText = readableTextColor(business?.primary_color)
 
-  const alerjenler = Array.isArray(urun.allergens) ? urun.allergens.filter(Boolean) : []
-  const indirimliMi =
-    Number(urun.compare_price) > 0 && Number(urun.compare_price) > Number(urun.price)
+  const allergens = Array.isArray(product.allergens) ? product.allergens.filter(Boolean) : []
+  const isDiscounted =
+    Number(product.compare_price) > 0 && Number(product.compare_price) > Number(product.price)
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/50"
-      onClick={() => kapat?.()}
+      onClick={() => onClose?.()}
       role="presentation"
     >
-      <style>{ANIMASYON_STILI}</style>
+      <style>{ANIMATION_STYLE}</style>
 
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={urun.name || 'Ürün detayı'}
-        onClick={(olay) => olay.stopPropagation()}
+        aria-label={product.name || 'Ürün detayı'}
+        onClick={(event) => event.stopPropagation()}
         className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl"
         style={{
           backgroundColor: 'var(--menu-bg)',
           color: 'var(--menu-text)',
           fontFamily: 'var(--menu-font)',
-          animation: 'panelYukari 220ms ease-out both',
+          animation: 'karecikSheetUp 220ms ease-out both',
         }}
       >
-        {urun.image_url ? (
-          <img src={urun.image_url} alt="" className="h-56 w-full rounded-t-2xl object-cover" />
+        {product.image_url ? (
+          <img src={product.image_url} alt="" className="h-56 w-full rounded-t-2xl object-cover" />
         ) : (
           <div className="flex justify-center pt-3">
             <span
@@ -100,42 +100,42 @@ export default function UrunDetayModal({ urun, business, dil = 'tr', kapat }) {
         )}
 
         <div className="flex flex-col gap-4 p-5">
-          {/* Ad + fiyat */}
+          {/* name + price */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold leading-snug">{urun.name}</h2>
+              <h2 className="text-lg font-semibold leading-snug">{product.name}</h2>
 
-              {urun.is_featured ? (
+              {product.is_featured ? (
                 <span
                   className="mt-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
                   style={{ backgroundColor: 'var(--menu-surface)', color: 'var(--menu-muted)' }}
                 >
-                  ⭐ {metin('oneCikan', dil)}
+                  ⭐ {t('featured', language)}
                 </span>
               ) : null}
             </div>
 
             <div className="shrink-0 text-end">
               <div className="text-lg font-bold" style={{ color: 'var(--menu-primary)' }}>
-                {fiyatBicimle(urun.price, paraBirimi)}
+                {formatPrice(product.price, currency)}
               </div>
-              {indirimliMi ? (
+              {isDiscounted ? (
                 <div className="text-xs line-through" style={{ color: 'var(--menu-muted)' }}>
-                  {fiyatBicimle(urun.compare_price, paraBirimi)}
+                  {formatPrice(product.compare_price, currency)}
                 </div>
               ) : null}
             </div>
           </div>
 
-          {/* Açıklama */}
-          {urun.description ? (
+          {/* description */}
+          {product.description ? (
             <p className="text-sm leading-relaxed" style={{ color: 'var(--menu-muted)' }}>
-              {urun.description}
+              {product.description}
             </p>
           ) : null}
 
-          {/* İçindekiler */}
-          {urun.ingredients ? (
+          {/* ingredients */}
+          {product.ingredients ? (
             <div
               className="p-3"
               style={{
@@ -145,26 +145,26 @@ export default function UrunDetayModal({ urun, business, dil = 'tr', kapat }) {
               }}
             >
               <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide">
-                {metin('icindekiler', dil)}
+                {t('ingredients', language)}
               </h3>
               <p className="text-sm leading-relaxed" style={{ color: 'var(--menu-muted)' }}>
-                {urun.ingredients}
+                {product.ingredients}
               </p>
             </div>
           ) : null}
 
-          {/* Alerjenler */}
-          {alerjenler.length > 0 ? (
+          {/* allergens */}
+          {allergens.length > 0 ? (
             <div>
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide">
-                {metin('alerjenler', dil)}
+                {t('allergens', language)}
               </h3>
               <div className="flex flex-wrap gap-2">
-                {alerjenler.map((kod) => {
-                  const bilgi = alerjenBul(kod)
+                {allergens.map((code) => {
+                  const allergen = findAllergen(code)
                   return (
                     <span
-                      key={kod}
+                      key={code}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs"
                       style={{
                         backgroundColor: 'var(--menu-surface)',
@@ -173,8 +173,8 @@ export default function UrunDetayModal({ urun, business, dil = 'tr', kapat }) {
                         borderRadius: '999px',
                       }}
                     >
-                      <span aria-hidden="true">{bilgi?.emoji || '•'}</span>
-                      {alerjenEtiketi(kod, dil)}
+                      <span aria-hidden="true">{allergen?.emoji || '•'}</span>
+                      {allergenLabel(code, language)}
                     </span>
                   )
                 })}
@@ -182,18 +182,18 @@ export default function UrunDetayModal({ urun, business, dil = 'tr', kapat }) {
             </div>
           ) : null}
 
-          {/* Kapat */}
+          {/* close */}
           <button
             type="button"
-            onClick={() => kapat?.()}
+            onClick={() => onClose?.()}
             className="mt-1 w-full px-4 py-3 text-sm font-medium"
             style={{
               backgroundColor: 'var(--menu-primary)',
-              color: vurguMetni,
+              color: onAccentText,
               borderRadius: 'var(--menu-radius)',
             }}
           >
-            {metin('kapat', dil)}
+            {t('close', language)}
           </button>
         </div>
       </div>

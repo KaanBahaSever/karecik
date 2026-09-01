@@ -2,103 +2,101 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, Eye } from 'lucide-react'
 
 import api from '../../lib/api'
-import { paraSimgesi } from '../../lib/format'
-import { fontYukle } from '../../themes/fonts'
-import { dilBul } from '../../locales/index.js'
-import Yukleniyor from '../ui/Yukleniyor.jsx'
-import MenuIcerik from '../menu/MenuIcerik.jsx'
+import { currencySymbol } from '../../lib/format'
+import { loadFont } from '../../themes/fonts'
+import { findLanguage } from '../../locales/index.js'
+import Loading from '../ui/Loading.jsx'
+import MenuContent from '../menu/MenuContent.jsx'
 
 /**
- * Panelde yapılan değişikliklerin müşteri menüsünde nasıl göründüğünü
- * anında gösteren telefon önizlemesi.
+ * Phone-shaped preview that shows how dashboard changes look in the customer menu.
  *
- * Menü içeriği sunucudan (api.previewMenu) gelir; görünüm ayarları ise
- * prop olarak gelen — henüz kaydedilmemiş olabilecek — business nesnesinden
- * alınır. Böylece tema/font/renk seçimi kaydedilmeden önce de görünür.
+ * The menu content comes from the server (api.previewMenu), while the appearance
+ * settings come from the `business` prop — which may still be unsaved. That is
+ * what lets a theme, font or colour change show up before it is persisted.
  *
- * @param {object} business  - Taslak (kaydedilmemiş) işletme ayarları
- * @param {number} yenile    - Değeri değiştikçe menü yeniden çekilir
+ * @param {object} business - Draft (possibly unsaved) business settings
+ * @param {number} refresh  - Bump this value to refetch the menu
  * @param {string} className
  */
-export default function CanliOnizleme({ business, yenile = 0, className = '' }) {
-  const [dil, setDil] = useState(business?.default_language || 'tr')
+export default function LivePreview({ business, refresh = 0, className = '' }) {
+  const [language, setLanguage] = useState(business?.default_language || 'tr')
   const [menu, setMenu] = useState(null)
-  const [yukleniyor, setYukleniyor] = useState(true)
-  const [hata, setHata] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  const diller = Array.isArray(business?.languages) && business.languages.length
-    ? business.languages
-    : ['tr']
+  const languages =
+    Array.isArray(business?.languages) && business.languages.length ? business.languages : ['tr']
 
-  // Seçili dil, işletmenin dil listesinden çıkarıldıysa ilk dile dön.
+  // If the selected language is removed from the business, fall back to the first.
   useEffect(() => {
-    if (!diller.includes(dil)) setDil(diller[0])
-  }, [diller.join(','), dil]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!languages.includes(language)) setLanguage(languages[0])
+  }, [languages.join(','), language]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Seçilen yazı tipi anında yüklensin.
+  // Load the selected font right away.
   useEffect(() => {
-    if (business?.font_family) fontYukle(business.font_family)
+    if (business?.font_family) loadFont(business.font_family)
   }, [business?.font_family])
 
-  // Menü içeriğini çek.
+  // Fetch the menu content.
   useEffect(() => {
-    let iptal = false
+    let cancelled = false
 
-    async function menuyuGetir() {
-      setYukleniyor(true)
-      setHata('')
+    async function loadMenu() {
+      setLoading(true)
+      setError('')
       try {
-        const veri = await api.previewMenu(dil)
-        if (iptal) return
-        setMenu(veri)
+        const data = await api.previewMenu(language)
+        if (cancelled) return
+        setMenu(data)
       } catch (err) {
-        if (iptal) return
-        // Bildirim kullanmıyoruz: önizleme hatası gürültü yapmasın.
-        setHata(err.message || 'Önizleme yüklenemedi.')
+        if (cancelled) return
+        // No toast here: a preview failure should not be noisy.
+        setError(err.message || 'Önizleme yüklenemedi.')
       } finally {
-        if (!iptal) setYukleniyor(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
-    menuyuGetir()
+    loadMenu()
     return () => {
-      iptal = true
+      cancelled = true
     }
-  }, [yenile, dil])
+  }, [refresh, language])
 
-  // Sunucudan gelen menünün business alanını taslak ayarlarla birleştir.
-  const onizlemeMenu = menu
+  // Merge the draft settings over the business object returned by the server.
+  const previewMenu = menu
     ? {
         ...menu,
         business: {
           ...menu.business,
           ...(business || {}),
-          currency_symbol: paraSimgesi(business?.currency),
+          currency_symbol: currencySymbol(business?.currency),
         },
       }
     : null
 
   return (
     <div className={className}>
-      {/* Başlık satırı */}
+      {/* header row */}
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-          <Eye className="h-4 w-4 text-marka-600" aria-hidden="true" />
+          <Eye className="h-4 w-4 text-brand-600" aria-hidden="true" />
           <span>Canlı Önizleme</span>
         </div>
 
-        {diller.length > 1 ? (
+        {languages.length > 1 ? (
           <select
-            value={dil}
-            onChange={(olay) => setDil(olay.target.value)}
+            value={language}
+            onChange={(event) => setLanguage(event.target.value)}
             aria-label="Önizleme dili"
-            className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 outline-none focus:border-marka-600 focus:ring-2 focus:ring-marka-100"
+            className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
           >
-            {diller.map((kod) => {
-              const bilgi = dilBul(kod)
+            {languages.map((code) => {
+              const info = findLanguage(code)
               return (
-                <option key={kod} value={kod}>
-                  {bilgi.kisa} {bilgi.label}
+                <option key={code} value={code}>
+                  {info.short} {info.label}
                 </option>
               )
             })}
@@ -106,27 +104,32 @@ export default function CanliOnizleme({ business, yenile = 0, className = '' }) 
         ) : null}
       </div>
 
-      {/* Telefon çerçevesi */}
-      <div className="bg-gray-900 rounded-[2.25rem] p-2.5 shadow-panel">
+      {/* phone frame */}
+      <div className="rounded-[2.25rem] bg-gray-900 p-2.5 shadow-panel">
         <div className="relative h-[640px] overflow-hidden rounded-[1.75rem] bg-white">
-          {/* çentik */}
+          {/* notch */}
           <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-1.5 w-20 -translate-x-1/2 rounded-full bg-gray-900/15" />
 
-          <div className="kaydirma-gizli h-full overflow-y-auto overflow-x-hidden">
-            {yukleniyor ? (
-              <Yukleniyor metin="Önizleme hazırlanıyor..." />
-            ) : hata ? (
+          <div className="no-scrollbar h-full overflow-y-auto overflow-x-hidden">
+            {loading ? (
+              <Loading text="Önizleme hazırlanıyor..." />
+            ) : error ? (
               <div className="flex h-full items-center justify-center p-6">
                 <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-left">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
                   <div>
                     <p className="text-xs font-medium text-red-800">Önizleme yüklenemedi</p>
-                    <p className="mt-0.5 text-[11px] leading-snug text-red-700">{hata}</p>
+                    <p className="mt-0.5 text-[11px] leading-snug text-red-700">{error}</p>
                   </div>
                 </div>
               </div>
-            ) : onizlemeMenu ? (
-              <MenuIcerik menu={onizlemeMenu} dil={dil} dilDegisti={(yeni) => setDil(yeni)} gomulu />
+            ) : previewMenu ? (
+              <MenuContent
+                menu={previewMenu}
+                language={language}
+                onLanguageChange={(next) => setLanguage(next)}
+                embedded
+              />
             ) : null}
           </div>
         </div>

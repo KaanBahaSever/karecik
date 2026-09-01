@@ -16,14 +16,14 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
-import { PARA_BIRIMI_LISTESI, fiyatBicimle, tarihBicimle } from '../../lib/format'
-import { DILLER } from '../../locales/index.js'
-import Yukleniyor from '../../components/ui/Yukleniyor.jsx'
-import GorselYukleyici from '../../components/ui/GorselYukleyici.jsx'
-import { useBildirim } from '../../components/ui/Bildirim.jsx'
+import { CURRENCY_LIST, formatDate, formatPrice } from '../../lib/format'
+import { LANGUAGES } from '../../locales/index.js'
+import Loading from '../../components/ui/Loading.jsx'
+import ImageUploader from '../../components/ui/ImageUploader.jsx'
+import { useToast } from '../../components/ui/Toast.jsx'
 
-/* Bu sayfanın yönettiği işletme alanları */
-const AYAR_ALANLARI = [
+/* Business fields owned by this page */
+const SETTING_FIELDS = [
   'logo_url',
   'name',
   'slug',
@@ -40,14 +40,14 @@ const AYAR_ALANLARI = [
   'is_active',
 ]
 
-/* Boş bırakılabilen (boşsa null gönderilen) metin alanları */
-const BOSALTILABILIR = ['logo_url', 'phone', 'address', 'instagram', 'wifi_password']
+/* Text fields that may be cleared (sent as null when empty) */
+const NULLABLE_FIELDS = ['logo_url', 'phone', 'address', 'instagram', 'wifi_password']
 
-const VARSAYILAN_KDV_METNI = 'Fiyatlarımıza KDV dahildir.'
-const MENU_SON_EKI = '.karecik.com'
+const DEFAULT_VAT_NOTE = 'Fiyatlarımıza KDV dahildir.'
+const MENU_SUFFIX = '.karecik.com'
 
-/* Sistem tarafından ayrılmış menü adresleri (backend utils/slug.go ile aynı) */
-const AYRILMIS_ADRESLER = [
+/* Menu addresses reserved by the system (mirrors backend utils/slug.go) */
+const RESERVED_SLUGS = [
   'www',
   'api',
   'admin',
@@ -68,8 +68,8 @@ const AYRILMIS_ADRESLER = [
   'demo',
 ]
 
-/* Türkçe karakterlerin ASCII karşılıkları */
-const TURKCE_HARFLER = {
+/* ASCII equivalents of Turkish letters */
+const TURKISH_LETTERS = {
   ç: 'c',
   Ç: 'c',
   ğ: 'g',
@@ -92,12 +92,12 @@ const TURKCE_HARFLER = {
 }
 
 /**
- * Kullanıcı yazarken menü adresini temizler.
- * Sondaki tire, yazmaya devam edilebilsin diye korunur; kayıtta atılır.
+ * Cleans the menu address while the user types.
+ * A trailing dash is kept so typing can continue; it is dropped on save.
  */
-function slugTemizle(girdi) {
-  return String(girdi ?? '')
-    .replace(/[çÇğĞıIİöÖşŞüÜâÂîÎûÛ]/g, (harf) => TURKCE_HARFLER[harf] || harf)
+function cleanSlug(input) {
+  return String(input ?? '')
+    .replace(/[çÇğĞıIİöÖşŞüÜâÂîÎûÛ]/g, (letter) => TURKISH_LETTERS[letter] || letter)
     .replace(/&/g, '-ve-')
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
@@ -106,73 +106,73 @@ function slugTemizle(girdi) {
     .slice(0, 60)
 }
 
-/** Kaydedilecek nihai adres: baştaki ve sondaki tireler atılır. */
-function slugKesinlestir(girdi) {
-  return slugTemizle(girdi).replace(/-+$/, '')
+/** Final address to store: leading and trailing dashes removed. */
+function finalizeSlug(input) {
+  return cleanSlug(input).replace(/-+$/, '')
 }
 
-/** İşletme nesnesinden düzenlenebilir taslak üretir. */
-function taslakOlustur(isletme) {
-  const diller =
-    Array.isArray(isletme.languages) && isletme.languages.length > 0
-      ? [...isletme.languages]
+/** Builds an editable draft from a business object. */
+function buildDraft(business) {
+  const languages =
+    Array.isArray(business.languages) && business.languages.length > 0
+      ? [...business.languages]
       : ['tr']
 
   return {
-    logo_url: isletme.logo_url || null,
-    name: isletme.name || '',
-    slug: isletme.slug || '',
-    phone: isletme.phone || '',
-    address: isletme.address || '',
-    instagram: String(isletme.instagram || '').replace(/^@+/, ''),
-    wifi_password: isletme.wifi_password || '',
-    currency: isletme.currency || 'TRY',
-    languages: diller,
-    default_language: diller.includes(isletme.default_language)
-      ? isletme.default_language
-      : diller[0],
-    show_price_date: Boolean(isletme.show_price_date),
-    show_vat_note: Boolean(isletme.show_vat_note),
-    vat_note_text: isletme.vat_note_text || VARSAYILAN_KDV_METNI,
-    is_active: Boolean(isletme.is_active),
+    logo_url: business.logo_url || null,
+    name: business.name || '',
+    slug: business.slug || '',
+    phone: business.phone || '',
+    address: business.address || '',
+    instagram: String(business.instagram || '').replace(/^@+/, ''),
+    wifi_password: business.wifi_password || '',
+    currency: business.currency || 'TRY',
+    languages,
+    default_language: languages.includes(business.default_language)
+      ? business.default_language
+      : languages[0],
+    show_price_date: Boolean(business.show_price_date),
+    show_vat_note: Boolean(business.show_vat_note),
+    vat_note_text: business.vat_note_text || DEFAULT_VAT_NOTE,
+    is_active: Boolean(business.is_active),
   }
 }
 
-/** İki alan değerini karşılaştırır (dizilerde sıra önemsizdir). */
-function esitMi(a, b) {
+/** Compares two field values (array order is irrelevant). */
+function isEqual(a, b) {
   if (Array.isArray(a) || Array.isArray(b)) {
-    const birinci = (Array.isArray(a) ? a : []).slice().sort()
-    const ikinci = (Array.isArray(b) ? b : []).slice().sort()
-    return birinci.length === ikinci.length && birinci.every((deger, i) => deger === ikinci[i])
+    const first = (Array.isArray(a) ? a : []).slice().sort()
+    const second = (Array.isArray(b) ? b : []).slice().sort()
+    return first.length === second.length && first.every((value, i) => value === second[i])
   }
   if (typeof a === 'boolean' || typeof b === 'boolean') return Boolean(a) === Boolean(b)
   return String(a ?? '').trim() === String(b ?? '').trim()
 }
 
-/* ------------------------------------------------------- küçük bileşenler */
+/* ---------------------------------------------------------- small pieces */
 
-/** Aç/kapa anahtarı. */
-function Anahtar({ acik, degisti, etiket, aciklama }) {
+/** On/off switch. */
+function Switch({ checked, onChange, label, description }) {
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-gray-900">{etiket}</p>
-        {aciklama ? <p className="yardim">{aciklama}</p> : null}
+        <p className="text-sm font-medium text-gray-900">{label}</p>
+        {description ? <p className="help-text">{description}</p> : null}
       </div>
 
       <button
         type="button"
         role="switch"
-        aria-checked={acik}
-        aria-label={etiket}
-        onClick={() => degisti(!acik)}
-        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-marka-100 ${
-          acik ? 'bg-marka-600' : 'bg-gray-300'
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-100 ${
+          checked ? 'bg-brand-600' : 'bg-gray-300'
         }`}
       >
         <span
           className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-            acik ? 'translate-x-[22px]' : 'translate-x-0.5'
+            checked ? 'translate-x-[22px]' : 'translate-x-0.5'
           }`}
         />
       </button>
@@ -180,160 +180,162 @@ function Anahtar({ acik, degisti, etiket, aciklama }) {
   )
 }
 
-/** Kart bölümü başlığı. */
-function BolumBasligi({ ikon: Ikon, baslik, aciklama }) {
+/** Card section heading. */
+function SectionHeading({ icon: Icon, title, description }) {
   return (
     <div className="mb-4">
       <div className="flex items-center gap-2">
-        <Ikon className="h-4 w-4 text-marka-600" aria-hidden="true" />
-        <h2 className="text-base font-semibold text-gray-900">{baslik}</h2>
+        <Icon className="h-4 w-4 text-brand-600" aria-hidden="true" />
+        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
       </div>
-      {aciklama ? <p className="yardim">{aciklama}</p> : null}
+      {description ? <p className="help-text">{description}</p> : null}
     </div>
   )
 }
 
-/* ------------------------------------------------------------------ sayfa */
+/* -------------------------------------------------------------------- page */
 
-export default function Ayarlar() {
+export default function Settings() {
   const { business, saveBusiness } = useAuth()
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  const [taslak, setTaslak] = useState(null)
-  const [kaydediliyor, setKaydediliyor] = useState(false)
-  const [slugHatasi, setSlugHatasi] = useState('')
-  const [sifreGorunur, setSifreGorunur] = useState(false)
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [slugError, setSlugError] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
 
-  // Sunucudaki kayıtlı hâl (karşılaştırma için).
-  const kayitli = useMemo(() => (business ? taslakOlustur(business) : null), [business])
+  // The stored state on the server (used for comparison).
+  const stored = useMemo(() => (business ? buildDraft(business) : null), [business])
 
-  // İşletme değiştiğinde (ilk yükleme veya kayıt sonrası) taslağı tazele.
+  // Refresh the draft when the business changes (first load or after saving).
   useEffect(() => {
-    setTaslak(kayitli ? { ...kayitli } : null)
-    setSlugHatasi('')
-  }, [kayitli])
+    setDraft(stored ? { ...stored } : null)
+    setSlugError('')
+  }, [stored])
 
-  if (!business || !kayitli || !taslak) {
-    return <Yukleniyor metin="Ayarlar yükleniyor..." />
+  if (!business || !stored || !draft) {
+    return <Loading text="Ayarlar yükleniyor..." />
   }
 
-  /* ----------------------------------------------------------- yardımcılar */
+  /* --------------------------------------------------------------- helpers */
 
-  const guncelle = (alan, deger) => {
-    setTaslak((onceki) => ({ ...onceki, [alan]: deger }))
+  const update = (field, value) => {
+    setDraft((previous) => ({ ...previous, [field]: value }))
   }
 
-  const degisenAlanlar = AYAR_ALANLARI.filter((alan) => !esitMi(taslak[alan], kayitli[alan]))
-  const degisiklikVar = degisenAlanlar.length > 0
+  const changedFields = SETTING_FIELDS.filter((field) => !isEqual(draft[field], stored[field]))
+  const hasChanges = changedFields.length > 0
 
-  const sonSlug = slugKesinlestir(taslak.slug)
-  const gosterilecekSlug = sonSlug || 'menu-adresiniz'
-  const fiyatTarihi = tarihBicimle(business.price_updated_at) || tarihBicimle(new Date())
+  const finalSlug = finalizeSlug(draft.slug)
+  const displaySlug = finalSlug || 'menu-adresiniz'
+  const priceDate = formatDate(business.price_updated_at) || formatDate(new Date())
 
-  /** Dil çipine tıklandığında seçimi değiştirir. */
-  const diliDegistir = (kod) => {
-    const secili = taslak.languages.includes(kod)
+  /** Toggles a language when its chip is clicked. */
+  const toggleLanguage = (code) => {
+    const isSelected = draft.languages.includes(code)
 
-    if (secili && taslak.languages.length <= 1) {
-      bildirim.hata('En az bir menü dili seçili kalmalıdır.')
+    if (isSelected && draft.languages.length <= 1) {
+      toast.error('En az bir menü dili seçili kalmalıdır.')
       return
     }
 
-    const secilenler = secili
-      ? taslak.languages.filter((dil) => dil !== kod)
-      : [...taslak.languages, kod]
+    const selected = isSelected
+      ? draft.languages.filter((language) => language !== code)
+      : [...draft.languages, code]
 
-    // DILLER sırasına göre düzenli tut.
-    const yeniDiller = DILLER.filter((dil) => secilenler.includes(dil.code)).map((dil) => dil.code)
+    // Keep them ordered the same way as LANGUAGES.
+    const nextLanguages = LANGUAGES.filter((language) => selected.includes(language.code)).map(
+      (language) => language.code,
+    )
 
-    setTaslak((onceki) => ({
-      ...onceki,
-      languages: yeniDiller,
-      default_language: yeniDiller.includes(onceki.default_language)
-        ? onceki.default_language
-        : yeniDiller[0],
+    setDraft((previous) => ({
+      ...previous,
+      languages: nextLanguages,
+      default_language: nextLanguages.includes(previous.default_language)
+        ? previous.default_language
+        : nextLanguages[0],
     }))
   }
 
-  /** Yalnızca değişen alanları toplayıp kaydeder. */
-  const kaydet = async () => {
-    if (!degisiklikVar || kaydediliyor) return
+  /** Collects only the changed fields and saves them. */
+  const save = async () => {
+    if (!hasChanges || saving) return
 
-    setSlugHatasi('')
+    setSlugError('')
 
-    const ad = taslak.name.trim()
-    if (ad.length < 2 || ad.length > 100) {
-      bildirim.hata('İşletme adı 2 ile 100 karakter arasında olmalıdır.')
+    const name = draft.name.trim()
+    if (name.length < 2 || name.length > 100) {
+      toast.error('İşletme adı 2 ile 100 karakter arasında olmalıdır.')
       return
     }
-    if (sonSlug.length < 2) {
-      setSlugHatasi(
+    if (finalSlug.length < 2) {
+      setSlugError(
         'Menü adresi en az 2 karakter olmalı ve yalnızca harf, rakam ve tire içerebilir.',
       )
       return
     }
-    if (AYRILMIS_ADRESLER.includes(sonSlug)) {
-      setSlugHatasi('Bu menü adresi sistem tarafından ayrılmıştır. Lütfen başka bir adres deneyin.')
+    if (RESERVED_SLUGS.includes(finalSlug)) {
+      setSlugError('Bu menü adresi sistem tarafından ayrılmıştır. Lütfen başka bir adres deneyin.')
       return
     }
-    if (taslak.languages.length === 0) {
-      bildirim.hata('En az bir menü dili seçmelisiniz.')
+    if (draft.languages.length === 0) {
+      toast.error('En az bir menü dili seçmelisiniz.')
       return
     }
-    if (taslak.vat_note_text.trim().length > 200) {
-      bildirim.hata('KDV ibaresi en fazla 200 karakter olabilir.')
+    if (draft.vat_note_text.trim().length > 200) {
+      toast.error('KDV ibaresi en fazla 200 karakter olabilir.')
       return
     }
 
-    const govde = {}
-    degisenAlanlar.forEach((alan) => {
-      if (alan === 'slug') {
-        govde.slug = sonSlug
+    const body = {}
+    changedFields.forEach((field) => {
+      if (field === 'slug') {
+        body.slug = finalSlug
         return
       }
-      if (alan === 'name') {
-        govde.name = ad
+      if (field === 'name') {
+        body.name = name
         return
       }
-      if (alan === 'vat_note_text') {
-        govde.vat_note_text = taslak.vat_note_text.trim()
+      if (field === 'vat_note_text') {
+        body.vat_note_text = draft.vat_note_text.trim()
         return
       }
-      if (BOSALTILABILIR.includes(alan)) {
-        const deger = String(taslak[alan] ?? '').trim()
-        govde[alan] = deger === '' ? null : deger
+      if (NULLABLE_FIELDS.includes(field)) {
+        const value = String(draft[field] ?? '').trim()
+        body[field] = value === '' ? null : value
         return
       }
-      govde[alan] = taslak[alan]
+      body[field] = draft[field]
     })
 
-    // Yalnızca sondaki tire temizlendiyse gönderilecek bir şey kalmayabilir.
-    if (govde.slug === kayitli.slug) delete govde.slug
-    if (Object.keys(govde).length === 0) {
-      setTaslak((onceki) => ({ ...onceki, slug: sonSlug }))
+    // If only a trailing dash was trimmed there may be nothing left to send.
+    if (body.slug === stored.slug) delete body.slug
+    if (Object.keys(body).length === 0) {
+      setDraft((previous) => ({ ...previous, slug: finalSlug }))
       return
     }
 
-    setKaydediliyor(true)
+    setSaving(true)
     try {
-      await saveBusiness(govde)
-      bildirim.basari('Ayarlar kaydedildi.')
-    } catch (hata) {
-      if (hata.status === 409) {
-        setSlugHatasi(hata.message)
+      await saveBusiness(body)
+      toast.success('Ayarlar kaydedildi.')
+    } catch (error) {
+      if (error.status === 409) {
+        setSlugError(error.message)
       } else {
-        bildirim.hata(hata.message)
+        toast.error(error.message)
       }
     } finally {
-      setKaydediliyor(false)
+      setSaving(false)
     }
   }
 
-  /* --------------------------------------------------------------- görünüm */
+  /* ---------------------------------------------------------------- render */
 
   return (
     <div className="mx-auto max-w-3xl pb-10">
-      {/* Yapışkan başlık çubuğu */}
+      {/* Sticky heading bar */}
       <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-6 border-b border-gray-200 bg-gray-50 px-4 pb-4 pt-4 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
@@ -345,120 +347,120 @@ export default function Ayarlar() {
 
           <button
             type="button"
-            className="btn-birincil shrink-0"
-            onClick={kaydet}
-            disabled={!degisiklikVar || kaydediliyor}
+            className="btn-primary shrink-0"
+            onClick={save}
+            disabled={!hasChanges || saving}
           >
             <Save className="h-4 w-4" aria-hidden="true" />
-            {kaydediliyor ? 'Kaydediliyor...' : 'Kaydet'}
+            {saving ? 'Kaydediliyor...' : 'Kaydet'}
           </button>
         </div>
       </div>
 
       <div className="space-y-6">
-        {/* ------------------------------------------- 1. İşletme Bilgileri */}
-        <section className="kart p-5">
-          <BolumBasligi ikon={Store} baslik="İşletme Bilgileri" />
+        {/* ------------------------------------------- 1. Business details */}
+        <section className="card p-5">
+          <SectionHeading icon={Store} title="İşletme Bilgileri" />
 
           <div className="space-y-5">
-            <GorselYukleyici
-              deger={taslak.logo_url}
-              degisti={(url) => guncelle('logo_url', url)}
-              etiket="Logo"
-              ipucu="Kare veya yuvarlak logo önerilir · en fazla 5 MB"
-              yuvarlak
+            <ImageUploader
+              value={draft.logo_url}
+              onChange={(url) => update('logo_url', url)}
+              label="Logo"
+              hint="Kare veya yuvarlak logo önerilir · en fazla 5 MB"
+              round
             />
 
             <div>
-              <label className="etiket" htmlFor="isletme-adi">
+              <label className="label" htmlFor="business-name">
                 İşletme Adı
               </label>
               <input
-                id="isletme-adi"
+                id="business-name"
                 type="text"
-                className="girdi"
-                value={taslak.name}
+                className="input"
+                value={draft.name}
                 maxLength={100}
                 placeholder="Kahve Durağı"
-                onChange={(olay) => guncelle('name', olay.target.value)}
+                onChange={(event) => update('name', event.target.value)}
               />
-              <p className="yardim">2 ile 100 karakter arasında olmalıdır.</p>
+              <p className="help-text">2 ile 100 karakter arasında olmalıdır.</p>
             </div>
 
             <div>
-              <label className="etiket" htmlFor="menu-adresi">
+              <label className="label" htmlFor="menu-slug">
                 Menü Adresi (subdomain)
               </label>
               <div className="flex">
                 <input
-                  id="menu-adresi"
+                  id="menu-slug"
                   type="text"
-                  className="girdi rounded-r-none"
-                  value={taslak.slug}
+                  className="input rounded-r-none"
+                  value={draft.slug}
                   placeholder="kahve-duragi"
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(olay) => {
-                    setSlugHatasi('')
-                    guncelle('slug', slugTemizle(olay.target.value))
+                  onChange={(event) => {
+                    setSlugError('')
+                    update('slug', cleanSlug(event.target.value))
                   }}
                 />
                 <span className="inline-flex shrink-0 items-center rounded-r-lg border border-l-0 border-gray-300 bg-gray-100 px-3 text-sm text-gray-500">
-                  {MENU_SON_EKI}
+                  {MENU_SUFFIX}
                 </span>
               </div>
 
-              {slugHatasi ? <p className="hata-metni">{slugHatasi}</p> : null}
+              {slugError ? <p className="error-text">{slugError}</p> : null}
 
-              <p className="yardim">
+              <p className="help-text">
                 Menünüz şu adresten açılacak:{' '}
                 <b className="text-gray-700">
-                  {gosterilecekSlug}
-                  {MENU_SON_EKI}
+                  {displaySlug}
+                  {MENU_SUFFIX}
                 </b>
               </p>
-              <p className="yardim">
+              <p className="help-text">
                 Adresi değiştirirseniz eski QR kodlarınız çalışmaya devam ETMEZ. Değişiklikten sonra
                 QR kodunuzu yeniden indirin.
               </p>
             </div>
 
             <div>
-              <label className="etiket" htmlFor="telefon">
+              <label className="label" htmlFor="business-phone">
                 <span className="inline-flex items-center gap-1.5">
                   <Phone className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />
                   Telefon
                 </span>
               </label>
               <input
-                id="telefon"
+                id="business-phone"
                 type="tel"
-                className="girdi"
-                value={taslak.phone}
+                className="input"
+                value={draft.phone}
                 placeholder="+90 555 000 00 00"
-                onChange={(olay) => guncelle('phone', olay.target.value)}
+                onChange={(event) => update('phone', event.target.value)}
               />
             </div>
 
             <div>
-              <label className="etiket" htmlFor="adres">
+              <label className="label" htmlFor="business-address">
                 <span className="inline-flex items-center gap-1.5">
                   <MapPin className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />
                   Adres
                 </span>
               </label>
               <textarea
-                id="adres"
+                id="business-address"
                 rows={3}
-                className="girdi resize-y"
-                value={taslak.address}
+                className="input resize-y"
+                value={draft.address}
                 placeholder="Caferağa Mah. Moda Cad. No: 12, Kadıköy / İstanbul"
-                onChange={(olay) => guncelle('address', olay.target.value)}
+                onChange={(event) => update('address', event.target.value)}
               />
             </div>
 
             <div>
-              <label className="etiket" htmlFor="instagram">
+              <label className="label" htmlFor="business-instagram">
                 <span className="inline-flex items-center gap-1.5">
                   <Instagram className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />
                   Instagram kullanıcı adı
@@ -469,21 +471,23 @@ export default function Ayarlar() {
                   @
                 </span>
                 <input
-                  id="instagram"
+                  id="business-instagram"
                   type="text"
-                  className="girdi rounded-l-none"
-                  value={taslak.instagram}
+                  className="input rounded-l-none"
+                  value={draft.instagram}
                   placeholder="kahveduragi"
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(olay) => guncelle('instagram', olay.target.value.replace(/[@\s]/g, ''))}
+                  onChange={(event) =>
+                    update('instagram', event.target.value.replace(/[@\s]/g, ''))
+                  }
                 />
               </div>
-              <p className="yardim">Menünün altında Instagram bağlantısı olarak görünür.</p>
+              <p className="help-text">Menünün altında Instagram bağlantısı olarak görünür.</p>
             </div>
 
             <div>
-              <label className="etiket" htmlFor="wifi-sifresi">
+              <label className="label" htmlFor="business-wifi">
                 <span className="inline-flex items-center gap-1.5">
                   <Wifi className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />
                   Wi-Fi şifresi
@@ -491,59 +495,61 @@ export default function Ayarlar() {
               </label>
               <div className="relative">
                 <input
-                  id="wifi-sifresi"
-                  type={sifreGorunur ? 'text' : 'password'}
-                  className="girdi pr-11"
-                  value={taslak.wifi_password}
+                  id="business-wifi"
+                  type={passwordVisible ? 'text' : 'password'}
+                  className="input pr-11"
+                  value={draft.wifi_password}
                   placeholder="kahve2026"
                   autoComplete="off"
-                  onChange={(olay) => guncelle('wifi_password', olay.target.value)}
+                  onChange={(event) => update('wifi_password', event.target.value)}
                 />
                 <button
                   type="button"
-                  onClick={() => setSifreGorunur((onceki) => !onceki)}
+                  onClick={() => setPasswordVisible((previous) => !previous)}
                   className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-gray-400 hover:text-gray-600"
-                  aria-label={sifreGorunur ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                  aria-label={passwordVisible ? 'Şifreyi gizle' : 'Şifreyi göster'}
                 >
-                  {sifreGorunur ? (
+                  {passwordVisible ? (
                     <EyeOff className="h-4 w-4" aria-hidden="true" />
                   ) : (
                     <Eye className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
-              <p className="yardim">Bu şifre menüde müşterilerinize gösterilir.</p>
+              <p className="help-text">Bu şifre menüde müşterilerinize gösterilir.</p>
             </div>
           </div>
         </section>
 
-        {/* ------------------------------------------------- 2. Para Birimi */}
-        <section className="kart p-5">
-          <BolumBasligi
-            ikon={Globe}
-            baslik="Para Birimi"
-            aciklama="Menüdeki tüm fiyatlar bu para birimiyle gösterilir."
+        {/* ---------------------------------------------------- 2. Currency */}
+        <section className="card p-5">
+          <SectionHeading
+            icon={Globe}
+            title="Para Birimi"
+            description="Menüdeki tüm fiyatlar bu para birimiyle gösterilir."
           />
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {PARA_BIRIMI_LISTESI.map((birim) => {
-              const secili = taslak.currency === birim.code
+            {CURRENCY_LIST.map((currency) => {
+              const isSelected = draft.currency === currency.code
               return (
                 <button
-                  key={birim.code}
+                  key={currency.code}
                   type="button"
-                  onClick={() => guncelle('currency', birim.code)}
-                  aria-pressed={secili}
-                  className={`rounded-xl border p-3 text-center hover:border-marka-400 ${
-                    secili ? 'border-marka-600 ring-2 ring-marka-600' : 'border-gray-200'
+                  onClick={() => update('currency', currency.code)}
+                  aria-pressed={isSelected}
+                  className={`rounded-xl border p-3 text-center hover:border-brand-400 ${
+                    isSelected ? 'border-brand-600 ring-2 ring-brand-600' : 'border-gray-200'
                   }`}
                 >
                   <span className="block text-2xl leading-none text-gray-900" aria-hidden="true">
-                    {birim.symbol}
+                    {currency.symbol}
                   </span>
-                  <span className="mt-2 block text-sm font-medium text-gray-900">{birim.code}</span>
+                  <span className="mt-2 block text-sm font-medium text-gray-900">
+                    {currency.code}
+                  </span>
                   <span className="mt-0.5 block text-xs leading-snug text-gray-500">
-                    {birim.label}
+                    {currency.label}
                   </span>
                 </button>
               )
@@ -552,78 +558,80 @@ export default function Ayarlar() {
 
           <p className="mt-4 rounded-lg bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
             Fiyatlar şöyle görünecek:{' '}
-            <b className="text-gray-900">{fiyatBicimle(145, taslak.currency)}</b>
+            <b className="text-gray-900">{formatPrice(145, draft.currency)}</b>
           </p>
         </section>
 
-        {/* ------------------------------------------------ 3. Menü Dilleri */}
-        <section className="kart p-5">
-          <BolumBasligi ikon={Languages} baslik="Menü Dilleri" />
+        {/* ----------------------------------------------- 3. Menu languages */}
+        <section className="card p-5">
+          <SectionHeading icon={Languages} title="Menü Dilleri" />
 
           <div className="flex flex-wrap gap-2">
-            {DILLER.map((dil) => {
-              const secili = taslak.languages.includes(dil.code)
+            {LANGUAGES.map((language) => {
+              const isSelected = draft.languages.includes(language.code)
               return (
                 <button
-                  key={dil.code}
+                  key={language.code}
                   type="button"
-                  onClick={() => diliDegistir(dil.code)}
-                  aria-pressed={secili}
+                  onClick={() => toggleLanguage(language.code)}
+                  aria-pressed={isSelected}
                   className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
-                    secili
-                      ? 'border-marka-600 bg-marka-50 font-medium text-marka-700'
+                    isSelected
+                      ? 'border-brand-600 bg-brand-50 font-medium text-brand-700'
                       : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
-                  <span aria-hidden="true">{dil.kisa}</span>
-                  {dil.label}
+                  <span aria-hidden="true">{language.short}</span>
+                  {language.label}
                 </button>
               )
             })}
           </div>
 
           <div className="mt-5 max-w-xs">
-            <label className="etiket" htmlFor="varsayilan-dil">
+            <label className="label" htmlFor="default-language">
               Varsayılan dil
             </label>
             <select
-              id="varsayilan-dil"
-              className="girdi"
-              value={taslak.default_language}
-              onChange={(olay) => guncelle('default_language', olay.target.value)}
+              id="default-language"
+              className="input"
+              value={draft.default_language}
+              onChange={(event) => update('default_language', event.target.value)}
             >
-              {DILLER.filter((dil) => taslak.languages.includes(dil.code)).map((dil) => (
-                <option key={dil.code} value={dil.code}>
-                  {dil.kisa} {dil.label}
-                </option>
-              ))}
+              {LANGUAGES.filter((language) => draft.languages.includes(language.code)).map(
+                (language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.short} {language.label}
+                  </option>
+                ),
+              )}
             </select>
           </div>
 
-          <p className="yardim mt-3">
+          <p className="help-text mt-3">
             Birden fazla dil seçerseniz ürün eklerken her dil için ayrı ad ve açıklama
             girebilirsiniz. Müşteriler menüde dil değiştirebilir.
           </p>
         </section>
 
-        {/* ---------------------------- 4. Menü Altı Bilgiler (Yasal İbareler) */}
-        <section className="kart p-5">
-          <BolumBasligi ikon={Percent} baslik="Menü Altı Bilgiler (Yasal İbareler)" />
+        {/* ------------------------------------- 4. Footer / legal notices */}
+        <section className="card p-5">
+          <SectionHeading icon={Percent} title="Menü Altı Bilgiler (Yasal İbareler)" />
 
           <div className="space-y-5">
             <div>
-              <Anahtar
-                acik={taslak.show_price_date}
-                degisti={(deger) => guncelle('show_price_date', deger)}
-                etiket="Fiyat geçerlilik tarihini göster"
+              <Switch
+                checked={draft.show_price_date}
+                onChange={(value) => update('show_price_date', value)}
+                label="Fiyat geçerlilik tarihini göster"
               />
 
               <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
-                Fiyatlarımız <b className="text-gray-900">{fiyatTarihi}</b> tarihinden itibaren
+                Fiyatlarımız <b className="text-gray-900">{priceDate}</b> tarihinden itibaren
                 geçerlidir.
               </p>
 
-              <p className="yardim flex items-start gap-1.5">
+              <p className="help-text flex items-start gap-1.5">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
                 <span>
                   Bu tarih, toplu fiyat güncellemesi yaptığınızda otomatik olarak yenilenir.
@@ -632,44 +640,44 @@ export default function Ayarlar() {
             </div>
 
             <div className="border-t border-gray-100 pt-5">
-              <Anahtar
-                acik={taslak.show_vat_note}
-                degisti={(deger) => guncelle('show_vat_note', deger)}
-                etiket="KDV ibaresini göster"
+              <Switch
+                checked={draft.show_vat_note}
+                onChange={(value) => update('show_vat_note', value)}
+                label="KDV ibaresini göster"
               />
 
               <div className="mt-3">
-                <label className="etiket" htmlFor="kdv-metni">
+                <label className="label" htmlFor="vat-note">
                   KDV ibaresi metni
                 </label>
                 <input
-                  id="kdv-metni"
+                  id="vat-note"
                   type="text"
-                  className="girdi"
-                  value={taslak.vat_note_text}
+                  className="input"
+                  value={draft.vat_note_text}
                   maxLength={200}
-                  placeholder={VARSAYILAN_KDV_METNI}
-                  disabled={!taslak.show_vat_note}
-                  onChange={(olay) => guncelle('vat_note_text', olay.target.value)}
+                  placeholder={DEFAULT_VAT_NOTE}
+                  disabled={!draft.show_vat_note}
+                  onChange={(event) => update('vat_note_text', event.target.value)}
                 />
-                <p className="yardim">{taslak.vat_note_text.length} / 200 karakter</p>
+                <p className="help-text">{draft.vat_note_text.length} / 200 karakter</p>
               </div>
             </div>
           </div>
         </section>
 
-        {/* ------------------------------------------------- 5. Menü Durumu */}
-        <section className="kart p-5">
-          <BolumBasligi ikon={Eye} baslik="Menü Durumu" />
+        {/* ------------------------------------------------- 5. Menu status */}
+        <section className="card p-5">
+          <SectionHeading icon={Eye} title="Menü Durumu" />
 
-          <Anahtar
-            acik={taslak.is_active}
-            degisti={(deger) => guncelle('is_active', deger)}
-            etiket="Menü yayında"
-            aciklama="Kapattığınızda menüyü panelden düzenlemeye devam edebilirsiniz, müşteriler göremez."
+          <Switch
+            checked={draft.is_active}
+            onChange={(value) => update('is_active', value)}
+            label="Menü yayında"
+            description="Kapattığınızda menüyü panelden düzenlemeye devam edebilirsiniz, müşteriler göremez."
           />
 
-          {!taslak.is_active ? (
+          {!draft.is_active ? (
             <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
               <p className="text-sm text-amber-800">

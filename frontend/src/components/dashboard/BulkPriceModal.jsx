@@ -2,157 +2,157 @@ import { useEffect, useState } from 'react'
 import { ArrowRight, Info, Loader2, Percent } from 'lucide-react'
 
 import api from '../../lib/api'
-import { fiyatBicimle } from '../../lib/format'
+import { formatPrice } from '../../lib/format'
 import Modal from '../ui/Modal.jsx'
-import { useBildirim } from '../ui/Bildirim.jsx'
+import { useToast } from '../ui/Toast.jsx'
 
-/** Backend'deki utils/pricing.go sabitleriyle birebir aynı olmalı. */
-const YUVARLAMA_SECENEKLERI = [
-  { deger: 'none', etiket: 'Yuvarlama yok' },
-  { deger: 'integer', etiket: 'Tam sayıya (148)' },
-  { deger: 'nearest_5', etiket: "5'in katına (150)" },
-  { deger: 'nearest_10', etiket: "10'un katına (150)" },
-  { deger: 'ends_50', etiket: "0,50'nin katına (147,50)" },
-  { deger: 'ends_95', etiket: '…,95 ile bitir (147,95)' },
-  { deger: 'ends_99', etiket: '…,99 ile bitir (147,99)' },
+/** Must match the constants in backend/internal/utils/pricing.go exactly. */
+const ROUNDING_OPTIONS = [
+  { value: 'none', label: 'Yuvarlama yok' },
+  { value: 'integer', label: 'Tam sayıya (148)' },
+  { value: 'nearest_5', label: "5'in katına (150)" },
+  { value: 'nearest_10', label: "10'un katına (150)" },
+  { value: 'ends_50', label: "0,50'nin katına (147,50)" },
+  { value: 'ends_95', label: '…,95 ile bitir (147,95)' },
+  { value: 'ends_99', label: '…,99 ile bitir (147,99)' },
 ]
 
-const ZAM_KISAYOLLARI = [5, 10, 15, 20]
-const INDIRIM_KISAYOLLARI = [-5, -10]
+const INCREASE_SHORTCUTS = [5, 10, 15, 20]
+const DISCOUNT_SHORTCUTS = [-5, -10]
 
-const EN_FAZLA_SATIR = 50
+const MAX_PREVIEW_ROWS = 50
 
-/** Kategori adını çevirilerden çıkarır. */
-function kategoriAdi(kategori) {
-  const ceviriler = kategori?.translations || {}
-  return ceviriler.tr?.name || Object.values(ceviriler)[0]?.name || 'Adsız kategori'
+/** Extracts a category name from its translations. */
+function categoryName(category) {
+  const translations = category?.translations || {}
+  return translations.tr?.name || Object.values(translations)[0]?.name || 'Adsız kategori'
 }
 
 /**
- * Toplu fiyat güncelleme modalı (zam / indirim + yuvarlama).
+ * Bulk price update dialog (increase / discount plus rounding).
  *
- * @param {boolean}  acik
- * @param {Function} kapat
- * @param {Array}    kategoriler
- * @param {string}   paraBirimi
- * @param {Function} uygulandi   - güncelleme sonrası listeyi tazelemek için
+ * @param {boolean}  open
+ * @param {Function} onClose
+ * @param {Array}    categories
+ * @param {string}   currency
+ * @param {Function} onApplied - lets the caller refresh its list afterwards
  */
-export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, uygulandi }) {
-  const bildirim = useBildirim()
-  const kategoriListesi = Array.isArray(kategoriler) ? kategoriler : []
+export default function BulkPriceModal({ open, onClose, categories, currency, onApplied }) {
+  const toast = useToast()
+  const categoryList = Array.isArray(categories) ? categories : []
 
-  const [yuzde, setYuzde] = useState('')
-  const [yuvarlama, setYuvarlama] = useState('none')
-  const [tumUrunler, setTumUrunler] = useState(true)
-  const [seciliKategoriler, setSeciliKategoriler] = useState([])
-  const [onizleme, setOnizleme] = useState(null)
-  const [islemde, setIslemde] = useState(false)
-  const [islemTuru, setIslemTuru] = useState(null) // 'onizleme' | 'uygula'
-  const [hata, setHata] = useState('')
+  const [percentage, setPercentage] = useState('')
+  const [rounding, setRounding] = useState('none')
+  const [allProducts, setAllProducts] = useState(true)
+  const [selectedCategories, setSelectedCategories] = useState([])
+  const [preview, setPreview] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [busyAction, setBusyAction] = useState(null) // 'preview' | 'apply'
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!acik) return
-    setYuzde('')
-    setYuvarlama('none')
-    setTumUrunler(true)
-    setSeciliKategoriler([])
-    setOnizleme(null)
-    setIslemde(false)
-    setIslemTuru(null)
-    setHata('')
-  }, [acik])
+    if (!open) return
+    setPercentage('')
+    setRounding('none')
+    setAllProducts(true)
+    setSelectedCategories([])
+    setPreview(null)
+    setBusy(false)
+    setBusyAction(null)
+    setError('')
+  }, [open])
 
-  const yuzdeSayi = Number(String(yuzde).replace(',', '.'))
-  const yuzdeGecerli = String(yuzde).trim() !== '' && Number.isFinite(yuzdeSayi)
+  const percentageValue = Number(String(percentage).replace(',', '.'))
+  const percentageValid = String(percentage).trim() !== '' && Number.isFinite(percentageValue)
 
-  function kategoriDegistir(id) {
-    setOnizleme(null)
-    setSeciliKategoriler((oncekiler) =>
-      oncekiler.includes(id) ? oncekiler.filter((k) => k !== id) : [...oncekiler, id],
+  function toggleCategory(id) {
+    setPreview(null)
+    setSelectedCategories((previous) =>
+      previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id],
     )
   }
 
-  function istekGovdesi(uygula) {
+  function requestBody(apply) {
     return {
-      percentage: yuzdeSayi,
-      rounding: yuvarlama,
-      category_ids: tumUrunler ? [] : seciliKategoriler,
-      apply: uygula,
+      percentage: percentageValue,
+      rounding,
+      category_ids: allProducts ? [] : selectedCategories,
+      apply,
     }
   }
 
-  function dogrula() {
-    if (!yuzdeGecerli) {
-      setHata('Bir yüzde değeri girin.')
+  function validate() {
+    if (!percentageValid) {
+      setError('Bir yüzde değeri girin.')
       return false
     }
-    if (yuzdeSayi < -90 || yuzdeSayi > 1000) {
-      setHata('Yüzde değeri -90 ile 1000 arasında olmalıdır.')
+    if (percentageValue < -90 || percentageValue > 1000) {
+      setError('Yüzde değeri -90 ile 1000 arasında olmalıdır.')
       return false
     }
-    setHata('')
+    setError('')
     return true
   }
 
-  async function onizle() {
-    if (!dogrula()) return
+  async function runPreview() {
+    if (!validate()) return
 
-    setIslemde(true)
-    setIslemTuru('onizleme')
+    setBusy(true)
+    setBusyAction('preview')
     try {
-      const sonuc = await api.bulkPrice(istekGovdesi(false))
-      setOnizleme(sonuc)
-      if (!sonuc?.affected) {
-        bildirim.bilgi('Bu ayarlarla değişecek bir fiyat bulunamadı.')
+      const result = await api.bulkPrice(requestBody(false))
+      setPreview(result)
+      if (!result?.affected) {
+        toast.info('Bu ayarlarla değişecek bir fiyat bulunamadı.')
       }
     } catch (err) {
-      bildirim.hata(err.message)
+      toast.error(err.message)
     } finally {
-      setIslemde(false)
-      setIslemTuru(null)
+      setBusy(false)
+      setBusyAction(null)
     }
   }
 
-  async function uygula() {
-    if (!dogrula()) return
+  async function apply() {
+    if (!validate()) return
 
-    setIslemde(true)
-    setIslemTuru('uygula')
+    setBusy(true)
+    setBusyAction('apply')
     try {
-      const sonuc = await api.bulkPrice(istekGovdesi(true))
-      bildirim.basari(`${sonuc?.affected ?? 0} ürünün fiyatı güncellendi.`)
-      uygulandi?.()
-      kapat?.()
+      const result = await api.bulkPrice(requestBody(true))
+      toast.success(`${result?.affected ?? 0} ürünün fiyatı güncellendi.`)
+      onApplied?.()
+      onClose?.()
     } catch (err) {
-      bildirim.hata(err.message)
+      toast.error(err.message)
     } finally {
-      setIslemde(false)
-      setIslemTuru(null)
+      setBusy(false)
+      setBusyAction(null)
     }
   }
 
-  const satirlar = Array.isArray(onizleme?.preview) ? onizleme.preview : []
-  const gosterilenler = satirlar.slice(0, EN_FAZLA_SATIR)
-  const kalan = satirlar.length - gosterilenler.length
+  const rows = Array.isArray(preview?.preview) ? preview.preview : []
+  const visibleRows = rows.slice(0, MAX_PREVIEW_ROWS)
+  const remaining = rows.length - visibleRows.length
 
   return (
     <Modal
-      acik={acik}
-      kapat={islemde ? () => {} : kapat}
-      baslik="Toplu Fiyat Güncelleme"
-      aciklama="Tüm menüye ya da seçtiğiniz kategorilere tek seferde zam veya indirim uygulayın."
-      genislik="max-w-2xl"
-      altBilgi={
+      open={open}
+      onClose={busy ? () => {} : onClose}
+      title="Toplu Fiyat Güncelleme"
+      description="Tüm menüye ya da seçtiğiniz kategorilere tek seferde zam veya indirim uygulayın."
+      width="max-w-2xl"
+      footer={
         <>
-          <button type="button" className="btn-ikincil" onClick={kapat} disabled={islemde}>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
             İptal
           </button>
-          <button type="button" className="btn-ikincil" onClick={onizle} disabled={islemde}>
-            {islemTuru === 'onizleme' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          <button type="button" className="btn-secondary" onClick={runPreview} disabled={busy}>
+            {busyAction === 'preview' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Önizle
           </button>
-          <button type="button" className="btn-birincil" onClick={uygula} disabled={islemde}>
-            {islemTuru === 'uygula' ? (
+          <button type="button" className="btn-primary" onClick={apply} disabled={busy}>
+            {busyAction === 'apply' ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" /> Uygulanıyor
               </>
@@ -164,34 +164,34 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
       }
     >
       <div className="space-y-5">
-        {/* ------------------------------------------------------ canlı özet */}
-        {yuzdeGecerli && yuzdeSayi !== 0 ? (
-          <div className="rounded-lg border border-marka-200 bg-marka-50 px-4 py-3 text-sm font-medium text-marka-700">
-            {yuzdeSayi > 0
-              ? `Tüm fiyatlara %${Math.abs(yuzdeSayi)} zam uygulanacak.`
-              : `Tüm fiyatlara %${Math.abs(yuzdeSayi)} indirim uygulanacak.`}
+        {/* ------------------------------------------------------ live summary */}
+        {percentageValid && percentageValue !== 0 ? (
+          <div className="rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm font-medium text-brand-700">
+            {percentageValue > 0
+              ? `Tüm fiyatlara %${Math.abs(percentageValue)} zam uygulanacak.`
+              : `Tüm fiyatlara %${Math.abs(percentageValue)} indirim uygulanacak.`}
           </div>
         ) : null}
 
-        {/* ------------------------------------------------------------ yüzde */}
+        {/* -------------------------------------------------------- percentage */}
         <div>
-          <label className="etiket" htmlFor="toplu-yuzde">
+          <label className="label" htmlFor="bulk-percentage">
             Değişim yüzdesi <span className="text-red-500">*</span>
           </label>
           <div className="relative">
             <input
-              id="toplu-yuzde"
+              id="bulk-percentage"
               type="number"
               inputMode="decimal"
               min={-90}
               max={1000}
               step="0.1"
-              className="girdi pr-9"
-              value={yuzde}
-              onChange={(olay) => {
-                setYuzde(olay.target.value)
-                setOnizleme(null)
-                setHata('')
+              className="input pr-9"
+              value={percentage}
+              onChange={(event) => {
+                setPercentage(event.target.value)
+                setPreview(null)
+                setError('')
               }}
               placeholder="Örn. 10"
             />
@@ -199,93 +199,95 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
               <Percent className="h-4 w-4" aria-hidden="true" />
             </span>
           </div>
-          {hata ? (
-            <p className="hata-metni">{hata}</p>
+          {error ? (
+            <p className="error-text">{error}</p>
           ) : (
-            <p className="yardim">-90 ile 1000 arasında bir değer girin. Eksi değer indirimdir.</p>
+            <p className="help-text">-90 ile 1000 arasında bir değer girin. Eksi değer indirimdir.</p>
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-gray-500">Zam:</span>
-            {ZAM_KISAYOLLARI.map((deger) => (
+            {INCREASE_SHORTCUTS.map((value) => (
               <button
-                key={`zam-${deger}`}
+                key={`increase-${value}`}
                 type="button"
-                disabled={islemde}
+                disabled={busy}
                 onClick={() => {
-                  setYuzde(String(deger))
-                  setOnizleme(null)
-                  setHata('')
+                  setPercentage(String(value))
+                  setPreview(null)
+                  setError('')
                 }}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                  yuzdeGecerli && yuzdeSayi === deger
-                    ? 'border-marka-600 bg-marka-50 text-marka-700'
+                  percentageValid && percentageValue === value
+                    ? 'border-brand-600 bg-brand-50 text-brand-700'
                     : 'border-gray-300 text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                +{deger}
+                +{value}
               </button>
             ))}
 
             <span className="ml-2 text-xs font-medium text-gray-500">İndirim:</span>
-            {INDIRIM_KISAYOLLARI.map((deger) => (
+            {DISCOUNT_SHORTCUTS.map((value) => (
               <button
-                key={`indirim-${deger}`}
+                key={`discount-${value}`}
                 type="button"
-                disabled={islemde}
+                disabled={busy}
                 onClick={() => {
-                  setYuzde(String(deger))
-                  setOnizleme(null)
-                  setHata('')
+                  setPercentage(String(value))
+                  setPreview(null)
+                  setError('')
                 }}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                  yuzdeGecerli && yuzdeSayi === deger
-                    ? 'border-marka-600 bg-marka-50 text-marka-700'
+                  percentageValid && percentageValue === value
+                    ? 'border-brand-600 bg-brand-50 text-brand-700'
                     : 'border-gray-300 text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                {deger}
+                {value}
               </button>
             ))}
           </div>
         </div>
 
-        {/* -------------------------------------------------------- yuvarlama */}
+        {/* ---------------------------------------------------------- rounding */}
         <div>
-          <label className="etiket" htmlFor="toplu-yuvarlama">
+          <label className="label" htmlFor="bulk-rounding">
             Fiyat yuvarlama
           </label>
           <select
-            id="toplu-yuvarlama"
-            className="girdi"
-            value={yuvarlama}
-            onChange={(olay) => {
-              setYuvarlama(olay.target.value)
-              setOnizleme(null)
+            id="bulk-rounding"
+            className="input"
+            value={rounding}
+            onChange={(event) => {
+              setRounding(event.target.value)
+              setPreview(null)
             }}
           >
-            {YUVARLAMA_SECENEKLERI.map((secenek) => (
-              <option key={secenek.deger} value={secenek.deger}>
-                {secenek.etiket}
+            {ROUNDING_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
-          <p className="yardim">Zam/indirim hesaplandıktan sonra fiyatlar bu kurala göre yuvarlanır.</p>
+          <p className="help-text">
+            Zam/indirim hesaplandıktan sonra fiyatlar bu kurala göre yuvarlanır.
+          </p>
         </div>
 
-        {/* -------------------------------------------------------- kapsam */}
+        {/* ------------------------------------------------------------- scope */}
         <div>
-          <span className="etiket">Kapsam</span>
+          <span className="label">Kapsam</span>
           <div className="space-y-2">
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5">
               <input
                 type="radio"
-                name="toplu-kapsam"
-                className="h-4 w-4 border-gray-300 text-marka-600 focus:ring-marka-500"
-                checked={tumUrunler}
+                name="bulk-scope"
+                className="h-4 w-4 border-gray-300 text-brand-600 focus:ring-brand-500"
+                checked={allProducts}
                 onChange={() => {
-                  setTumUrunler(true)
-                  setOnizleme(null)
+                  setAllProducts(true)
+                  setPreview(null)
                 }}
               />
               <span className="text-sm font-medium text-gray-700">Tüm ürünler</span>
@@ -294,41 +296,41 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5">
               <input
                 type="radio"
-                name="toplu-kapsam"
-                className="h-4 w-4 border-gray-300 text-marka-600 focus:ring-marka-500"
-                checked={!tumUrunler}
+                name="bulk-scope"
+                className="h-4 w-4 border-gray-300 text-brand-600 focus:ring-brand-500"
+                checked={!allProducts}
                 onChange={() => {
-                  setTumUrunler(false)
-                  setOnizleme(null)
+                  setAllProducts(false)
+                  setPreview(null)
                 }}
               />
               <span className="text-sm font-medium text-gray-700">Belirli kategoriler</span>
             </label>
           </div>
 
-          {!tumUrunler ? (
+          {!allProducts ? (
             <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg border border-gray-200 p-2">
-              {kategoriListesi.length === 0 ? (
+              {categoryList.length === 0 ? (
                 <p className="px-1 py-2 text-sm text-gray-500">Henüz kategori yok.</p>
               ) : (
-                kategoriListesi.map((kategori) => (
+                categoryList.map((category) => (
                   <label
-                    key={kategori.id}
+                    key={category.id}
                     className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50"
                   >
                     <input
                       type="checkbox"
-                      className="h-4 w-4 shrink-0 rounded border-gray-300 text-marka-600 focus:ring-marka-500"
-                      checked={seciliKategoriler.includes(kategori.id)}
-                      onChange={() => kategoriDegistir(kategori.id)}
+                      className="h-4 w-4 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                      checked={selectedCategories.includes(category.id)}
+                      onChange={() => toggleCategory(category.id)}
                     />
                     <span className="min-w-0 flex-1 truncate text-sm text-gray-700">
-                      {kategori.icon ? `${kategori.icon} ` : ''}
-                      {kategoriAdi(kategori)}
+                      {category.icon ? `${category.icon} ` : ''}
+                      {categoryName(category)}
                     </span>
-                    {typeof kategori.product_count === 'number' ? (
+                    {typeof category.product_count === 'number' ? (
                       <span className="shrink-0 text-xs text-gray-400">
-                        {kategori.product_count} ürün
+                        {category.product_count} ürün
                       </span>
                     ) : null}
                   </label>
@@ -341,7 +343,7 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
           ) : null}
         </div>
 
-        {/* ---------------------------------------------------------- bilgi */}
+        {/* ---------------------------------------------------------- notice */}
         <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
           <p className="text-sm leading-snug text-blue-800">
@@ -350,17 +352,17 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
           </p>
         </div>
 
-        {/* ------------------------------------------------------- önizleme */}
-        {onizleme ? (
+        {/* --------------------------------------------------------- preview */}
+        {preview ? (
           <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-sm font-medium text-gray-700">
-                {onizleme.affected ?? 0} üründe fiyat değişecek.
+                {preview.affected ?? 0} üründe fiyat değişecek.
               </p>
-              <span className="text-xs text-gray-400">{satirlar.length} ürün tarandı</span>
+              <span className="text-xs text-gray-400">{rows.length} ürün tarandı</span>
             </div>
 
-            {satirlar.length === 0 ? (
+            {rows.length === 0 ? (
               <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
                 Bu kapsamda güncellenecek ürün bulunamadı.
               </p>
@@ -376,18 +378,18 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {gosterilenler.map((satir) => (
-                        <tr key={satir.id}>
+                      {visibleRows.map((row) => (
+                        <tr key={row.id}>
                           <td className="max-w-[220px] truncate px-3 py-2 text-gray-700">
-                            {satir.name}
+                            {row.name}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2 text-right text-gray-500">
-                            {fiyatBicimle(satir.old_price, paraBirimi)}
+                            {formatPrice(row.old_price, currency)}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-marka-600">
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-brand-600">
                             <span className="inline-flex items-center justify-end gap-1">
                               <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-                              {fiyatBicimle(satir.new_price, paraBirimi)}
+                              {formatPrice(row.new_price, currency)}
                             </span>
                           </td>
                         </tr>
@@ -396,9 +398,9 @@ export default function TopluFiyatModal({ acik, kapat, kategoriler, paraBirimi, 
                   </table>
                 </div>
 
-                {kalan > 0 ? (
+                {remaining > 0 ? (
                   <p className="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                    ve {kalan} ürün daha
+                    ve {remaining} ürün daha
                   </p>
                 ) : null}
               </div>

@@ -10,11 +10,12 @@ import (
 	"karecik/backend/internal/utils"
 )
 
-// BuildPublicMenu, musteri tarafindaki menu govdesini hazirlar.
-// Ceviriler istenen dile cozulur; translations sozlugu disari sizmaz.
+// BuildPublicMenu assembles the customer-facing menu payload.
+// Translations are resolved into the requested language, so the translations
+// map itself never leaves the server.
 //
-// includeInactive = false  -> yalnizca yayindaki kategori/urunler (gercek menu)
-// includeInactive = true   -> pasif kayitlar da doner (panel canli onizlemesi)
+// includeInactive = false -> only published categories/products (the real menu)
+// includeInactive = true  -> inactive records are included too (dashboard preview)
 func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	lang string, includeInactive bool) (*models.PublicMenu, error) {
 
@@ -33,80 +34,82 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	categoryQuery += ` ORDER BY position ASC, created_at ASC`
 	productQuery += ` ORDER BY position ASC, created_at ASC`
 
-	// --- kategoriler
-	catRows, err := db.Query(ctx, categoryQuery, business.ID)
+	// --- categories
+	categoryRows, err := db.Query(ctx, categoryQuery, business.ID)
 	if err != nil {
-		return nil, fmt.Errorf("kategoriler okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the categories: %w", err)
 	}
 
 	categories := make([]models.PublicCategory, 0)
 	indexByID := make(map[uuid.UUID]int)
 
-	for catRows.Next() {
-		var c models.Category
-		if err := catRows.Scan(&c.ID, &c.BusinessID, &c.Translations, &c.Icon, &c.ImageURL,
-			&c.Position, &c.IsActive, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			catRows.Close()
+	for categoryRows.Next() {
+		var category models.Category
+		if err := categoryRows.Scan(&category.ID, &category.BusinessID, &category.Translations,
+			&category.Icon, &category.ImageURL, &category.Position, &category.IsActive,
+			&category.CreatedAt, &category.UpdatedAt); err != nil {
+			categoryRows.Close()
 			return nil, err
 		}
-		if c.Translations == nil {
-			c.Translations = models.Translations{}
+		if category.Translations == nil {
+			category.Translations = models.Translations{}
 		}
-		tr := c.Translations.Resolve(lang, fallback)
+		translation := category.Translations.Resolve(lang, fallback)
 
-		indexByID[c.ID] = len(categories)
+		indexByID[category.ID] = len(categories)
 		categories = append(categories, models.PublicCategory{
-			ID:          c.ID,
-			Name:        tr.Name,
-			Description: tr.Description,
-			Icon:        c.Icon,
-			ImageURL:    c.ImageURL,
-			IsActive:    c.IsActive,
+			ID:          category.ID,
+			Name:        translation.Name,
+			Description: translation.Description,
+			Icon:        category.Icon,
+			ImageURL:    category.ImageURL,
+			IsActive:    category.IsActive,
 			Products:    make([]models.PublicProduct, 0),
 		})
 	}
-	catRows.Close()
-	if err := catRows.Err(); err != nil {
+	categoryRows.Close()
+	if err := categoryRows.Err(); err != nil {
 		return nil, err
 	}
 
-	// --- urunler
-	prodRows, err := db.Query(ctx, productQuery, business.ID)
+	// --- products
+	productRows, err := db.Query(ctx, productQuery, business.ID)
 	if err != nil {
-		return nil, fmt.Errorf("urunler okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the products: %w", err)
 	}
 
-	for prodRows.Next() {
-		var p models.Product
-		if err := prodRows.Scan(&p.ID, &p.BusinessID, &p.CategoryID, &p.Translations, &p.Price,
-			&p.ComparePrice, &p.ImageURL, &p.Allergens, &p.IsActive, &p.IsFeatured,
-			&p.Position, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			prodRows.Close()
+	for productRows.Next() {
+		var product models.Product
+		if err := productRows.Scan(&product.ID, &product.BusinessID, &product.CategoryID,
+			&product.Translations, &product.Price, &product.ComparePrice, &product.ImageURL,
+			&product.Allergens, &product.IsActive, &product.IsFeatured, &product.Position,
+			&product.CreatedAt, &product.UpdatedAt); err != nil {
+			productRows.Close()
 			return nil, err
 		}
-		normalizeProduct(&p)
+		normalizeProduct(&product)
 
-		idx, ok := indexByID[p.CategoryID]
+		index, ok := indexByID[product.CategoryID]
 		if !ok {
-			continue // kategorisi pasif olan urun menude gorunmez
+			continue // a product whose category is inactive never shows up
 		}
-		tr := p.Translations.Resolve(lang, fallback)
+		translation := product.Translations.Resolve(lang, fallback)
 
-		categories[idx].Products = append(categories[idx].Products, models.PublicProduct{
-			ID:           p.ID,
-			Name:         tr.Name,
-			Description:  tr.Description,
-			Ingredients:  tr.Ingredients,
-			Price:        utils.Round2(p.Price),
-			ComparePrice: p.ComparePrice,
-			ImageURL:     p.ImageURL,
-			Allergens:    p.Allergens,
-			IsFeatured:   p.IsFeatured,
-			IsActive:     p.IsActive,
+		categories[index].Products = append(categories[index].Products, models.PublicProduct{
+			ID:           product.ID,
+			Name:         translation.Name,
+			Description:  translation.Description,
+			Ingredients:  translation.Ingredients,
+			Price:        utils.Round2(product.Price),
+			ComparePrice: product.ComparePrice,
+			ImageURL:     product.ImageURL,
+			Allergens:    product.Allergens,
+			IsFeatured:   product.IsFeatured,
+			IsActive:     product.IsActive,
 		})
 	}
-	prodRows.Close()
-	if err := prodRows.Err(); err != nil {
+	productRows.Close()
+	if err := productRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -117,59 +120,61 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	}, nil
 }
 
-// resolveLanguage, istenen dili dogrular; desteklenmiyorsa varsayilana duser.
-func resolveLanguage(b *models.Business, lang string) string {
+// resolveLanguage validates the requested language, falling back to the default.
+func resolveLanguage(business *models.Business, lang string) string {
 	if lang == "" {
-		return b.DefaultLanguage
+		return business.DefaultLanguage
 	}
-	for _, l := range b.Languages {
-		if l == lang {
+	for _, supported := range business.Languages {
+		if supported == lang {
 			return lang
 		}
 	}
-	return b.DefaultLanguage
+	return business.DefaultLanguage
 }
 
-func toPublicBusiness(b *models.Business) models.PublicBusiness {
+func toPublicBusiness(business *models.Business) models.PublicBusiness {
 	return models.PublicBusiness{
-		Name:            b.Name,
-		Slug:            b.Slug,
-		LogoURL:         b.LogoURL,
-		CoverURL:        b.CoverURL,
-		Currency:        b.Currency,
-		CurrencySymbol:  utils.CurrencySymbol(b.Currency),
-		Theme:           b.Theme,
-		FontFamily:      b.FontFamily,
-		PrimaryColor:    b.PrimaryColor,
-		DefaultLanguage: b.DefaultLanguage,
-		Languages:       b.Languages,
-		SplashEnabled:   b.SplashEnabled,
-		SplashDuration:  b.SplashDuration,
-		SplashBgColor:   b.SplashBgColor,
-		SplashText:      b.SplashText,
-		ShowVatNote:     b.ShowVatNote,
-		VatNoteText:     b.VatNoteText,
-		ShowPriceDate:   b.ShowPriceDate,
-		PriceUpdatedAt:  b.PriceUpdatedAt,
-		Phone:           b.Phone,
-		Address:         b.Address,
-		Instagram:       b.Instagram,
-		WifiPassword:    b.WifiPassword,
+		Name:            business.Name,
+		Slug:            business.Slug,
+		LogoURL:         business.LogoURL,
+		CoverURL:        business.CoverURL,
+		Currency:        business.Currency,
+		CurrencySymbol:  utils.CurrencySymbol(business.Currency),
+		Theme:           business.Theme,
+		FontFamily:      business.FontFamily,
+		PrimaryColor:    business.PrimaryColor,
+		DefaultLanguage: business.DefaultLanguage,
+		Languages:       business.Languages,
+		SplashEnabled:   business.SplashEnabled,
+		SplashDuration:  business.SplashDuration,
+		SplashBgColor:   business.SplashBgColor,
+		SplashText:      business.SplashText,
+		ShowVatNote:     business.ShowVatNote,
+		VatNoteText:     business.VatNoteText,
+		ShowPriceDate:   business.ShowPriceDate,
+		PriceUpdatedAt:  business.PriceUpdatedAt,
+		Phone:           business.Phone,
+		Address:         business.Address,
+		Instagram:       business.Instagram,
+		WifiPassword:    business.WifiPassword,
 	}
 }
 
-// buildFooter, menunun altindaki yasal ibareleri sistem tarafindan uretir.
-// Fiyat tarihi her toplu guncellemede otomatik tazelenir.
-func buildFooter(b *models.Business) models.PublicFooter {
+// buildFooter produces the legal notices at the bottom of the menu.
+// The price date refreshes automatically after every bulk price update.
+//
+// NOTE: the wording is customer-facing and therefore Turkish on purpose.
+func buildFooter(business *models.Business) models.PublicFooter {
 	footer := models.PublicFooter{PoweredBy: "Karecik ile hazırlandı"}
 
-	if b.ShowPriceDate {
+	if business.ShowPriceDate {
 		footer.PriceNote = fmt.Sprintf(
 			"Fiyatlarımız %s tarihinden itibaren geçerlidir.",
-			b.PriceUpdatedAt.Local().Format("02.01.2006"))
+			business.PriceUpdatedAt.Local().Format("02.01.2006"))
 	}
-	if b.ShowVatNote {
-		footer.VatNote = b.VatNoteText
+	if business.ShowVatNote {
+		footer.VatNote = business.VatNoteText
 	}
 	return footer
 }

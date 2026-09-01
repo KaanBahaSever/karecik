@@ -4,17 +4,17 @@ import { BrowserRouter } from 'react-router-dom'
 
 import App from './App.jsx'
 import { AuthProvider } from './lib/auth.jsx'
-import { BildirimSaglayici } from './components/ui/Bildirim.jsx'
+import { ToastProvider } from './components/ui/Toast.jsx'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
-      <BildirimSaglayici>
+      <ToastProvider>
         <AuthProvider>
           <App />
         </AuthProvider>
-      </BildirimSaglayici>
+      </ToastProvider>
     </BrowserRouter>
   </React.StrictMode>,
 )

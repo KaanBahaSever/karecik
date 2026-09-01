@@ -3,18 +3,18 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 
 import { useAuth } from '../lib/auth.jsx'
-import { useBildirim } from '../components/ui/Bildirim.jsx'
-import Yukleniyor from '../components/ui/Yukleniyor.jsx'
+import { useToast } from '../components/ui/Toast.jsx'
+import Loading from '../components/ui/Loading.jsx'
 
-/* Geliştirme sırasında hızlı giriş için hazır hesap bilgileri */
-const DEMO_EPOSTA = 'demo@karecik.com'
-const DEMO_SIFRE = 'demo1234'
+/* Seeded account, handy for signing in quickly during development */
+const DEMO_EMAIL = 'demo@karecik.com'
+const DEMO_PASSWORD = 'demo1234'
 
-/** Karecik markası: küçük QR benzeri işaret + kalın yazı. */
-function KarecikLogosu() {
+/** Karecik brand lockup: small QR-like mark plus the wordmark. */
+function BrandLogo() {
   return (
     <Link to="/" className="inline-flex items-center gap-2.5">
-      <svg viewBox="0 0 32 32" className="h-9 w-9 text-marka-600" aria-hidden="true">
+      <svg viewBox="0 0 32 32" className="h-9 w-9 text-brand-600" aria-hidden="true">
         <rect className="fill-current" width="32" height="32" rx="8" />
         <g fill="#ffffff">
           <path d="M7 7h7v7H7V7zm2 2v3h3V9H9z" />
@@ -31,107 +31,107 @@ function KarecikLogosu() {
   )
 }
 
-export default function Giris() {
-  const { isAuthenticated, loading: oturumYukleniyor, login } = useAuth()
+export default function Login() {
+  const { isAuthenticated, loading: sessionLoading, login } = useAuth()
   const navigate = useNavigate()
-  const bildirim = useBildirim()
+  const toast = useToast()
 
-  const [eposta, setEposta] = useState('')
-  const [sifre, setSifre] = useState('')
-  const [sifreGorunsun, setSifreGorunsun] = useState(false)
-  const [gonderiliyor, setGonderiliyor] = useState(false)
-  const [hata, setHata] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
-  async function gonder(olay) {
-    olay.preventDefault()
-    if (gonderiliyor) return
+  async function onSubmit(event) {
+    event.preventDefault()
+    if (submitting) return
 
-    const temizEposta = eposta.trim()
-    if (!temizEposta || !sifre) {
-      setHata('Lütfen e-posta ve şifrenizi girin.')
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail || !password) {
+      setError('Lütfen e-posta ve şifrenizi girin.')
       return
     }
 
-    setHata('')
-    setGonderiliyor(true)
+    setError('')
+    setSubmitting(true)
     try {
-      await login(temizEposta, sifre)
-      bildirim.basari('Hoş geldiniz!')
+      await login(trimmedEmail, password)
+      toast.success('Hoş geldiniz!')
       navigate('/panel', { replace: true })
     } catch (err) {
-      setHata(err.message)
-      bildirim.hata(err.message)
-      setGonderiliyor(false)
+      setError(err.message)
+      toast.error(err.message)
+      setSubmitting(false)
     }
   }
 
-  /** Demo hesabın bilgilerini forma yazar. */
-  function demoyuDoldur() {
-    setEposta(DEMO_EPOSTA)
-    setSifre(DEMO_SIFRE)
-    setHata('')
+  /** Fills the form with the demo account credentials. */
+  function fillDemo() {
+    setEmail(DEMO_EMAIL)
+    setPassword(DEMO_PASSWORD)
+    setError('')
   }
 
-  // Oturum doğrulanırken formu göstermeyelim, boşuna yanıp sönmesin.
-  if (oturumYukleniyor) return <Yukleniyor tamEkran metin="Oturum kontrol ediliyor..." />
+  // Hide the form while the session is being verified, to avoid a flash.
+  if (sessionLoading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   if (isAuthenticated) return <Navigate to="/panel" replace />
 
   return (
     <div className="min-h-screen bg-white px-4 py-12 sm:py-16">
       <div className="mx-auto w-full max-w-md">
         <div className="mb-8 text-center">
-          <KarecikLogosu />
+          <BrandLogo />
         </div>
 
         <div className="rounded-2xl border border-gray-200 p-6 sm:p-8">
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">Tekrar hoş geldiniz</h1>
           <p className="mt-1.5 text-sm text-gray-500">Menünüzü yönetmek için giriş yapın.</p>
 
-          {hata ? (
+          {error ? (
             <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {hata}
+              {error}
             </div>
           ) : null}
 
-          <form onSubmit={gonder} className="mt-6 space-y-4" noValidate>
+          <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
             <div>
-              <label htmlFor="eposta" className="etiket">
+              <label htmlFor="login-email" className="label">
                 E-posta
               </label>
               <input
-                id="eposta"
+                id="login-email"
                 type="email"
-                className="girdi"
+                className="input"
                 placeholder="ornek@isletmeniz.com"
                 autoComplete="email"
-                value={eposta}
-                onChange={(olay) => setEposta(olay.target.value)}
-                disabled={gonderiliyor}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                disabled={submitting}
               />
             </div>
 
             <div>
-              <label htmlFor="sifre" className="etiket">
+              <label htmlFor="login-password" className="label">
                 Şifre
               </label>
               <div className="relative">
                 <input
-                  id="sifre"
-                  type={sifreGorunsun ? 'text' : 'password'}
-                  className="girdi pr-11"
+                  id="login-password"
+                  type={passwordVisible ? 'text' : 'password'}
+                  className="input pr-11"
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  value={sifre}
-                  onChange={(olay) => setSifre(olay.target.value)}
-                  disabled={gonderiliyor}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  disabled={submitting}
                 />
                 <button
                   type="button"
-                  onClick={() => setSifreGorunsun((onceki) => !onceki)}
+                  onClick={() => setPasswordVisible((previous) => !previous)}
                   className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-gray-400 hover:text-gray-600"
-                  aria-label={sifreGorunsun ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                  aria-label={passwordVisible ? 'Şifreyi gizle' : 'Şifreyi göster'}
                 >
-                  {sifreGorunsun ? (
+                  {passwordVisible ? (
                     <EyeOff className="h-4 w-4" aria-hidden="true" />
                   ) : (
                     <Eye className="h-4 w-4" aria-hidden="true" />
@@ -140,14 +140,14 @@ export default function Giris() {
               </div>
             </div>
 
-            <button type="submit" className="btn-birincil w-full" disabled={gonderiliyor}>
-              {gonderiliyor ? 'Giriş yapılıyor...' : 'Giriş yap'}
+            <button type="submit" className="btn-primary w-full" disabled={submitting}>
+              {submitting ? 'Giriş yapılıyor...' : 'Giriş yap'}
             </button>
           </form>
 
           <p className="mt-6 text-center text-sm text-gray-600">
             Hesabınız yok mu?{' '}
-            <Link to="/kayit" className="font-medium text-marka-600 hover:text-marka-700">
+            <Link to="/kayit" className="font-medium text-brand-600 hover:text-brand-700">
               Ücretsiz oluşturun
             </Link>
           </p>
@@ -156,14 +156,14 @@ export default function Giris() {
         <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500">
           <div className="flex items-center justify-between gap-3">
             <span>
-              Demo hesap: <span className="font-medium text-gray-700">{DEMO_EPOSTA}</span> /{' '}
-              <span className="font-medium text-gray-700">{DEMO_SIFRE}</span>
+              Demo hesap: <span className="font-medium text-gray-700">{DEMO_EMAIL}</span> /{' '}
+              <span className="font-medium text-gray-700">{DEMO_PASSWORD}</span>
             </span>
             <button
               type="button"
-              onClick={demoyuDoldur}
-              className="btn-ikincil btn-kucuk shrink-0"
-              disabled={gonderiliyor}
+              onClick={fillDemo}
+              className="btn-secondary btn-sm shrink-0"
+              disabled={submitting}
             >
               Doldur
             </button>

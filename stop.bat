@@ -1,45 +1,45 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
-title Karecik - Durduruluyor
+title Karecik - Stopping
 
-REM Windows komutlarini tam yolla cagiriyoruz: Git Bash gibi ortamlar
-REM ayni isimde farkli komutlar tasiyabiliyor.
+REM Windows commands are called by their full path: environments such as
+REM Git Bash may shadow them with different tools of the same name.
 set "NETSTAT=%SystemRoot%\System32\netstat.exe"
-set "BUL=%SystemRoot%\System32\findstr.exe"
-set "OLDUR=%SystemRoot%\System32\taskkill.exe"
-set "BEKLE=%SystemRoot%\System32\ping.exe -n 4 127.0.0.1"
+set "FIND=%SystemRoot%\System32\findstr.exe"
+set "KILL=%SystemRoot%\System32\taskkill.exe"
+set "WAIT=%SystemRoot%\System32\ping.exe -n 4 127.0.0.1"
 
 echo.
-echo  Karecik sunuculari durduruluyor...
+echo  Stopping the Karecik servers...
 echo.
 
-set /a BULUNAN=0
+set /a FOUND=0
 
-REM Backend (8080) ve frontend (5173) portlarini tutan surecleri kapat.
-REM Porta gore kapatiyoruz: diger node/go uygulamalarina dokunmaz.
+REM Kill whatever holds the backend (8080) and frontend (5173) ports.
+REM Matching by port leaves other node/go applications untouched.
 for %%P in (8080 5173) do (
-    for /f "tokens=5" %%I in ('%NETSTAT% -ano ^| %BUL% ":%%P " ^| %BUL% "LISTENING"') do (
-        %OLDUR% /F /PID %%I >nul 2>&1
+    for /f "tokens=5" %%I in ('%NETSTAT% -ano ^| %FIND% ":%%P " ^| %FIND% "LISTENING"') do (
+        %KILL% /F /PID %%I >nul 2>&1
         if not errorlevel 1 (
-            echo  [+] Port %%P kapatildi ^(PID %%I^)
-            set /a BULUNAN+=1
+            echo  [+] Port %%P closed ^(PID %%I^)
+            set /a FOUND+=1
         )
     )
 )
 
-REM Acilan komut pencerelerini de kapat
-%OLDUR% /F /FI "WINDOWTITLE eq Karecik Backend*" >nul 2>&1
-%OLDUR% /F /FI "WINDOWTITLE eq Karecik Frontend*" >nul 2>&1
+REM Close the command windows that were opened as well
+%KILL% /F /FI "WINDOWTITLE eq Karecik Backend*" >nul 2>&1
+%KILL% /F /FI "WINDOWTITLE eq Karecik Frontend*" >nul 2>&1
 
 echo.
-if !BULUNAN! equ 0 (
-    echo  Zaten calisan bir Karecik sunucusu yoktu.
+if !FOUND! equ 0 (
+    echo  No Karecik server was running.
 ) else (
-    echo  Durduruldu.
+    echo  Stopped.
 )
 echo.
-echo  Not: PostgreSQL servisi calismaya devam eder ^(Windows servisi^).
+echo  Note: the PostgreSQL service keeps running ^(it is a Windows service^).
 echo.
-%BEKLE% >nul
+%WAIT% >nul
 exit /b 0

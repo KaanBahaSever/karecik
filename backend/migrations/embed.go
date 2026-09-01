@@ -1,6 +1,5 @@
-// Package migrations, .sql dosyalarini derlenmis ikili dosyanin icine gomer.
-// Boylece "go run ./cmd/api" komutu hangi klasorden calistirilirsa calistirilsin
-// migration dosyalari her zaman bulunur.
+// Package migrations embeds the .sql files into the compiled binary, so that
+// "go run ./cmd/api" finds them no matter which directory it is started from.
 package migrations
 
 import "embed"

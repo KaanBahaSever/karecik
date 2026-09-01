@@ -3,12 +3,12 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------------------
-   Karecik ortak stilleri
+   Karecik shared styles
 
-   NOT: Landing page'de bilinçli olarak hiçbir animasyon/geçiş yoktur.
-   Aşağıdaki ortak sınıflar da transition içermez; hareket gereken tek yer
-   müşteri menüsündeki (opsiyonel) karşılama ekranıdır ve o stil
-   src/components/menu içinde ayrı tutulur.
+   NOTE: the landing page is deliberately free of animation. The shared classes
+   below contain no transitions either; the only place motion is allowed is the
+   optional splash screen of the customer menu, whose styles live separately in
+   src/components/menu.
 --------------------------------------------------------------------------- */
 
 @layer base {
@@ -21,7 +21,7 @@
     font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   }
 
-  /* Sayı girdilerindeki artır/azalt oklarını gizle */
+  /* Hide the spin buttons on number inputs */
   input[type='number']::-webkit-outer-spin-button,
   input[type='number']::-webkit-inner-spin-button {
     -webkit-appearance: none;
@@ -38,66 +38,66 @@
            text-sm font-medium leading-none disabled:cursor-not-allowed disabled:opacity-50;
   }
 
-  .btn-birincil {
-    @apply btn bg-marka-600 text-white hover:bg-marka-700;
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700;
   }
 
-  .btn-ikincil {
+  .btn-secondary {
     @apply btn border border-gray-300 bg-white text-gray-700 hover:bg-gray-50;
   }
 
-  .btn-sessiz {
+  .btn-ghost {
     @apply btn text-gray-600 hover:bg-gray-100;
   }
 
-  .btn-tehlike {
+  .btn-danger {
     @apply btn border border-red-200 bg-white text-red-600 hover:bg-red-50;
   }
 
-  .btn-kucuk {
+  .btn-sm {
     @apply px-3 py-1.5 text-xs;
   }
 
-  .girdi {
+  .input {
     @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm
            text-gray-900 placeholder-gray-400 outline-none
-           focus:border-marka-600 focus:ring-2 focus:ring-marka-100
+           focus:border-brand-600 focus:ring-2 focus:ring-brand-100
            disabled:bg-gray-50 disabled:text-gray-500;
   }
 
-  .etiket {
+  .label {
     @apply mb-1.5 block text-sm font-medium text-gray-700;
   }
 
-  .yardim {
+  .help-text {
     @apply mt-1 text-xs text-gray-500;
   }
 
-  .hata-metni {
+  .error-text {
     @apply mt-1 text-xs text-red-600;
   }
 
-  .kart {
-    @apply rounded-xl border border-gray-200 bg-white shadow-kart;
+  .card {
+    @apply rounded-xl border border-gray-200 bg-white shadow-card;
   }
 
-  .rozet {
+  .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium;
   }
 }
 
 @layer utilities {
-  /* Sürükle-bırak sırasında metin seçimini engelle */
-  .surukleniyor {
+  /* Prevent text selection while dragging */
+  .dragging {
     @apply select-none;
   }
 
-  /* Yatay kaydırmalı kategori şeridi için kaydırma çubuğunu gizle */
-  .kaydirma-gizli {
+  /* Hide the scrollbar on horizontally scrolling category strips */
+  .no-scrollbar {
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
-  .kaydirma-gizli::-webkit-scrollbar {
+  .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
 }

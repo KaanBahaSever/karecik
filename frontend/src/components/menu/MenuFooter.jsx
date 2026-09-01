@@ -1,72 +1,72 @@
 import { Instagram, MapPin, Phone, Wifi } from 'lucide-react'
 
-import { metin } from '../../locales/index.js'
+import { t } from '../../locales/index.js'
 
 /**
- * Müşteri menüsünün altı.
+ * Footer of the customer menu.
  *
- * İki farklı kapsamda çalışır:
+ * It renders in two scopes:
  *
- *   kapsam="anasayfa"  Kategori kartlarının olduğu giriş ekranı.
- *                      Yalnızca "Karecik ile hazırlandı" satırı görünür;
- *                      adres/wifi/sosyal medya ve yasal ibareler gösterilmez.
+ *   scope="home"      The landing view with the category cards. Only the
+ *                     "Karecik ile hazırlandı" line is shown; contact details
+ *                     and the legal notices are omitted.
  *
- *   kapsam="urunler"   Ürünlerin listelendiği/arandığı ekranlar.
- *                      İletişim bilgileri ve sistemin otomatik ürettiği
- *                      yasal ibareler burada görünür:
- *                        "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
- *                        "Fiyatlarımıza KDV dahildir."
+ *   scope="products"  Any screen listing or searching products. Contact details
+ *                     and the automatically generated legal notices appear here:
+ *                       "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
+ *                       "Fiyatlarımıza KDV dahildir."
  *
- * Bu iki metin BACKEND tarafından üretilir (repository/menu.go -> buildFooter);
- * burada yalnızca gösterilir. İşletme panelden kapatırsa boş gelir ve satır çizilmez.
+ * Both notices are produced by the backend (repository/menu.go -> buildFooter)
+ * and merely displayed here. When the business turns them off they arrive empty
+ * and the corresponding line is not rendered.
  *
  * @param {object} business - PublicMenu.business
  * @param {object} footer   - PublicMenu.footer { price_note, vat_note, powered_by }
- * @param {string} dil      - Aktif dil kodu
- * @param {string} kapsam   - "anasayfa" | "urunler"
+ * @param {string} language - Active language code
+ * @param {string} scope    - "home" | "products"
  */
-export default function MenuFooter({ business, footer, dil = 'tr', kapsam = 'urunler' }) {
-  const imza = footer?.powered_by?.trim() || metin('poweredBy', dil)
+export default function MenuFooter({ business, footer, language = 'tr', scope = 'products' }) {
+  const signature = footer?.powered_by?.trim() || t('poweredBy', language)
 
-  // Ana sayfa: sade bir imza satırından ibaret.
-  if (kapsam === 'anasayfa') {
+  // Home view: nothing but the signature line.
+  if (scope === 'home') {
     return (
       <footer className="mt-10 pt-6 text-center" style={{ color: 'var(--menu-muted)' }}>
         <p className="pb-6 text-[11px]" style={{ opacity: 0.7 }}>
-          {imza}
+          {signature}
         </p>
       </footer>
     )
   }
 
-  const adres = business?.address?.trim()
-  const telefon = business?.phone?.trim()
+  const address = business?.address?.trim()
+  const phone = business?.phone?.trim()
   const wifi = business?.wifi_password?.trim()
   const instagram = business?.instagram?.trim().replace(/^@/, '')
 
-  const iletisimVar = Boolean(adres || telefon || wifi || instagram)
+  const hasContact = Boolean(address || phone || wifi || instagram)
 
-  const fiyatNotu = footer?.price_note?.trim()
-  const kdvNotu = footer?.vat_note?.trim()
+  const priceNote = footer?.price_note?.trim()
+  const vatNote = footer?.vat_note?.trim()
 
   return (
     <footer
       className="mt-10 pt-6 text-center"
       style={{ borderTop: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
     >
-      {iletisimVar ? (
+      {hasContact ? (
         <div className="mb-5 flex flex-col items-center gap-2 text-xs">
-          {adres ? (
+          {address ? (
             <p className="flex items-start justify-center gap-1.5">
               <MapPin className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="max-w-xs">{adres}</span>
+              <span className="max-w-xs">{address}</span>
             </p>
           ) : null}
 
-          {telefon ? (
+          {phone ? (
             <p className="flex items-center justify-center gap-1.5">
               <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>{telefon}</span>
+              <span>{phone}</span>
             </p>
           ) : null}
 
@@ -74,7 +74,7 @@ export default function MenuFooter({ business, footer, dil = 'tr', kapsam = 'uru
             <p className="flex items-center justify-center gap-1.5">
               <Wifi className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>
-                {metin('wifi', dil)}:{' '}
+                {t('wifi', language)}:{' '}
                 <span style={{ color: 'var(--menu-text)' }} className="font-medium">
                   {wifi}
                 </span>
@@ -91,16 +91,16 @@ export default function MenuFooter({ business, footer, dil = 'tr', kapsam = 'uru
         </div>
       ) : null}
 
-      {/* Sistem tarafından otomatik güncellenen yasal ibareler */}
-      {fiyatNotu || kdvNotu ? (
+      {/* Legal notices, kept up to date automatically by the system */}
+      {priceNote || vatNote ? (
         <div className="mb-4 space-y-1 text-[11px] leading-relaxed">
-          {fiyatNotu ? <p>{fiyatNotu}</p> : null}
-          {kdvNotu ? <p>{kdvNotu}</p> : null}
+          {priceNote ? <p>{priceNote}</p> : null}
+          {vatNote ? <p>{vatNote}</p> : null}
         </div>
       ) : null}
 
       <p className="pb-6 text-[11px]" style={{ opacity: 0.7 }}>
-        {imza}
+        {signature}
       </p>
     </footer>
   )

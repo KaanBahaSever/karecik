@@ -17,31 +17,33 @@ const productColumns = `id, business_id, category_id, translations, price, compa
 	image_url, allergens, is_active, is_featured, position, created_at, updated_at`
 
 func scanProduct(row pgx.Row) (*models.Product, error) {
-	var p models.Product
-	err := row.Scan(&p.ID, &p.BusinessID, &p.CategoryID, &p.Translations, &p.Price,
-		&p.ComparePrice, &p.ImageURL, &p.Allergens, &p.IsActive, &p.IsFeatured,
-		&p.Position, &p.CreatedAt, &p.UpdatedAt)
+	var product models.Product
+	err := row.Scan(&product.ID, &product.BusinessID, &product.CategoryID, &product.Translations,
+		&product.Price, &product.ComparePrice, &product.ImageURL, &product.Allergens,
+		&product.IsActive, &product.IsFeatured, &product.Position,
+		&product.CreatedAt, &product.UpdatedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	normalizeProduct(&p)
-	return &p, nil
+	normalizeProduct(&product)
+	return &product, nil
 }
 
-func normalizeProduct(p *models.Product) {
-	if p.Translations == nil {
-		p.Translations = models.Translations{}
+func normalizeProduct(product *models.Product) {
+	if product.Translations == nil {
+		product.Translations = models.Translations{}
 	}
-	if p.Allergens == nil {
-		p.Allergens = []string{}
+	if product.Allergens == nil {
+		product.Allergens = []string{}
 	}
 }
 
-// ListProducts, isletmenin urunlerini kategori sirasi + urun sirasina gore dondurur.
-// categoryID nil degilse yalnizca o kategori, search bos degilse ad/aciklama filtresi uygulanir.
+// ListProducts returns the products of a business ordered by category position
+// and then product position. When categoryID is non-nil only that category is
+// returned; a non-empty search filters on the name and description.
 func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 	categoryID *uuid.UUID, search string) ([]models.Product, error) {
 
@@ -52,8 +54,8 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 		args = append(args, *categoryID)
 		conditions = append(conditions, fmt.Sprintf("p.category_id = $%d", len(args)))
 	}
-	if s := strings.TrimSpace(search); s != "" {
-		args = append(args, "%"+s+"%")
+	if term := strings.TrimSpace(search); term != "" {
+		args = append(args, "%"+term+"%")
 		conditions = append(conditions, fmt.Sprintf("p.translations::text ILIKE $%d", len(args)))
 	}
 
@@ -74,26 +76,27 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 
 	products := make([]models.Product, 0)
 	for rows.Next() {
-		var p models.Product
-		if err := rows.Scan(&p.ID, &p.BusinessID, &p.CategoryID, &p.Translations, &p.Price,
-			&p.ComparePrice, &p.ImageURL, &p.Allergens, &p.IsActive, &p.IsFeatured,
-			&p.Position, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var product models.Product
+		if err := rows.Scan(&product.ID, &product.BusinessID, &product.CategoryID,
+			&product.Translations, &product.Price, &product.ComparePrice, &product.ImageURL,
+			&product.Allergens, &product.IsActive, &product.IsFeatured, &product.Position,
+			&product.CreatedAt, &product.UpdatedAt); err != nil {
 			return nil, err
 		}
-		normalizeProduct(&p)
-		products = append(products, p)
+		normalizeProduct(&product)
+		products = append(products, product)
 	}
 	return products, rows.Err()
 }
 
-// GetProduct, urunu getirir ve isletmeye ait oldugunu dogrular.
+// GetProduct fetches a product and verifies that it belongs to the business.
 func GetProduct(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.Product, error) {
 	return scanProduct(db.QueryRow(ctx,
 		`SELECT `+productColumns+` FROM products WHERE id = $1 AND business_id = $2`,
 		id, businessID))
 }
 
-// CreateProduct, urunu kategorisinin sonuna ekler.
+// CreateProduct appends a product to the end of its category.
 func CreateProduct(ctx context.Context, db DB, businessID, categoryID uuid.UUID,
 	translations models.Translations, price float64, comparePrice *float64,
 	imageURL *string, allergens []string, isActive, isFeatured bool) (*models.Product, error) {
@@ -125,14 +128,14 @@ var productUpdatableColumns = map[string]bool{
 	"position": true,
 }
 
-// UpdateProduct, verilen sutunlari gunceller (kismi guncelleme).
+// UpdateProduct applies a partial update to the given columns.
 func UpdateProduct(ctx context.Context, db DB, id, businessID uuid.UUID,
 	fields map[string]any) (*models.Product, error) {
 
 	columns := make([]string, 0, len(fields))
-	for col := range fields {
-		if productUpdatableColumns[col] {
-			columns = append(columns, col)
+	for column := range fields {
+		if productUpdatableColumns[column] {
+			columns = append(columns, column)
 		}
 	}
 	if len(columns) == 0 {
@@ -142,9 +145,9 @@ func UpdateProduct(ctx context.Context, db DB, id, businessID uuid.UUID,
 
 	setParts := make([]string, 0, len(columns))
 	args := make([]any, 0, len(columns)+2)
-	for i, col := range columns {
-		setParts = append(setParts, fmt.Sprintf("%s = $%d", col, i+1))
-		args = append(args, fields[col])
+	for i, column := range columns {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", column, i+1))
+		args = append(args, fields[column])
 	}
 	args = append(args, id, businessID)
 
@@ -155,7 +158,7 @@ func UpdateProduct(ctx context.Context, db DB, id, businessID uuid.UUID,
 	return scanProduct(db.QueryRow(ctx, query, args...))
 }
 
-// DeleteProduct, urunu siler.
+// DeleteProduct removes a product.
 func DeleteProduct(ctx context.Context, db DB, id, businessID uuid.UUID) error {
 	tag, err := db.Exec(ctx,
 		`DELETE FROM products WHERE id = $1 AND business_id = $2`, id, businessID)
@@ -168,8 +171,9 @@ func DeleteProduct(ctx context.Context, db DB, id, businessID uuid.UUID) error {
 	return nil
 }
 
-// ReorderProducts, verilen kimlik sirasini position sutununa yazar ve ayni zamanda
-// urunleri hedef kategoriye tasir (surukleyerek kategori degistirme).
+// ReorderProducts writes the given id order into the position column and moves
+// the products into the target category, which is how drag-and-drop between
+// categories is handled.
 func ReorderProducts(ctx context.Context, db DB, businessID, categoryID uuid.UUID, ids []uuid.UUID) error {
 	if len(ids) == 0 {
 		return nil
@@ -183,15 +187,15 @@ func ReorderProducts(ctx context.Context, db DB, businessID, categoryID uuid.UUI
 	return err
 }
 
-// PriceRow, toplu fiyat guncellemesinde kullanilan hafif urun kaydi.
+// PriceRow is the lightweight product record used by the bulk price update.
 type PriceRow struct {
 	ID           uuid.UUID
 	Price        float64
 	Translations models.Translations
 }
 
-// ListPriceRows, toplu guncellemeye girecek urunleri dondurur.
-// categoryIDs bos ise isletmenin tum urunleri secilir.
+// ListPriceRows returns the products that take part in a bulk update.
+// An empty categoryIDs selects every product of the business.
 func ListPriceRows(ctx context.Context, db DB, businessID uuid.UUID,
 	categoryIDs []uuid.UUID) ([]PriceRow, error) {
 
@@ -215,19 +219,19 @@ func ListPriceRows(ctx context.Context, db DB, businessID uuid.UUID,
 
 	out := make([]PriceRow, 0)
 	for rows.Next() {
-		var r PriceRow
-		if err := rows.Scan(&r.ID, &r.Price, &r.Translations); err != nil {
+		var row PriceRow
+		if err := rows.Scan(&row.ID, &row.Price, &row.Translations); err != nil {
 			return nil, err
 		}
-		if r.Translations == nil {
-			r.Translations = models.Translations{}
+		if row.Translations == nil {
+			row.Translations = models.Translations{}
 		}
-		out = append(out, r)
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }
 
-// ApplyPrices, hesaplanan yeni fiyatlari tek transaction icinde yazar.
+// ApplyPrices writes the computed new prices inside a single transaction.
 func ApplyPrices(ctx context.Context, pool *pgxpool.Pool, businessID uuid.UUID,
 	newPrices map[uuid.UUID]float64) (int, error) {
 

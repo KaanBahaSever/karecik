@@ -1,36 +1,36 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * Müşteri menüsü açılırken bir kez gösterilen karşılama (splash) ekranı.
+ * Splash screen shown once when the customer menu opens.
  *
  * @param {object}   business - PublicMenu.business (logo_url, name, splash_*)
- * @param {function} bitti    - Süre dolunca veya ekrana dokununca çağrılır
+ * @param {function} onDone   - Called when the timer ends or the screen is tapped
  */
 
-/* Çok kısa ve tek seferlik açılış animasyonu — kütüphane kullanılmaz. */
-const ANIMASYON_STILI = `
-@keyframes kutuAcil {
+/* A very short, one-off opening animation — no library involved. */
+const ANIMATION_STYLE = `
+@keyframes karecikSplashIn {
   from { opacity: 0; transform: scale(0.94); }
   to   { opacity: 1; transform: scale(1); }
 }
 `
 
-/** "#0f172a" veya "#fff" -> { r, g, b }; çözülemezse null. */
-function hexRenkAyristir(hex) {
-  const temiz = String(hex || '').trim().replace('#', '')
+/** "#0f172a" or "#fff" -> { r, g, b }; null when unparseable. */
+function parseHexColor(hex) {
+  const clean = String(hex || '').trim().replace('#', '')
 
-  if (temiz.length === 3) {
-    const r = Number.parseInt(temiz[0] + temiz[0], 16)
-    const g = Number.parseInt(temiz[1] + temiz[1], 16)
-    const b = Number.parseInt(temiz[2] + temiz[2], 16)
+  if (clean.length === 3) {
+    const r = Number.parseInt(clean[0] + clean[0], 16)
+    const g = Number.parseInt(clean[1] + clean[1], 16)
+    const b = Number.parseInt(clean[2] + clean[2], 16)
     if ([r, g, b].some(Number.isNaN)) return null
     return { r, g, b }
   }
 
-  if (temiz.length === 6) {
-    const r = Number.parseInt(temiz.slice(0, 2), 16)
-    const g = Number.parseInt(temiz.slice(2, 4), 16)
-    const b = Number.parseInt(temiz.slice(4, 6), 16)
+  if (clean.length === 6) {
+    const r = Number.parseInt(clean.slice(0, 2), 16)
+    const g = Number.parseInt(clean.slice(2, 4), 16)
+    const b = Number.parseInt(clean.slice(4, 6), 16)
     if ([r, g, b].some(Number.isNaN)) return null
     return { r, g, b }
   }
@@ -39,44 +39,44 @@ function hexRenkAyristir(hex) {
 }
 
 /**
- * Arka planın parlaklığına göre okunaklı metin rengi seçer.
- * Logonun rengini bilmediğimiz için metin rengini zemine göre belirliyoruz.
+ * Picks a readable text colour for the given background.
+ * The logo's own colours are unknown, so the text follows the backdrop.
  */
-function okunakliMetinRengi(arkaPlan) {
-  const rgb = hexRenkAyristir(arkaPlan)
+function readableTextColor(background) {
+  const rgb = parseHexColor(background)
   if (!rgb) return '#ffffff'
 
-  const parlaklik = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255
-  return parlaklik > 0.6 ? '#111827' : '#ffffff'
+  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255
+  return luminance > 0.6 ? '#111827' : '#ffffff'
 }
 
-export default function KarsilamaEkrani({ business, bitti }) {
-  const arkaPlan = business?.splash_bg_color || '#0f172a'
-  const metinRengi = okunakliMetinRengi(arkaPlan)
-  const koyuMetin = metinRengi === '#111827'
+export default function SplashScreen({ business, onDone }) {
+  const background = business?.splash_bg_color || '#0f172a'
+  const textColor = readableTextColor(background)
+  const isDarkText = textColor === '#111827'
 
-  const sayi = Number(business?.splash_duration)
-  const sure = Number.isFinite(sayi) && sayi > 0 ? Math.min(sayi, 6000) : 1500
+  const configured = Number(business?.splash_duration)
+  const duration = Number.isFinite(configured) && configured > 0 ? Math.min(configured, 6000) : 1500
 
-  const isletmeAdi = String(business?.name || '').trim()
-  const basHarf = isletmeAdi ? isletmeAdi.charAt(0).toLocaleUpperCase('tr') : '•'
+  const businessName = String(business?.name || '').trim()
+  const initial = businessName ? businessName.charAt(0).toLocaleUpperCase('tr') : '•'
 
-  // Prop her renderda yenilense bile zamanlayıcı sıfırlanmasın.
-  const bittiRef = useRef(bitti)
+  // Keep the timer stable even when the prop identity changes on re-render.
+  const onDoneRef = useRef(onDone)
   useEffect(() => {
-    bittiRef.current = bitti
-  }, [bitti])
+    onDoneRef.current = onDone
+  }, [onDone])
 
   useEffect(() => {
-    const zamanlayici = setTimeout(() => {
-      bittiRef.current?.()
-    }, sure)
+    const timer = setTimeout(() => {
+      onDoneRef.current?.()
+    }, duration)
 
-    return () => clearTimeout(zamanlayici)
-  }, [sure])
+    return () => clearTimeout(timer)
+  }, [duration])
 
-  function atla() {
-    bittiRef.current?.()
+  function skip() {
+    onDoneRef.current?.()
   }
 
   return (
@@ -84,18 +84,18 @@ export default function KarsilamaEkrani({ business, bitti }) {
       role="button"
       tabIndex={0}
       aria-label="Karşılama ekranını geç"
-      onClick={atla}
-      onKeyDown={(olay) => {
-        if (olay.key === 'Enter' || olay.key === ' ' || olay.key === 'Escape') atla()
+      onClick={skip}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') skip()
       }}
       className="fixed inset-0 z-50 flex cursor-pointer select-none items-center justify-center px-6"
-      style={{ backgroundColor: arkaPlan, color: metinRengi }}
+      style={{ backgroundColor: background, color: textColor }}
     >
-      <style>{ANIMASYON_STILI}</style>
+      <style>{ANIMATION_STYLE}</style>
 
       <div
         className="flex flex-col items-center gap-4 text-center"
-        style={{ animation: 'kutuAcil 320ms ease-out both' }}
+        style={{ animation: 'karecikSplashIn 320ms ease-out both' }}
       >
         {business?.logo_url ? (
           <img src={business.logo_url} alt="" className="h-24 w-24 object-contain" />
@@ -103,16 +103,16 @@ export default function KarsilamaEkrani({ business, bitti }) {
           <div
             className="flex h-24 w-24 items-center justify-center rounded-full text-4xl font-semibold"
             style={{
-              backgroundColor: koyuMetin ? 'rgba(17, 24, 39, 0.08)' : 'rgba(255, 255, 255, 0.14)',
-              color: metinRengi,
+              backgroundColor: isDarkText ? 'rgba(17, 24, 39, 0.08)' : 'rgba(255, 255, 255, 0.14)',
+              color: textColor,
             }}
             aria-hidden="true"
           >
-            {basHarf}
+            {initial}
           </div>
         )}
 
-        {isletmeAdi ? <h1 className="text-2xl font-semibold">{isletmeAdi}</h1> : null}
+        {businessName ? <h1 className="text-2xl font-semibold">{businessName}</h1> : null}
 
         {business?.splash_text ? (
           <p className="max-w-xs text-sm" style={{ opacity: 0.8 }}>

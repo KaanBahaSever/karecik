@@ -1,38 +1,38 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { useAuth } from './lib/auth.jsx'
-import { subdomainAl } from './lib/subdomain'
-import Yukleniyor from './components/ui/Yukleniyor.jsx'
+import { getSubdomain } from './lib/subdomain'
+import Loading from './components/ui/Loading.jsx'
 
 import Landing from './pages/Landing.jsx'
-import Giris from './pages/Giris.jsx'
-import Kayit from './pages/Kayit.jsx'
-import MusteriMenusu from './pages/menu/MusteriMenusu.jsx'
+import Login from './pages/Login.jsx'
+import SignUp from './pages/SignUp.jsx'
+import CustomerMenu from './pages/menu/CustomerMenu.jsx'
 
-import PanelDuzeni from './pages/dashboard/PanelDuzeni.jsx'
-import MenuEditoru from './pages/dashboard/MenuEditoru.jsx'
-import Tasarim from './pages/dashboard/Tasarim.jsx'
-import Ayarlar from './pages/dashboard/Ayarlar.jsx'
-import QrKod from './pages/dashboard/QrKod.jsx'
+import DashboardLayout from './pages/dashboard/DashboardLayout.jsx'
+import MenuEditor from './pages/dashboard/MenuEditor.jsx'
+import Design from './pages/dashboard/Design.jsx'
+import Settings from './pages/dashboard/Settings.jsx'
+import QrCode from './pages/dashboard/QrCode.jsx'
 
-/** Oturum gerektiren sayfaları korur. */
-function KorumaliYol({ children }) {
+/** Guards routes that require an active session. */
+function ProtectedRoute({ children }) {
   const { isAuthenticated, loading } = useAuth()
 
-  if (loading) return <Yukleniyor tamEkran metin="Oturum kontrol ediliyor..." />
+  if (loading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   if (!isAuthenticated) return <Navigate to="/giris" replace />
   return children
 }
 
 export default function App() {
-  // kahve-duragi.karecik.com gibi bir adresle gelindiyse tüm yollar
-  // doğrudan o işletmenin müşteri menüsünü gösterir.
-  const altAlan = subdomainAl()
+  // When the visitor arrives through a subdomain such as
+  // kahve-duragi.karecik.com, every path renders that business' customer menu.
+  const subdomain = getSubdomain()
 
-  if (altAlan) {
+  if (subdomain) {
     return (
       <Routes>
-        <Route path="*" element={<MusteriMenusu slug={altAlan} />} />
+        <Route path="*" element={<CustomerMenu slug={subdomain} />} />
       </Routes>
     )
   }
@@ -40,27 +40,27 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
-      <Route path="/giris" element={<Giris />} />
-      <Route path="/kayit" element={<Kayit />} />
+      <Route path="/giris" element={<Login />} />
+      <Route path="/kayit" element={<SignUp />} />
 
-      {/* Yol tabanlı menü erişimi — hosts ayarı gerektirmez */}
-      <Route path="/m/:slug" element={<MusteriMenusu />} />
+      {/* Path-based menu access — needs no hosts file entry */}
+      <Route path="/m/:slug" element={<CustomerMenu />} />
 
-      {/* Landing page'deki iPhone çerçevesinin içinde çalışan demo menü */}
-      <Route path="/demo" element={<MusteriMenusu slug="demo-kafe" gomulu />} />
+      {/* Demo menu rendered inside the iPhone frame on the landing page */}
+      <Route path="/demo" element={<CustomerMenu slug="demo-kafe" embedded />} />
 
       <Route
         path="/panel"
         element={
-          <KorumaliYol>
-            <PanelDuzeni />
-          </KorumaliYol>
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
         }
       >
-        <Route index element={<MenuEditoru />} />
-        <Route path="tasarim" element={<Tasarim />} />
-        <Route path="ayarlar" element={<Ayarlar />} />
-        <Route path="qr" element={<QrKod />} />
+        <Route index element={<MenuEditor />} />
+        <Route path="tasarim" element={<Design />} />
+        <Route path="ayarlar" element={<Settings />} />
+        <Route path="qr" element={<QrCode />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

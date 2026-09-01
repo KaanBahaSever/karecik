@@ -67,7 +67,7 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	if req.CategoryID == uuid.Nil {
 		return utils.Unprocessable(c, "Ürünün ekleneceği kategoriyi seçmelisiniz.")
 	}
-	// Kategori bu isletmeye mi ait?
+	// Does the category belong to this business?
 	if _, err := repository.GetCategory(c.Context(), h.DB, req.CategoryID, businessID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.Forbidden(c, "Bu kategoriye ürün ekleyemezsiniz.")
@@ -80,9 +80,9 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
-	translations, errMsg := sanitizeTranslations(req.Translations, business.DefaultLanguage, "Ürün")
-	if errMsg != "" {
-		return utils.Unprocessable(c, errMsg)
+	translations, errMessage := sanitizeTranslations(req.Translations, business.DefaultLanguage, "Ürün")
+	if errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
 	}
 
 	if req.Price < 0 {
@@ -124,9 +124,9 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 	businessID := middleware.BusinessID(c)
 	fields := make(map[string]any)
 
-	if v, ok := raw["category_id"]; ok {
+	if value, ok := raw["category_id"]; ok {
 		var categoryID uuid.UUID
-		if err := json.Unmarshal(v, &categoryID); err != nil {
+		if err := json.Unmarshal(value, &categoryID); err != nil {
 			return utils.Unprocessable(c, "Geçersiz kategori kimliği.")
 		}
 		if _, err := repository.GetCategory(c.Context(), h.DB, categoryID, businessID); err != nil {
@@ -138,35 +138,35 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		fields["category_id"] = categoryID
 	}
 
-	if v, ok := raw["translations"]; ok {
+	if value, ok := raw["translations"]; ok {
 		var translations models.Translations
-		if err := json.Unmarshal(v, &translations); err != nil {
+		if err := json.Unmarshal(value, &translations); err != nil {
 			return utils.Unprocessable(c, "Çeviri alanı geçersiz.")
 		}
 		business, err := repository.GetBusinessByID(c.Context(), h.DB, businessID)
 		if err != nil {
 			return utils.Internal(c, err)
 		}
-		cleaned, errMsg := sanitizeTranslations(translations, business.DefaultLanguage, "Ürün")
-		if errMsg != "" {
-			return utils.Unprocessable(c, errMsg)
+		cleaned, errMessage := sanitizeTranslations(translations, business.DefaultLanguage, "Ürün")
+		if errMessage != "" {
+			return utils.Unprocessable(c, errMessage)
 		}
 		fields["translations"] = cleaned
 	}
 
-	if v, ok := raw["price"]; ok {
-		price, err := decodeFloat(v)
+	if value, ok := raw["price"]; ok {
+		price, err := decodeFloat(value)
 		if err != nil || price < 0 {
 			return utils.Unprocessable(c, "Fiyat sıfır veya daha büyük bir sayı olmalıdır.")
 		}
 		fields["price"] = utils.Round2(price)
 	}
 
-	if v, ok := raw["compare_price"]; ok {
-		if string(v) == "null" {
+	if value, ok := raw["compare_price"]; ok {
+		if string(value) == "null" {
 			fields["compare_price"] = nil
 		} else {
-			price, err := decodeFloat(v)
+			price, err := decodeFloat(value)
 			if err != nil || price < 0 {
 				return utils.Unprocessable(c, "Karşılaştırma fiyatı geçersiz.")
 			}
@@ -175,29 +175,29 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		}
 	}
 
-	if v, ok := raw["image_url"]; ok {
-		ptr, err := decodeNullableString(v)
+	if value, ok := raw["image_url"]; ok {
+		ptr, err := decodeNullableString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "Görsel adresi geçersiz.")
 		}
 		fields["image_url"] = ptr
 	}
 
-	if v, ok := raw["allergens"]; ok {
+	if value, ok := raw["allergens"]; ok {
 		var allergens []string
-		if err := json.Unmarshal(v, &allergens); err != nil {
+		if err := json.Unmarshal(value, &allergens); err != nil {
 			return utils.Unprocessable(c, "Alerjen listesi geçersiz.")
 		}
 		fields["allergens"] = sanitizeAllergens(allergens)
 	}
 
 	for _, key := range []string{"is_active", "is_featured"} {
-		if v, ok := raw[key]; ok {
-			b, err := decodeBool(v)
+		if value, ok := raw[key]; ok {
+			flag, err := decodeBool(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı true/false olmalıdır.")
 			}
-			fields[key] = b
+			fields[key] = flag
 		}
 	}
 
@@ -212,7 +212,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 }
 
 // PatchProductPrice — PATCH /api/products/:id/price
-// Menu editorundeki satir ici hizli fiyat degisimi.
+// Backs the inline quick price editing in the menu editor.
 func (h *Handler) PatchProductPrice(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -255,7 +255,7 @@ func (h *Handler) DeleteProduct(c *fiber.Ctx) error {
 }
 
 // ReorderProducts — PUT /api/products/reorder
-// Hem kategori icindeki sirayi hem de kategoriler arasi tasimayi isler.
+// Handles both ordering inside a category and moving between categories.
 func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 	var req reorderRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -285,8 +285,9 @@ func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 }
 
 // BulkPrice — POST /api/products/bulk-price
-// Tum urunlere (ya da secili kategorilere) yuzde bazli zam/indirim uygular,
-// istege bagli fiyat yuvarlamasi yapar. apply=false ise yalnizca onizleme doner.
+// Applies a percentage increase or discount to every product (or to the
+// selected categories) with optional price rounding. When apply is false only
+// a preview is returned and nothing is written.
 func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 	var req bulkPriceRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -365,9 +366,9 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 	return utils.OK(c, result)
 }
 
-// ------------------------------------------------------------- yardimcilar
+// ------------------------------------------------------------------ helpers
 
-// sanitizeAllergens, bilinmeyen alerjen kodlarini eler ve tekrarlari temizler.
+// sanitizeAllergens drops unknown allergen codes and removes duplicates.
 func sanitizeAllergens(in []string) []string {
 	out := make([]string, 0, len(in))
 	seen := make(map[string]bool)
@@ -383,10 +384,10 @@ func sanitizeAllergens(in []string) []string {
 	return out
 }
 
-func roundPtr(v *float64) *float64 {
-	if v == nil {
+func roundPtr(value *float64) *float64 {
+	if value == nil {
 		return nil
 	}
-	r := utils.Round2(*v)
-	return &r
+	rounded := utils.Round2(*value)
+	return &rounded
 }

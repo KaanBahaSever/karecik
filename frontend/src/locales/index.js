@@ -1,43 +1,46 @@
-// Menü dilleri, alerjen etiketleri ve müşteri tarafı arayüz metinleri.
-// Kodlar backend'deki internal/utils/appearance.go ile birebir aynıdır.
+// Menu languages, allergen labels and customer-facing interface strings.
+// The codes mirror backend/internal/utils/appearance.go exactly.
+//
+// NOTE: every label and string below is user-facing, so the Turkish and
+// English wording is data — not something to translate at the code level.
 
-// NOT: Arayüzde bayrak emojisi (🇬🇧) KULLANMIYORUZ. Windows bu emojileri
-// çizemediği için yerlerine ülke kodunu basıyor ve İngilizce "GB" görünüyor.
-// Bunun yerine her dilin kendi kısa kodunu (TR / EN / DE) gösteriyoruz —
-// her işletim sisteminde aynı ve doğru görünür.
-export const DILLER = [
-  { code: 'tr', kisa: 'TR', label: 'Türkçe', flag: '🇹🇷' },
-  { code: 'en', kisa: 'EN', label: 'English', flag: '🇬🇧' },
-  { code: 'de', kisa: 'DE', label: 'Deutsch', flag: '🇩🇪' },
-  { code: 'ru', kisa: 'RU', label: 'Русский', flag: '🇷🇺' },
-  { code: 'ar', kisa: 'AR', label: 'العربية', flag: '🇸🇦' },
-  { code: 'fr', kisa: 'FR', label: 'Français', flag: '🇫🇷' },
+// We deliberately avoid flag emoji (🇬🇧) in the interface: Windows cannot render
+// them and prints the country code instead, which made English show up as "GB".
+// Each language therefore carries its own short code (TR / EN / DE), which looks
+// identical and correct on every operating system.
+export const LANGUAGES = [
+  { code: 'tr', short: 'TR', label: 'Türkçe', flag: '🇹🇷' },
+  { code: 'en', short: 'EN', label: 'English', flag: '🇬🇧' },
+  { code: 'de', short: 'DE', label: 'Deutsch', flag: '🇩🇪' },
+  { code: 'ru', short: 'RU', label: 'Русский', flag: '🇷🇺' },
+  { code: 'ar', short: 'AR', label: 'العربية', flag: '🇸🇦' },
+  { code: 'fr', short: 'FR', label: 'Français', flag: '🇫🇷' },
 ]
 
-export function dilBul(code) {
+export function findLanguage(code) {
   return (
-    DILLER.find((dil) => dil.code === code) || {
+    LANGUAGES.find((language) => language.code === code) || {
       code,
-      kisa: String(code || '').toUpperCase(),
+      short: String(code || '').toUpperCase(),
       label: code,
       flag: '',
     }
   )
 }
 
-/** Dilin arayüzde gösterilecek kısa kodu: "tr" -> "TR", "en" -> "EN". */
-export function dilKisa(code) {
-  return dilBul(code).kisa
+/** Short code shown in the interface: "tr" -> "TR", "en" -> "EN". */
+export function languageShort(code) {
+  return findLanguage(code).short
 }
 
-/** Sağdan sola yazılan diller. */
-export function sagdanSolaMi(code) {
+/** Languages written right to left. */
+export function isRtl(code) {
   return code === 'ar'
 }
 
-/* ------------------------------------------------------------- alerjenler */
+/* -------------------------------------------------------------- allergens */
 
-export const ALERJENLER = [
+export const ALLERGENS = [
   { code: 'gluten', emoji: '🌾', tr: 'Gluten', en: 'Gluten' },
   { code: 'sut', emoji: '🥛', tr: 'Süt', en: 'Milk' },
   { code: 'yumurta', emoji: '🥚', tr: 'Yumurta', en: 'Egg' },
@@ -57,61 +60,61 @@ export const ALERJENLER = [
   { code: 'kafein', emoji: '☕', tr: 'Kafein', en: 'Caffeine' },
 ]
 
-export function alerjenBul(code) {
-  return ALERJENLER.find((a) => a.code === code) || null
+export function findAllergen(code) {
+  return ALLERGENS.find((allergen) => allergen.code === code) || null
 }
 
-export function alerjenEtiketi(code, dil = 'tr') {
-  const alerjen = alerjenBul(code)
-  if (!alerjen) return code
-  return dil === 'tr' ? alerjen.tr : alerjen.en
+export function allergenLabel(code, language = 'tr') {
+  const allergen = findAllergen(code)
+  if (!allergen) return code
+  return language === 'tr' ? allergen.tr : allergen.en
 }
 
-/* ------------------------------------------------- müşteri menüsü metinleri */
+/* ------------------------------------------- customer menu interface copy */
 
-const METINLER = {
+const STRINGS = {
   tr: {
     menu: 'Menü',
-    ara: 'Menüde ara...',
-    sonucYok: 'Aramanızla eşleşen ürün bulunamadı.',
-    bosKategori: 'Bu kategoride henüz ürün yok.',
-    bosMenu: 'Menü hazırlanıyor.',
-    tumu: 'Tümü',
-    oneCikan: 'Öne çıkan',
-    icindekiler: 'İçindekiler',
-    alerjenler: 'Alerjen bilgisi',
-    kapat: 'Kapat',
+    search: 'Menüde ara...',
+    noResults: 'Aramanızla eşleşen ürün bulunamadı.',
+    emptyCategory: 'Bu kategoride henüz ürün yok.',
+    emptyMenu: 'Menü hazırlanıyor.',
+    all: 'Tümü',
+    featured: 'Öne çıkan',
+    ingredients: 'İçindekiler',
+    allergens: 'Alerjen bilgisi',
+    close: 'Kapat',
     wifi: 'Wi-Fi şifresi',
-    adres: 'Adres',
-    telefon: 'Telefon',
+    address: 'Adres',
+    phone: 'Telefon',
     poweredBy: 'Karecik ile hazırlandı',
-    yukleniyor: 'Menü yükleniyor...',
-    bulunamadi: 'Menü bulunamadı',
-    bulunamadiAciklama: 'Bu adrese ait bir menü yok. Adresi kontrol edin.',
+    loading: 'Menü yükleniyor...',
+    notFound: 'Menü bulunamadı',
+    notFoundDetail: 'Bu adrese ait bir menü yok. Adresi kontrol edin.',
   },
   en: {
     menu: 'Menu',
-    ara: 'Search the menu...',
-    sonucYok: 'No products matched your search.',
-    bosKategori: 'No products in this category yet.',
-    bosMenu: 'The menu is being prepared.',
-    tumu: 'All',
-    oneCikan: 'Featured',
-    icindekiler: 'Ingredients',
-    alerjenler: 'Allergen information',
-    kapat: 'Close',
+    search: 'Search the menu...',
+    noResults: 'No products matched your search.',
+    emptyCategory: 'No products in this category yet.',
+    emptyMenu: 'The menu is being prepared.',
+    all: 'All',
+    featured: 'Featured',
+    ingredients: 'Ingredients',
+    allergens: 'Allergen information',
+    close: 'Close',
     wifi: 'Wi-Fi password',
-    adres: 'Address',
-    telefon: 'Phone',
+    address: 'Address',
+    phone: 'Phone',
     poweredBy: 'Made with Karecik',
-    yukleniyor: 'Loading menu...',
-    bulunamadi: 'Menu not found',
-    bulunamadiAciklama: 'There is no menu at this address. Please check the URL.',
+    loading: 'Loading menu...',
+    notFound: 'Menu not found',
+    notFoundDetail: 'There is no menu at this address. Please check the URL.',
   },
 }
 
-/** Müşteri menüsü arayüz metni. Bilinmeyen dillerde İngilizce'ye düşer. */
-export function metin(anahtar, dil = 'tr') {
-  const sozluk = METINLER[dil] || METINLER.en
-  return sozluk[anahtar] ?? METINLER.tr[anahtar] ?? anahtar
+/** Customer menu interface string. Unknown languages fall back to English. */
+export function t(key, language = 'tr') {
+  const dictionary = STRINGS[language] || STRINGS.en
+  return dictionary[key] ?? STRINGS.tr[key] ?? key
 }

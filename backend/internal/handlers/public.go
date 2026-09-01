@@ -12,13 +12,13 @@ import (
 )
 
 // PublicMenuBySlug — GET /api/public/menu/:slug?lang=tr
-// Yerelde ve QR baglantilarinda kullanilan yol tabanli erisim.
+// Path-based access, used locally and as a fallback in QR links.
 func (h *Handler) PublicMenuBySlug(c *fiber.Ctx) error {
 	return h.servePublicMenu(c, strings.TrimSpace(c.Params("slug")))
 }
 
 // PublicMenuByHost — GET /api/public/menu?lang=tr
-// Subdomain tabanli erisim: kahve-duragi.karecik.com -> slug "kahve-duragi".
+// Subdomain-based access: kahve-duragi.karecik.com -> slug "kahve-duragi".
 func (h *Handler) PublicMenuByHost(c *fiber.Ctx) error {
 	slug := middleware.SubdomainOf(c, h.Cfg)
 	if slug == "" {
@@ -47,13 +47,13 @@ func (h *Handler) servePublicMenu(c *fiber.Ctx, slug string) error {
 		return utils.Internal(c, err)
 	}
 
-	// Menu icerigi sik degismez; kisa sureli onbellek QR trafigini rahatlatir.
+	// Menu content changes rarely; a short cache eases the QR traffic.
 	c.Set("Cache-Control", "public, max-age=60")
 	return utils.OK(c, menu)
 }
 
-// PreviewMenu — GET /api/preview/menu?lang=tr  🔒
-// Yonetim panelindeki canli onizleme icin. Pasif kayitlari da dondurur.
+// PreviewMenu — GET /api/preview/menu?lang=tr  (authenticated)
+// Backs the dashboard live preview and also returns inactive records.
 func (h *Handler) PreviewMenu(c *fiber.Ctx) error {
 	business, err := repository.GetBusinessByID(c.Context(), h.DB, middleware.BusinessID(c))
 	if err != nil {

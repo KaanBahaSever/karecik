@@ -1,23 +1,23 @@
 import { Loader2 } from 'lucide-react'
 
 /**
- * Yükleniyor göstergesi.
+ * Loading indicator.
  *
- * @param {boolean} tamEkran - Ekranı kaplayan sürüm
- * @param {string}  metin    - Altta gösterilecek açıklama
+ * @param {boolean} fullScreen - Render a full-viewport variant
+ * @param {string}  text       - Optional caption below the spinner
  * @param {string}  className
  */
-export default function Yukleniyor({ tamEkran = false, metin = '', className = '' }) {
-  const icerik = (
+export default function Loading({ fullScreen = false, text = '', className = '' }) {
+  const content = (
     <div className={`flex flex-col items-center justify-center gap-3 ${className}`}>
-      <Loader2 className="h-6 w-6 animate-spin text-marka-600" aria-hidden="true" />
-      {metin ? <p className="text-sm text-gray-500">{metin}</p> : null}
+      <Loader2 className="h-6 w-6 animate-spin text-brand-600" aria-hidden="true" />
+      {text ? <p className="text-sm text-gray-500">{text}</p> : null}
       <span className="sr-only">Yükleniyor</span>
     </div>
   )
 
-  if (tamEkran) {
-    return <div className="flex min-h-screen items-center justify-center bg-white">{icerik}</div>
+  if (fullScreen) {
+    return <div className="flex min-h-screen items-center justify-center bg-white">{content}</div>
   }
-  return <div className="py-12">{icerik}</div>
+  return <div className="py-12">{content}</div>
 }

@@ -16,23 +16,24 @@ const categoryColumns = `id, business_id, translations, icon, image_url,
 	position, is_active, created_at, updated_at`
 
 func scanCategory(row pgx.Row) (*models.Category, error) {
-	var c models.Category
-	err := row.Scan(&c.ID, &c.BusinessID, &c.Translations, &c.Icon, &c.ImageURL,
-		&c.Position, &c.IsActive, &c.CreatedAt, &c.UpdatedAt)
+	var category models.Category
+	err := row.Scan(&category.ID, &category.BusinessID, &category.Translations, &category.Icon,
+		&category.ImageURL, &category.Position, &category.IsActive,
+		&category.CreatedAt, &category.UpdatedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	if c.Translations == nil {
-		c.Translations = models.Translations{}
+	if category.Translations == nil {
+		category.Translations = models.Translations{}
 	}
-	return &c, nil
+	return &category, nil
 }
 
-// ListCategories, isletmenin kategorilerini sira numarasina gore dondurur.
-// Her kategori icindeki urun sayisini (product_count) da tasir.
+// ListCategories returns the categories of a business ordered by position.
+// Each category also carries the number of products it holds (product_count).
 func ListCategories(ctx context.Context, db DB, businessID uuid.UUID) ([]models.Category, error) {
 	rows, err := db.Query(ctx, `
 		SELECT c.id, c.business_id, c.translations, c.icon, c.image_url,
@@ -50,27 +51,28 @@ func ListCategories(ctx context.Context, db DB, businessID uuid.UUID) ([]models.
 
 	categories := make([]models.Category, 0)
 	for rows.Next() {
-		var c models.Category
-		if err := rows.Scan(&c.ID, &c.BusinessID, &c.Translations, &c.Icon, &c.ImageURL,
-			&c.Position, &c.IsActive, &c.CreatedAt, &c.UpdatedAt, &c.ProductCount); err != nil {
+		var category models.Category
+		if err := rows.Scan(&category.ID, &category.BusinessID, &category.Translations,
+			&category.Icon, &category.ImageURL, &category.Position, &category.IsActive,
+			&category.CreatedAt, &category.UpdatedAt, &category.ProductCount); err != nil {
 			return nil, err
 		}
-		if c.Translations == nil {
-			c.Translations = models.Translations{}
+		if category.Translations == nil {
+			category.Translations = models.Translations{}
 		}
-		categories = append(categories, c)
+		categories = append(categories, category)
 	}
 	return categories, rows.Err()
 }
 
-// GetCategory, kategoriyi getirir ve isletmeye ait oldugunu dogrular.
+// GetCategory fetches a category and verifies that it belongs to the business.
 func GetCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.Category, error) {
 	return scanCategory(db.QueryRow(ctx,
 		`SELECT `+categoryColumns+` FROM categories WHERE id = $1 AND business_id = $2`,
 		id, businessID))
 }
 
-// CreateCategory, yeni kategoriyi listenin sonuna ekler.
+// CreateCategory appends a new category to the end of the list.
 func CreateCategory(ctx context.Context, db DB, businessID uuid.UUID,
 	translations models.Translations, icon, imageURL *string, isActive bool) (*models.Category, error) {
 
@@ -93,14 +95,14 @@ var categoryUpdatableColumns = map[string]bool{
 	"translations": true, "icon": true, "image_url": true, "is_active": true, "position": true,
 }
 
-// UpdateCategory, verilen sutunlari gunceller (kismi guncelleme).
+// UpdateCategory applies a partial update to the given columns.
 func UpdateCategory(ctx context.Context, db DB, id, businessID uuid.UUID,
 	fields map[string]any) (*models.Category, error) {
 
 	columns := make([]string, 0, len(fields))
-	for col := range fields {
-		if categoryUpdatableColumns[col] {
-			columns = append(columns, col)
+	for column := range fields {
+		if categoryUpdatableColumns[column] {
+			columns = append(columns, column)
 		}
 	}
 	if len(columns) == 0 {
@@ -110,9 +112,9 @@ func UpdateCategory(ctx context.Context, db DB, id, businessID uuid.UUID,
 
 	setParts := make([]string, 0, len(columns))
 	args := make([]any, 0, len(columns)+2)
-	for i, col := range columns {
-		setParts = append(setParts, fmt.Sprintf("%s = $%d", col, i+1))
-		args = append(args, fields[col])
+	for i, column := range columns {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", column, i+1))
+		args = append(args, fields[column])
 	}
 	args = append(args, id, businessID)
 
@@ -123,8 +125,8 @@ func UpdateCategory(ctx context.Context, db DB, id, businessID uuid.UUID,
 	return scanCategory(db.QueryRow(ctx, query, args...))
 }
 
-// DeleteCategory, kategoriyi ve (cascade ile) icindeki urunleri siler.
-// Silinen urun sayisini dondurur.
+// DeleteCategory removes a category and (through the cascade) its products.
+// It returns how many products were deleted along with it.
 func DeleteCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (int, error) {
 	var productCount int
 	err := db.QueryRow(ctx,
@@ -145,8 +147,8 @@ func DeleteCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (int, 
 	return productCount, nil
 }
 
-// ReorderCategories, verilen kimlik sirasini position sutununa yazar (0,1,2...).
-// Tek bir UPDATE ile calisir; listede olmayan kategoriler etkilenmez.
+// ReorderCategories writes the given id order into the position column (0,1,2...).
+// It runs as a single UPDATE; categories missing from the list are untouched.
 func ReorderCategories(ctx context.Context, db DB, businessID uuid.UUID, ids []uuid.UUID) error {
 	if len(ids) == 0 {
 		return nil

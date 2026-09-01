@@ -1,13 +1,15 @@
-// Müşteri menüsü temaları.
-// Kimlikler (id) backend'deki internal/utils/appearance.go ile birebir aynıdır.
+// Customer menu themes.
+// The ids mirror backend/internal/utils/appearance.go exactly.
+//
+// NOTE: labels and descriptions stay Turkish — they are shown in the dashboard.
 
-export const TEMALAR = [
+export const THEMES = [
   {
     id: 'modern-light',
     label: 'Modern Açık',
     description: 'Beyaz zemin, mavi vurgu',
     dark: false,
-    renkler: {
+    colors: {
       primary: '#1d4ed8',
       background: '#ffffff',
       surface: '#f6f7f8',
@@ -15,14 +17,14 @@ export const TEMALAR = [
       muted: '#6b7280',
       border: '#e5e7eb',
     },
-    stil: { radius: '0.875rem', kartGolge: '0 1px 3px rgb(0 0 0 / 0.07)' },
+    style: { radius: '0.875rem', cardShadow: '0 1px 3px rgb(0 0 0 / 0.07)' },
   },
   {
     id: 'modern-dark',
     label: 'Modern Koyu',
     description: 'Koyu zemin, gece kullanımı',
     dark: true,
-    renkler: {
+    colors: {
       primary: '#60a5fa',
       background: '#0f172a',
       surface: '#1e293b',
@@ -30,14 +32,14 @@ export const TEMALAR = [
       muted: '#94a3b8',
       border: '#334155',
     },
-    stil: { radius: '0.875rem', kartGolge: '0 1px 3px rgb(0 0 0 / 0.4)' },
+    style: { radius: '0.875rem', cardShadow: '0 1px 3px rgb(0 0 0 / 0.4)' },
   },
   {
     id: 'zarif',
     label: 'Zarif',
     description: 'Krem zemin, serif başlıklar',
     dark: false,
-    renkler: {
+    colors: {
       primary: '#8a6a3c',
       background: '#faf6ef',
       surface: '#f2ead9',
@@ -45,14 +47,14 @@ export const TEMALAR = [
       muted: '#8a7a66',
       border: '#e3d7c1',
     },
-    stil: { radius: '0.25rem', kartGolge: 'none' },
+    style: { radius: '0.25rem', cardShadow: 'none' },
   },
   {
     id: 'sicak',
     label: 'Sıcak',
     description: 'Kiremit tonları, samimi',
     dark: false,
-    renkler: {
+    colors: {
       primary: '#c2410c',
       background: '#fffbf6',
       surface: '#ffedd5',
@@ -60,14 +62,14 @@ export const TEMALAR = [
       muted: '#9a6b52',
       border: '#fed7aa',
     },
-    stil: { radius: '1.25rem', kartGolge: '0 2px 8px rgb(194 65 12 / 0.08)' },
+    style: { radius: '1.25rem', cardShadow: '0 2px 8px rgb(194 65 12 / 0.08)' },
   },
   {
     id: 'minimal',
     label: 'Minimal',
     description: 'Siyah-beyaz, sade tipografi',
     dark: false,
-    renkler: {
+    colors: {
       primary: '#111111',
       background: '#ffffff',
       surface: '#fafafa',
@@ -75,14 +77,14 @@ export const TEMALAR = [
       muted: '#737373',
       border: '#e5e5e5',
     },
-    stil: { radius: '0rem', kartGolge: 'none' },
+    style: { radius: '0rem', cardShadow: 'none' },
   },
   {
     id: 'canli',
     label: 'Canlı',
     description: 'Mor vurgu, yüksek kontrast',
     dark: false,
-    renkler: {
+    colors: {
       primary: '#7c3aed',
       background: '#ffffff',
       surface: '#f5f3ff',
@@ -90,40 +92,43 @@ export const TEMALAR = [
       muted: '#6d6a8a',
       border: '#ddd6fe',
     },
-    stil: { radius: '1rem', kartGolge: '0 2px 10px rgb(124 58 237 / 0.10)' },
+    style: { radius: '1rem', cardShadow: '0 2px 10px rgb(124 58 237 / 0.10)' },
   },
 ]
 
-export const VARSAYILAN_TEMA = TEMALAR[0]
+export const DEFAULT_THEME = THEMES[0]
 
-/** Kimliğe göre temayı bulur; bulunamazsa varsayılanı döndürür. */
-export function temaBul(id) {
-  return TEMALAR.find((tema) => tema.id === id) || VARSAYILAN_TEMA
+/** Finds a theme by id, falling back to the default one. */
+export function findTheme(id) {
+  return THEMES.find((theme) => theme.id === id) || DEFAULT_THEME
 }
 
 /**
- * Temayı CSS değişkenlerine çevirir. Menü kapsayıcısına style olarak verilir,
- * içerideki tüm bileşenler var(--menu-*) üzerinden okur.
+ * Turns a theme into CSS custom properties. The result is applied as the
+ * `style` of the menu container, and every component inside reads the values
+ * through var(--menu-*).
  *
- * vurguRengi: işletmenin seçtiği özel ana renk (primary_color). Verilirse
- * temanın kendi primary değerinin yerine geçer.
+ * @param {object|string} theme       - Theme object or its id
+ * @param {string}        accentColor - The business' own primary_color; when set
+ *                                      it overrides the theme's primary tone
+ * @param {string}        fontStack   - CSS font-family value
  */
-export function temaDegiskenleri(tema, vurguRengi, fontStack) {
-  const t = typeof tema === 'string' ? temaBul(tema) : tema || VARSAYILAN_TEMA
-  const primary = vurguRengi || t.renkler.primary
+export function themeVariables(theme, accentColor, fontStack) {
+  const resolved = typeof theme === 'string' ? findTheme(theme) : theme || DEFAULT_THEME
+  const primary = accentColor || resolved.colors.primary
 
   return {
     '--menu-primary': primary,
-    '--menu-bg': t.renkler.background,
-    '--menu-surface': t.renkler.surface,
-    '--menu-text': t.renkler.text,
-    '--menu-muted': t.renkler.muted,
-    '--menu-border': t.renkler.border,
-    '--menu-radius': t.stil.radius,
-    '--menu-shadow': t.stil.kartGolge,
+    '--menu-bg': resolved.colors.background,
+    '--menu-surface': resolved.colors.surface,
+    '--menu-text': resolved.colors.text,
+    '--menu-muted': resolved.colors.muted,
+    '--menu-border': resolved.colors.border,
+    '--menu-radius': resolved.style.radius,
+    '--menu-shadow': resolved.style.cardShadow,
     '--menu-font': fontStack || "'Inter', system-ui, sans-serif",
-    backgroundColor: t.renkler.background,
-    color: t.renkler.text,
+    backgroundColor: resolved.colors.background,
+    color: resolved.colors.text,
     fontFamily: fontStack || "'Inter', system-ui, sans-serif",
   }
 }

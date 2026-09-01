@@ -2,12 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 
-// Karecik frontend yapılandırması.
+// Karecik frontend configuration.
 //
-// - /api ve /uploads istekleri Go backend'ine (8080) yönlendirilir.
-//   Böylece tarayıcı tarafında CORS derdi olmaz ve subdomain testleri
-//   (demo-kafe.localhost:5173) sorunsuz çalışır.
-// - host: true => *.localhost alt alan adları da sunucuya ulaşır.
+// - /api and /uploads requests are proxied to the Go backend (:8080), which
+//   avoids CORS issues in the browser and lets subdomain testing
+//   (demo-kafe.localhost:5173) work out of the box.
+// - host: true makes *.localhost subdomains reach the dev server as well.
 export default defineConfig({
   plugins: [react()],
   resolve: {

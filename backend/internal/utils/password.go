@@ -2,7 +2,7 @@ package utils
 
 import "golang.org/x/crypto/bcrypt"
 
-// HashPassword, duz metin sifreyi bcrypt ile hashler.
+// HashPassword hashes a plain-text password with bcrypt.
 func HashPassword(plain string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
 	if err != nil {
@@ -11,7 +11,7 @@ func HashPassword(plain string) (string, error) {
 	return string(hash), nil
 }
 
-// CheckPassword, duz metin sifrenin hash ile eslesip eslesmedigini soyler.
+// CheckPassword reports whether a plain-text password matches the stored hash.
 func CheckPassword(hash, plain string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
 }

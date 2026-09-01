@@ -12,41 +12,41 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
-import { menuAdresi } from '../../lib/subdomain'
-import Yukleniyor from '../../components/ui/Yukleniyor.jsx'
+import { menuUrl } from '../../lib/subdomain'
+import Loading from '../../components/ui/Loading.jsx'
 
-/* Sol menüdeki bağlantılar */
-const MENU_OGELERI = [
-  { to: '/panel', etiket: 'Menü Yönetimi', ikon: LayoutList, end: true },
-  { to: '/panel/tasarim', etiket: 'Tasarım', ikon: Palette },
-  { to: '/panel/qr', etiket: 'QR Kod', ikon: QrCode },
-  { to: '/panel/ayarlar', etiket: 'Ayarlar', ikon: Settings },
+/* Sidebar links */
+const NAV_ITEMS = [
+  { to: '/panel', label: 'Menü Yönetimi', icon: LayoutList, end: true },
+  { to: '/panel/tasarim', label: 'Tasarım', icon: Palette },
+  { to: '/panel/qr', label: 'QR Kod', icon: QrCode },
+  { to: '/panel/ayarlar', label: 'Ayarlar', icon: Settings },
 ]
 
-/** NavLink sınıfı — aktif olan marka rengiyle vurgulanır. */
-function baglantiSinifi({ isActive }) {
-  const temel = 'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm'
+/** NavLink class name — the active item is highlighted in the brand colour. */
+function navLinkClass({ isActive }) {
+  const base = 'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm'
   return isActive
-    ? `${temel} bg-marka-50 text-marka-700 font-medium`
-    : `${temel} text-gray-600 hover:bg-gray-100 hover:text-gray-900`
+    ? `${base} bg-brand-50 text-brand-700 font-medium`
+    : `${base} text-gray-600 hover:bg-gray-100 hover:text-gray-900`
 }
 
-/** Hem masaüstü kenar çubuğunda hem mobil çekmecede kullanılan menü gövdesi. */
-function MenuGovdesi({ tiklandi }) {
+/** Nav body shared by the desktop sidebar and the mobile drawer. */
+function NavBody({ onNavigate }) {
   return (
     <nav className="flex-1 space-y-1 p-3">
-      {MENU_OGELERI.map((oge) => {
-        const Ikon = oge.ikon
+      {NAV_ITEMS.map((item) => {
+        const Icon = item.icon
         return (
           <NavLink
-            key={oge.to}
-            to={oge.to}
-            end={oge.end}
-            className={baglantiSinifi}
-            onClick={tiklandi}
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={navLinkClass}
+            onClick={onNavigate}
           >
-            <Ikon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{oge.etiket}</span>
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{item.label}</span>
           </NavLink>
         )
       })}
@@ -54,83 +54,83 @@ function MenuGovdesi({ tiklandi }) {
   )
 }
 
-export default function PanelDuzeni() {
+export default function DashboardLayout() {
   const { business, logout } = useAuth()
   const navigate = useNavigate()
-  const konum = useLocation()
-  const [cekmeceAcik, setCekmeceAcik] = useState(false)
+  const location = useLocation()
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // Sayfa değişince mobil çekmece kapansın
+  // Close the mobile drawer whenever the route changes
   useEffect(() => {
-    setCekmeceAcik(false)
-  }, [konum.pathname])
+    setDrawerOpen(false)
+  }, [location.pathname])
 
   if (!business) {
-    return <Yukleniyor tamEkran metin="Panel hazırlanıyor..." />
+    return <Loading fullScreen text="Panel hazırlanıyor..." />
   }
 
-  const menuAdres = business.menu_url || menuAdresi(business.slug)
+  const publicMenuUrl = business.menu_url || menuUrl(business.slug)
 
-  function menuyuGor() {
-    if (!menuAdres) return
-    window.open(menuAdres, '_blank', 'noopener,noreferrer')
+  function openPublicMenu() {
+    if (!publicMenuUrl) return
+    window.open(publicMenuUrl, '_blank', 'noopener,noreferrer')
   }
 
-  function cikisYap() {
+  function signOut() {
     logout()
     navigate('/')
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
-      {/* ---------------------------------------------- masaüstü kenar çubuğu */}
-      <aside className="yazdirma-gizle hidden w-60 shrink-0 flex-col border-r border-gray-200 bg-white lg:flex">
+      {/* --------------------------------------------------- desktop sidebar */}
+      <aside className="print-hide hidden w-60 shrink-0 flex-col border-r border-gray-200 bg-white lg:flex">
         <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-marka-600 text-xs font-bold text-white">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">
             K
           </span>
           <span className="text-lg font-semibold text-gray-900">Karecik</span>
         </div>
-        <MenuGovdesi />
+        <NavBody />
       </aside>
 
-      {/* ------------------------------------------------- mobil çekmece menü */}
-      {cekmeceAcik ? (
-        <div className="yazdirma-gizle fixed inset-0 z-50 lg:hidden">
+      {/* ----------------------------------------------------- mobile drawer */}
+      {drawerOpen ? (
+        <div className="print-hide fixed inset-0 z-50 lg:hidden">
           <div
             className="absolute inset-0 bg-black/40"
-            onClick={() => setCekmeceAcik(false)}
+            onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
           <div className="absolute inset-y-0 left-0 flex w-60 flex-col bg-white shadow-panel">
             <div className="flex h-16 items-center justify-between border-b border-gray-200 px-4">
               <div className="flex items-center gap-2">
-                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-marka-600 text-xs font-bold text-white">
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">
                   K
                 </span>
                 <span className="text-lg font-semibold text-gray-900">Karecik</span>
               </div>
               <button
                 type="button"
-                onClick={() => setCekmeceAcik(false)}
-                className="btn-sessiz btn-kucuk"
+                onClick={() => setDrawerOpen(false)}
+                className="btn-ghost btn-sm"
                 aria-label="Menüyü kapat"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <MenuGovdesi tiklandi={() => setCekmeceAcik(false)} />
+            <NavBody onNavigate={() => setDrawerOpen(false)} />
           </div>
         </div>
       ) : null}
 
-      {/* ------------------------------------------------------ sağ ana bölüm */}
+      {/* --------------------------------------------------------- main area */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="yazdirma-gizle flex h-16 shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4 sm:px-6">
+        <header className="print-hide flex h-16 shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4 sm:px-6">
           <button
             type="button"
-            onClick={() => setCekmeceAcik(true)}
-            className="btn-sessiz btn-kucuk lg:hidden"
+            onClick={() => setDrawerOpen(true)}
+            className="btn-ghost btn-sm lg:hidden"
             aria-label="Menüyü aç"
           >
             <Menu className="h-5 w-5" />
@@ -142,15 +142,15 @@ export default function PanelDuzeni() {
 
           <button
             type="button"
-            onClick={menuyuGor}
-            className="btn-ikincil btn-kucuk"
-            title={menuAdres}
+            onClick={openPublicMenu}
+            className="btn-secondary btn-sm"
+            title={publicMenuUrl}
           >
             <ExternalLink className="h-4 w-4" />
             <span className="hidden sm:inline">Menüyü Gör</span>
           </button>
 
-          <button type="button" onClick={cikisYap} className="btn-sessiz btn-kucuk">
+          <button type="button" onClick={signOut} className="btn-ghost btn-sm">
             <LogOut className="h-4 w-4" />
             <span className="hidden sm:inline">Çıkış</span>
           </button>

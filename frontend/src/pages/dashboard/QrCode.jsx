@@ -1,81 +1,81 @@
 import { useEffect, useState } from 'react'
-import QRCode from 'qrcode'
-import { Copy, Download, Info, Loader2, QrCode as QrKodIkonu } from 'lucide-react'
+import QRCodeLib from 'qrcode'
+import { Copy, Download, Info, Loader2, QrCode as QrCodeIcon } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
-import { menuAdresi, menuYoluAdresi } from '../../lib/subdomain'
-import { useBildirim } from '../../components/ui/Bildirim.jsx'
+import { menuPathUrl, menuUrl } from '../../lib/subdomain'
+import { useToast } from '../../components/ui/Toast.jsx'
 
-/* Yazdırırken QR kartı dışındaki her şey gizlenir */
-const YAZDIRMA_STILI = `
+/* When printing, everything except the QR card is hidden */
+const PRINT_STYLE = `
   @media print {
-    .yazdirma-gizle { display: none; }
+    .print-hide { display: none; }
     html, body { height: auto; background: #ffffff; }
-    .yazdirma-kart { border: none; box-shadow: none; }
+    .print-card { border: none; box-shadow: none; }
   }
 `
 
-export default function QrKod() {
+export default function QrCode() {
   const { business } = useAuth()
-  const bildirim = useBildirim()
+  const toast = useToast()
 
   const [dataUrl, setDataUrl] = useState('')
-  const [uretiliyor, setUretiliyor] = useState(true)
+  const [generating, setGenerating] = useState(true)
 
   const slug = business?.slug || ''
-  const adres = menuAdresi(slug)
-  const yedekAdres = menuYoluAdresi(slug)
+  const address = menuUrl(slug)
+  const fallbackAddress = menuPathUrl(slug)
 
   useEffect(() => {
-    let iptal = false
+    let cancelled = false
 
-    async function qrUret() {
-      if (!adres) {
-        setUretiliyor(false)
+    async function generate() {
+      if (!address) {
+        setGenerating(false)
         return
       }
-      setUretiliyor(true)
+      setGenerating(true)
       try {
-        const sonuc = await QRCode.toDataURL(adres, {
+        const result = await QRCodeLib.toDataURL(address, {
           width: 1024,
           margin: 2,
           color: { dark: '#111827', light: '#ffffff' },
           errorCorrectionLevel: 'H',
         })
-        if (!iptal) setDataUrl(sonuc)
+        if (!cancelled) setDataUrl(result)
       } catch (err) {
-        if (!iptal) bildirim.hata(err.message || 'QR kodu oluşturulamadı.')
+        if (!cancelled) toast.error(err.message || 'QR kodu oluşturulamadı.')
       } finally {
-        if (!iptal) setUretiliyor(false)
+        if (!cancelled) setGenerating(false)
       }
     }
 
-    qrUret()
+    generate()
     return () => {
-      iptal = true
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adres])
+  }, [address])
 
-  async function kopyala(metin) {
-    if (!metin) return
+  async function copy(text) {
+    if (!text) return
     try {
-      await navigator.clipboard.writeText(metin)
-      bildirim.basari('Adres kopyalandı.')
+      await navigator.clipboard.writeText(text)
+      toast.success('Adres kopyalandı.')
     } catch {
-      bildirim.hata('Adres kopyalanamadı. Metni elle seçip kopyalayabilirsiniz.')
+      toast.error('Adres kopyalanamadı. Metni elle seçip kopyalayabilirsiniz.')
     }
   }
 
-  function yazdir() {
+  function print() {
     window.print()
   }
 
   return (
-    <div className="mx-auto max-w-icerik">
-      <style>{YAZDIRMA_STILI}</style>
+    <div className="mx-auto max-w-content">
+      <style>{PRINT_STYLE}</style>
 
-      <div className="yazdirma-gizle mb-6">
+      <div className="print-hide mb-6">
         <h2 className="text-xl font-semibold text-gray-900">QR Kod</h2>
         <p className="mt-1 text-sm text-gray-500">
           Müşterileriniz bu kodu okutarak menünüze anında ulaşır.
@@ -83,12 +83,12 @@ export default function QrKod() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* ------------------------------------------------- SOL: QR kartı */}
-        <div className="yazdirma-kart kart flex flex-col items-center gap-5 p-6 sm:p-8">
+        {/* ---------------------------------------------------- LEFT: QR card */}
+        <div className="print-card card flex flex-col items-center gap-5 p-6 sm:p-8">
           <div className="flex w-full max-w-xs items-center justify-center">
-            {uretiliyor ? (
+            {generating ? (
               <div className="flex aspect-square w-full items-center justify-center rounded-xl border border-dashed border-gray-200">
-                <Loader2 className="h-6 w-6 animate-spin text-marka-600" aria-hidden="true" />
+                <Loader2 className="h-6 w-6 animate-spin text-brand-600" aria-hidden="true" />
               </div>
             ) : dataUrl ? (
               <img
@@ -98,7 +98,7 @@ export default function QrKod() {
               />
             ) : (
               <div className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-gray-200 text-gray-400">
-                <QrKodIkonu className="h-8 w-8" aria-hidden="true" />
+                <QrCodeIcon className="h-8 w-8" aria-hidden="true" />
                 <span className="text-xs">QR kodu oluşturulamadı</span>
               </div>
             )}
@@ -110,26 +110,26 @@ export default function QrKod() {
           </div>
         </div>
 
-        {/* ----------------------------------------- SAĞ: adresler ve işlemler */}
-        <div className="yazdirma-gizle space-y-6">
-          <div className="kart p-5">
+        {/* ------------------------------------------ RIGHT: addresses, actions */}
+        <div className="print-hide space-y-6">
+          <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-900">Menü adresiniz</h3>
-            <p className="yardim">Müşterilerinizle paylaşabileceğiniz asıl adres.</p>
+            <p className="help-text">Müşterilerinizle paylaşabileceğiniz asıl adres.</p>
 
             <div className="mt-3 flex flex-col gap-2 sm:flex-row">
               <input
                 type="text"
                 readOnly
-                value={adres}
-                onFocus={(e) => e.target.select()}
-                className="girdi font-mono text-xs sm:text-sm"
+                value={address}
+                onFocus={(event) => event.target.select()}
+                className="input font-mono text-xs sm:text-sm"
                 aria-label="Menü adresi"
               />
               <button
                 type="button"
-                onClick={() => kopyala(adres)}
-                className="btn-ikincil shrink-0"
-                disabled={!adres}
+                onClick={() => copy(address)}
+                className="btn-secondary shrink-0"
+                disabled={!address}
               >
                 <Copy className="h-4 w-4" />
                 Kopyala
@@ -138,7 +138,7 @@ export default function QrKod() {
 
             <div className="mt-5 border-t border-gray-100 pt-4">
               <h4 className="text-sm font-medium text-gray-700">Yerel test adresi</h4>
-              <p className="yardim">
+              <p className="help-text">
                 Alt alan adı ayarı olmayan bilgisayarlarda menüyü açmak için kullanın.
               </p>
 
@@ -146,16 +146,16 @@ export default function QrKod() {
                 <input
                   type="text"
                   readOnly
-                  value={yedekAdres}
-                  onFocus={(e) => e.target.select()}
-                  className="girdi font-mono text-xs sm:text-sm"
+                  value={fallbackAddress}
+                  onFocus={(event) => event.target.select()}
+                  className="input font-mono text-xs sm:text-sm"
                   aria-label="Yerel test adresi"
                 />
                 <button
                   type="button"
-                  onClick={() => kopyala(yedekAdres)}
-                  className="btn-ikincil shrink-0"
-                  disabled={!yedekAdres}
+                  onClick={() => copy(fallbackAddress)}
+                  className="btn-secondary shrink-0"
+                  disabled={!fallbackAddress}
                 >
                   <Copy className="h-4 w-4" />
                   Kopyala
@@ -164,9 +164,9 @@ export default function QrKod() {
             </div>
           </div>
 
-          <div className="kart p-5">
+          <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-900">QR kodunu kullanın</h3>
-            <p className="yardim">
+            <p className="help-text">
               Yüksek çözünürlüklü (1024 px) görseli indirin veya doğrudan yazdırın.
             </p>
 
@@ -175,19 +175,19 @@ export default function QrKod() {
                 <a
                   href={dataUrl}
                   download={`karecik-qr-${slug || 'menu'}.png`}
-                  className="btn-birincil"
+                  className="btn-primary"
                 >
                   <Download className="h-4 w-4" />
                   PNG olarak indir
                 </a>
               ) : (
-                <button type="button" className="btn-birincil" disabled>
+                <button type="button" className="btn-primary" disabled>
                   <Download className="h-4 w-4" />
                   PNG olarak indir
                 </button>
               )}
 
-              <button type="button" onClick={yazdir} className="btn-ikincil" disabled={!dataUrl}>
+              <button type="button" onClick={print} className="btn-secondary" disabled={!dataUrl}>
                 <span aria-hidden="true">🖨️</span>
                 Yazdır
               </button>

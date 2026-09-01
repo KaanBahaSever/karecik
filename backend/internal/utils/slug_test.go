@@ -2,13 +2,13 @@ package utils
 
 import "testing"
 
-// TestSlugify, Turkce karakterlerin subdomain'e uygun ASCII karsiliklarina
-// dogru cevrildigini dogrular. Bu donusum bozulursa isletmelerin menu adresi
-// (kahve-duragi.karecik.com) yanlis uretilir.
+// TestSlugify verifies that Turkish characters are converted to the ASCII
+// equivalents a subdomain needs. If this conversion breaks, businesses end up
+// with the wrong menu address (kahve-duragi.karecik.com).
 func TestSlugify(t *testing.T) {
-	durumlar := []struct {
-		girdi  string
-		beklenen string
+	cases := []struct {
+		input string
+		want  string
 	}{
 		{"Çınar Kahve Durağı", "cinar-kahve-duragi"},
 		{"Kahve Durağı", "kahve-duragi"},
@@ -23,19 +23,19 @@ func TestSlugify(t *testing.T) {
 		{"Cafe 42", "cafe-42"},
 	}
 
-	for _, d := range durumlar {
-		if sonuc := Slugify(d.girdi); sonuc != d.beklenen {
-			t.Errorf("Slugify(%q) = %q; beklenen %q", d.girdi, sonuc, d.beklenen)
+	for _, c := range cases {
+		if got := Slugify(c.input); got != c.want {
+			t.Errorf("Slugify(%q) = %q; want %q", c.input, got, c.want)
 		}
 	}
 }
 
-// TestRoundPrice, toplu fiyat guncellemesindeki yuvarlama modlarini dogrular.
+// TestRoundPrice verifies the rounding modes used by the bulk price update.
 func TestRoundPrice(t *testing.T) {
-	durumlar := []struct {
-		fiyat    float64
-		mod      string
-		beklenen float64
+	cases := []struct {
+		price float64
+		mode  string
+		want  float64
 	}{
 		{147.60, RoundNone, 147.60},
 		{147.60, RoundInteger, 148},
@@ -48,19 +48,19 @@ func TestRoundPrice(t *testing.T) {
 		{0.2, RoundEnds99, 0.99},
 	}
 
-	for _, d := range durumlar {
-		if sonuc := RoundPrice(d.fiyat, d.mod); sonuc != d.beklenen {
-			t.Errorf("RoundPrice(%v, %q) = %v; beklenen %v", d.fiyat, d.mod, sonuc, d.beklenen)
+	for _, c := range cases {
+		if got := RoundPrice(c.price, c.mode); got != c.want {
+			t.Errorf("RoundPrice(%v, %q) = %v; want %v", c.price, c.mode, got, c.want)
 		}
 	}
 }
 
-// TestApplyPercentage, yuzde bazli zam/indirim hesabini dogrular.
+// TestApplyPercentage verifies the percentage increase / discount maths.
 func TestApplyPercentage(t *testing.T) {
 	if got := Round2(ApplyPercentage(100, 10)); got != 110 {
-		t.Errorf("%%10 zam = %v; beklenen 110", got)
+		t.Errorf("10%% increase = %v; want 110", got)
 	}
 	if got := Round2(ApplyPercentage(100, -15)); got != 85 {
-		t.Errorf("%%15 indirim = %v; beklenen 85", got)
+		t.Errorf("15%% discount = %v; want 85", got)
 	}
 }

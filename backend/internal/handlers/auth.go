@@ -30,7 +30,8 @@ type authResponse struct {
 }
 
 // Register — POST /api/auth/register
-// Kullanici + isletme kaydini olusturur, subdomain slug'ini uretir ve token dondurur.
+// Creates the user and business records, derives the subdomain slug and
+// returns a token.
 func (h *Handler) Register(c *fiber.Ctx) error {
 	var req registerRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -99,7 +100,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 	user, err := repository.GetUserByEmail(c.Context(), h.DB, req.Email)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			// Hangi alanin yanlis oldugunu sizdirmayalim
+			// Do not reveal which of the two fields was wrong.
 			return utils.Unauthorized(c, "E-posta veya şifre hatalı.")
 		}
 		return utils.Internal(c, err)
@@ -127,7 +128,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 }
 
 // Me — GET /api/auth/me
-// Token gecerliyse oturum sahibini ve isletmesini dondurur.
+// Returns the session owner and their business when the token is valid.
 func (h *Handler) Me(c *fiber.Ctx) error {
 	user, err := repository.GetUserByID(c.Context(), h.DB, middleware.UserID(c))
 	if err != nil {

@@ -1,6 +1,6 @@
-// Karecik API sunucusu.
+// Karecik API server.
 //
-// Calistirmak icin:
+// To run it:
 //
 //	cd backend
 //	go mod tidy
@@ -33,7 +33,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// --- veritabani
+	// --- database
 	pool, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("[karecik] %v", err)
@@ -41,24 +41,24 @@ func main() {
 	defer pool.Close()
 
 	if err := database.Migrate(ctx, pool); err != nil {
-		log.Fatalf("[karecik] migration hatasi: %v", err)
+		log.Fatalf("[karecik] migration error: %v", err)
 	}
 
 	if cfg.SeedDemo {
 		if err := database.SeedDemo(ctx, pool); err != nil {
-			log.Printf("[karecik] UYARI: demo verisi olusturulamadi: %v", err)
+			log.Printf("[karecik] WARNING: could not create the demo data: %v", err)
 		}
 	}
 
-	// --- yukleme klasoru
+	// --- upload directory
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
-		log.Fatalf("[karecik] yukleme klasoru olusturulamadi (%s): %v", cfg.UploadDir, err)
+		log.Fatalf("[karecik] could not create the upload directory (%s): %v", cfg.UploadDir, err)
 	}
 
-	// --- HTTP sunucusu
+	// --- HTTP server
 	app := fiber.New(fiber.Config{
 		AppName:               "Karecik API",
-		BodyLimit:             int(cfg.MaxUploadBytes) + 1024*1024, // gorsel + JSON payi
+		BodyLimit:             int(cfg.MaxUploadBytes) + 1024*1024, // image plus JSON headroom
 		DisableStartupMessage: true,
 		ReadTimeout:           15 * time.Second,
 		WriteTimeout:          30 * time.Second,
@@ -73,28 +73,28 @@ func main() {
 
 	router.Setup(app, handlers.New(pool, cfg), cfg)
 
-	// --- kapanis sinyallerini dinle (Ctrl+C)
+	// --- listen for shutdown signals (Ctrl+C)
 	go func() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 		<-quit
 
-		log.Println("[karecik] kapatiliyor...")
+		log.Println("[karecik] shutting down...")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		if err := app.ShutdownWithContext(shutdownCtx); err != nil {
-			log.Printf("[karecik] kapanis hatasi: %v", err)
+			log.Printf("[karecik] shutdown error: %v", err)
 		}
 	}()
 
 	addr := ":" + cfg.Port
-	log.Printf("[karecik] sunucu calisiyor -> http://localhost:%s", cfg.Port)
-	log.Printf("[karecik] saglik kontrolu  -> http://localhost:%s/api/health", cfg.Port)
+	log.Printf("[karecik] server listening   -> http://localhost:%s", cfg.Port)
+	log.Printf("[karecik] health check       -> http://localhost:%s/api/health", cfg.Port)
 	if !cfg.IsProduction() {
-		log.Printf("[karecik] demo menu       -> http://localhost:%s/api/public/menu/demo-kafe", cfg.Port)
+		log.Printf("[karecik] demo menu          -> http://localhost:%s/api/public/menu/demo-kafe", cfg.Port)
 	}
 
 	if err := app.Listen(addr); err != nil {
-		log.Fatalf("[karecik] sunucu baslatilamadi: %v", err)
+		log.Fatalf("[karecik] could not start the server: %v", err)
 	}
 }

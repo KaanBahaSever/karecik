@@ -1,14 +1,16 @@
 package utils
 
-// Currency, desteklenen bir para birimini tanimlar.
+// Currency describes one supported currency.
+//
+// NOTE: Name is shown in the dashboard and is therefore Turkish on purpose.
 type Currency struct {
 	Code     string `json:"code"`
 	Symbol   string `json:"symbol"`
 	Name     string `json:"name"`
-	Position string `json:"position"` // "suffix" (100 ₺) veya "prefix" ($100)
+	Position string `json:"position"` // "suffix" (100 ₺) or "prefix" ($100)
 }
 
-// Currencies, panelde secilebilen para birimleri. Varsayilan: TRY.
+// Currencies lists the currencies selectable in the dashboard. Default: TRY.
 var Currencies = map[string]Currency{
 	"TRY": {Code: "TRY", Symbol: "₺", Name: "Türk Lirası", Position: "suffix"},
 	"USD": {Code: "USD", Symbol: "$", Name: "Amerikan Doları", Position: "prefix"},
@@ -20,15 +22,15 @@ var Currencies = map[string]Currency{
 	"AED": {Code: "AED", Symbol: "د.إ", Name: "BAE Dirhemi", Position: "suffix"},
 }
 
-// CurrencySymbol, para birimi kodunun simgesini dondurur. Bilinmeyen kodda "₺".
+// CurrencySymbol returns the symbol for a currency code, falling back to "₺".
 func CurrencySymbol(code string) string {
-	if cur, ok := Currencies[code]; ok {
-		return cur.Symbol
+	if currency, ok := Currencies[code]; ok {
+		return currency.Symbol
 	}
 	return "₺"
 }
 
-// IsValidCurrency, kodun desteklenip desteklenmedigini soyler.
+// IsValidCurrency reports whether a currency code is supported.
 func IsValidCurrency(code string) bool {
 	_, ok := Currencies[code]
 	return ok

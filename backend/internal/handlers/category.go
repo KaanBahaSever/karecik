@@ -48,9 +48,9 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
-	translations, errMsg := sanitizeTranslations(req.Translations, business.DefaultLanguage, "Kategori")
-	if errMsg != "" {
-		return utils.Unprocessable(c, errMsg)
+	translations, errMessage := sanitizeTranslations(req.Translations, business.DefaultLanguage, "Kategori")
+	if errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
 	}
 
 	isActive := true
@@ -81,25 +81,25 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 	businessID := middleware.BusinessID(c)
 	fields := make(map[string]any)
 
-	if v, ok := raw["translations"]; ok {
+	if value, ok := raw["translations"]; ok {
 		var translations models.Translations
-		if err := json.Unmarshal(v, &translations); err != nil {
+		if err := json.Unmarshal(value, &translations); err != nil {
 			return utils.Unprocessable(c, "Çeviri alanı geçersiz.")
 		}
 		business, err := repository.GetBusinessByID(c.Context(), h.DB, businessID)
 		if err != nil {
 			return utils.Internal(c, err)
 		}
-		cleaned, errMsg := sanitizeTranslations(translations, business.DefaultLanguage, "Kategori")
-		if errMsg != "" {
-			return utils.Unprocessable(c, errMsg)
+		cleaned, errMessage := sanitizeTranslations(translations, business.DefaultLanguage, "Kategori")
+		if errMessage != "" {
+			return utils.Unprocessable(c, errMessage)
 		}
 		fields["translations"] = cleaned
 	}
 
 	for _, key := range []string{"icon", "image_url"} {
-		if v, ok := raw[key]; ok {
-			ptr, err := decodeNullableString(v)
+		if value, ok := raw[key]; ok {
+			ptr, err := decodeNullableString(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı metin veya boş olmalıdır.")
 			}
@@ -107,12 +107,12 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 		}
 	}
 
-	if v, ok := raw["is_active"]; ok {
-		b, err := decodeBool(v)
+	if value, ok := raw["is_active"]; ok {
+		flag, err := decodeBool(value)
 		if err != nil {
 			return utils.Unprocessable(c, "is_active alanı true/false olmalıdır.")
 		}
-		fields["is_active"] = b
+		fields["is_active"] = flag
 	}
 
 	category, err := repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields)
@@ -126,7 +126,7 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 }
 
 // DeleteCategory — DELETE /api/categories/:id
-// Kategoriyle birlikte icindeki urunler de silinir.
+// The products inside the category are removed along with it.
 func (h *Handler) DeleteCategory(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -145,7 +145,7 @@ func (h *Handler) DeleteCategory(c *fiber.Ctx) error {
 }
 
 // ReorderCategories — PUT /api/categories/reorder
-// Surukle-birak sonrasi yeni sirayi kaydeder.
+// Persists the new order after a drag and drop.
 func (h *Handler) ReorderCategories(c *fiber.Ctx) error {
 	var req reorderRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -167,20 +167,22 @@ func (h *Handler) ReorderCategories(c *fiber.Ctx) error {
 	return utils.OK(c, categories)
 }
 
-// sanitizeTranslations, ceviri sozlugunu temizler ve dogrular.
-// Desteklenmeyen dil kodlarini atar, bosluklari kirpar.
-// Hicbir dilde ad yoksa (ya da varsayilan dilde ad bossa) hata mesaji doner.
+// sanitizeTranslations cleans and validates a translations map: unsupported
+// language codes are dropped and whitespace is trimmed. It returns an error
+// message when no name is present (or the default language has none).
+//
+// The label argument appears in the returned message, so it is Turkish.
 func sanitizeTranslations(in models.Translations, defaultLang, label string) (models.Translations, string) {
 	out := models.Translations{}
 
-	for lang, tr := range in {
+	for lang, translation := range in {
 		if !utils.IsValidLanguage(lang) {
 			continue
 		}
 		cleaned := models.Translation{
-			Name:        strings.TrimSpace(tr.Name),
-			Description: strings.TrimSpace(tr.Description),
-			Ingredients: strings.TrimSpace(tr.Ingredients),
+			Name:        strings.TrimSpace(translation.Name),
+			Description: strings.TrimSpace(translation.Description),
+			Ingredients: strings.TrimSpace(translation.Ingredients),
 		}
 		if len([]rune(cleaned.Name)) > 120 {
 			return nil, label + " adı en fazla 120 karakter olabilir."

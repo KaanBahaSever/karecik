@@ -8,26 +8,26 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// DB, hem *pgxpool.Pool hem de pgx.Tx tarafindan karsilanan ortak arayuzdur.
-// Boylece ayni repository fonksiyonlari transaction icinde de kullanilabilir.
+// DB is the common interface satisfied by both *pgxpool.Pool and pgx.Tx, so the
+// same repository functions can also run inside a transaction.
 type DB interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// ErrNotFound, aranan kaydin bulunamadigini bildirir.
-var ErrNotFound = errors.New("kayit bulunamadi")
+// ErrNotFound signals that the requested record does not exist.
+var ErrNotFound = errors.New("record not found")
 
-// ErrDuplicate, benzersizlik kisitinin ihlal edildigini bildirir (e-posta, slug).
-var ErrDuplicate = errors.New("kayit zaten mevcut")
+// ErrDuplicate signals a unique constraint violation (email, slug).
+var ErrDuplicate = errors.New("record already exists")
 
-// isNoRows, pgx'in "satir yok" hatasini yakalar.
+// isNoRows detects pgx's "no rows" error.
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }
 
-// IsUniqueViolation, PostgreSQL 23505 (unique_violation) hatasini yakalar.
+// IsUniqueViolation detects the PostgreSQL 23505 (unique_violation) error.
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

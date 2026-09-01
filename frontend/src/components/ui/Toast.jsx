@@ -1,49 +1,50 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react'
 
-const BildirimContext = createContext(null)
+const ToastContext = createContext(null)
 
-let sayac = 0
+let counter = 0
 
 /**
- * Sağ altta beliren kısa bildirimler (toast).
- * Kullanım:
- *   const bildirim = useBildirim()
- *   bildirim.basari('Kaydedildi.')
- *   bildirim.hata(err.message)
+ * Short-lived notifications shown in the bottom-right corner.
+ *
+ * Usage:
+ *   const toast = useToast()
+ *   toast.success('Kaydedildi.')
+ *   toast.error(err.message)
  */
-export function BildirimSaglayici({ children }) {
-  const [bildirimler, setBildirimler] = useState([])
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([])
 
-  const kaldir = useCallback((id) => {
-    setBildirimler((oncekiler) => oncekiler.filter((b) => b.id !== id))
+  const remove = useCallback((id) => {
+    setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }, [])
 
-  const ekle = useCallback(
-    (tur, mesaj, sure = 4000) => {
-      if (!mesaj) return
-      sayac += 1
-      const id = sayac
-      setBildirimler((oncekiler) => [...oncekiler, { id, tur, mesaj }])
-      if (sure > 0) {
-        setTimeout(() => kaldir(id), sure)
+  const add = useCallback(
+    (kind, message, duration = 4000) => {
+      if (!message) return
+      counter += 1
+      const id = counter
+      setToasts((previous) => [...previous, { id, kind, message }])
+      if (duration > 0) {
+        setTimeout(() => remove(id), duration)
       }
     },
-    [kaldir],
+    [remove],
   )
 
   const value = useMemo(
     () => ({
-      basari: (mesaj, sure) => ekle('basari', mesaj, sure),
-      hata: (mesaj, sure) => ekle('hata', mesaj, sure ?? 6000),
-      bilgi: (mesaj, sure) => ekle('bilgi', mesaj, sure),
-      kaldir,
+      success: (message, duration) => add('success', message, duration),
+      error: (message, duration) => add('error', message, duration ?? 6000),
+      info: (message, duration) => add('info', message, duration),
+      remove,
     }),
-    [ekle, kaldir],
+    [add, remove],
   )
 
   return (
-    <BildirimContext.Provider value={value}>
+    <ToastContext.Provider value={value}>
       {children}
 
       <div
@@ -51,33 +52,33 @@ export function BildirimSaglayici({ children }) {
         role="status"
         aria-live="polite"
       >
-        {bildirimler.map((bildirim) => (
-          <BildirimKutusu key={bildirim.id} bildirim={bildirim} kapat={() => kaldir(bildirim.id)} />
+        {toasts.map((toast) => (
+          <ToastItem key={toast.id} toast={toast} onClose={() => remove(toast.id)} />
         ))}
       </div>
-    </BildirimContext.Provider>
+    </ToastContext.Provider>
   )
 }
 
-const STILLER = {
-  basari: { kutu: 'border-green-200 bg-green-50 text-green-800', Ikon: CheckCircle2 },
-  hata: { kutu: 'border-red-200 bg-red-50 text-red-800', Ikon: AlertCircle },
-  bilgi: { kutu: 'border-blue-200 bg-blue-50 text-blue-800', Ikon: Info },
+const STYLES = {
+  success: { box: 'border-green-200 bg-green-50 text-green-800', Icon: CheckCircle2 },
+  error: { box: 'border-red-200 bg-red-50 text-red-800', Icon: AlertCircle },
+  info: { box: 'border-blue-200 bg-blue-50 text-blue-800', Icon: Info },
 }
 
-function BildirimKutusu({ bildirim, kapat }) {
-  const stil = STILLER[bildirim.tur] || STILLER.bilgi
-  const { Ikon } = stil
+function ToastItem({ toast, onClose }) {
+  const style = STYLES[toast.kind] || STYLES.info
+  const { Icon } = style
 
   return (
     <div
-      className={`pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-panel ${stil.kutu}`}
+      className={`pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-panel ${style.box}`}
     >
-      <Ikon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      <p className="flex-1 text-sm leading-snug">{bildirim.mesaj}</p>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <p className="flex-1 text-sm leading-snug">{toast.message}</p>
       <button
         type="button"
-        onClick={kapat}
+        onClick={onClose}
         className="shrink-0 opacity-60 hover:opacity-100"
         aria-label="Bildirimi kapat"
       >
@@ -87,10 +88,10 @@ function BildirimKutusu({ bildirim, kapat }) {
   )
 }
 
-export function useBildirim() {
-  const context = useContext(BildirimContext)
+export function useToast() {
+  const context = useContext(ToastContext)
   if (!context) {
-    throw new Error('useBildirim yalnızca <BildirimSaglayici> içinde kullanılabilir.')
+    throw new Error('useToast can only be used inside <ToastProvider>.')
   }
   return context
 }
