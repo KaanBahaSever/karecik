@@ -95,6 +95,8 @@ func CreateAccount(ctx context.Context, pool *pgxpool.Pool,
 }
 
 // uniqueSlug returns the first free slug variant: kahve, kahve-2, kahve-3 ...
+// Branch slugs live in the same subdomain namespace and are resolved before
+// business slugs, so a candidate already taken by a branch is skipped too.
 func uniqueSlug(ctx context.Context, db DB, base string) (string, error) {
 	if utils.IsReservedSlug(base) {
 		base += "-menu"
@@ -104,7 +106,9 @@ func uniqueSlug(ctx context.Context, db DB, base string) (string, error) {
 	for i := 2; i < 200; i++ {
 		var exists bool
 		err := db.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM businesses WHERE slug = $1)`, candidate).Scan(&exists)
+			`SELECT EXISTS (SELECT 1 FROM businesses WHERE slug = $1)
+			     OR EXISTS (SELECT 1 FROM branches WHERE slug = $1)`,
+			candidate).Scan(&exists)
 		if err != nil {
 			return "", err
 		}

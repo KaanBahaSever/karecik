@@ -30,13 +30,11 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 		TimeFormat: "15:04:05",
 	}))
 
-	// NOTE: Fiber logs "Both 'AllowOrigins' and 'AllowOriginsFunc' have been
-	// defined" on start-up. That is expected and harmless: Fiber checks the
-	// listed origins first and calls AllowOriginsFunc only when none matched.
-	// Leaving the list empty would make Fiber default to "*" (open to everyone),
-	// which is why both are defined together.
+	// Only AllowOriginsFunc is passed: isAllowedOrigin checks cfg.CORSOrigins
+	// itself, so defining AllowOrigins as well would just make Fiber log
+	// "Both 'AllowOrigins' and 'AllowOriginsFunc' have been defined" on every
+	// start-up. Fiber falls back to "*" only when neither of the two is set.
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     strings.Join(cfg.CORSOrigins, ","),
 		AllowOriginsFunc: func(origin string) bool { return isAllowedOrigin(origin, cfg) },
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -57,9 +55,13 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
 
-	// Customer menu — no token required
+	// Customer menu — no token required.
+	// The ":slug" of the path form may name a branch or a business, and both
+	// forms accept an optional "?menu=<slug>".
 	app.Get("/api/public/menu", h.PublicMenuByHost)
 	app.Get("/api/public/menu/:slug", h.PublicMenuBySlug)
+	app.Get("/api/public/b/:branch_slug", h.PublicMenuByBranch)
+	app.Get("/api/public/b/:branch_slug/:menu_slug", h.PublicMenuByBranch)
 
 	// --------------------------------------------------- protected endpoints
 	api := app.Group("/api", middleware.Protected(cfg))
@@ -85,9 +87,25 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	api.Patch("/products/:id/price", h.PatchProductPrice)
 	api.Delete("/products/:id", h.DeleteProduct)
 
+	// Menus — a business may publish several of them (kahvaltı, akşam, bar...)
+	api.Get("/menus", h.ListMenus)
+	api.Post("/menus", h.CreateMenu)
+	api.Put("/menus/:id", h.UpdateMenu)
+	api.Delete("/menus/:id", h.DeleteMenu)
+
+	// Branches — the fixed sub-paths must come BEFORE the bare ":id" pattern
+	api.Get("/branches", h.ListBranches)
+	api.Post("/branches", h.CreateBranch)
+	api.Put("/branches/:id/menus", h.SetBranchMenus)
+	api.Get("/branches/:id/prices", h.ListBranchPrices)
+	api.Put("/branches/:id/prices/:productId", h.SetBranchPrice)
+	api.Delete("/branches/:id/prices/:productId", h.DeleteBranchPrice)
+	api.Put("/branches/:id", h.UpdateBranch)
+	api.Delete("/branches/:id", h.DeleteBranch)
+
 	api.Post("/uploads", h.Upload)
 
-	// Dashboard live preview
+	// Dashboard live preview — "?branch=<slug>" and "?menu=<slug>" are optional
 	api.Get("/preview/menu", h.PreviewMenu)
 
 	// ------------------------------------------------- unknown /api requests

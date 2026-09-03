@@ -93,6 +93,109 @@ var Allergens = []Allergen{
 	{Code: "kafein", Label: "Kafein", Icon: "coffee"},
 }
 
+// BadgeIcon is one pickable icon for a custom product badge.
+type BadgeIcon struct {
+	ID    string `json:"id"`    // kebab-case, matches the lucide-react icon
+	Label string `json:"label"` // Turkish, shown in the dashboard picker
+}
+
+// BadgeIcons is the fixed list of icons a business can attach to a badge.
+// The ids match frontend/src/themes/badges.js exactly and every one of them
+// exists in lucide-react 0.453.
+var BadgeIcons = []BadgeIcon{
+	{ID: "star", Label: "Yıldız"},
+	{ID: "sparkles", Label: "Parıltı"},
+	{ID: "flame", Label: "Acı / Ateş"},
+	{ID: "crown", Label: "Taç"},
+	{ID: "award", Label: "Ödül"},
+	{ID: "heart", Label: "Kalp"},
+	{ID: "thumbs-up", Label: "Beğeni"},
+	{ID: "trending-up", Label: "Yükselen"},
+	{ID: "chef-hat", Label: "Şef"},
+	{ID: "utensils", Label: "Çatal Bıçak"},
+	{ID: "leaf", Label: "Yaprak"},
+	{ID: "vegan", Label: "Vegan"},
+	{ID: "wheat", Label: "Buğday"},
+	{ID: "carrot", Label: "Havuç"},
+	{ID: "coffee", Label: "Kahve"},
+	{ID: "cup-soda", Label: "Soğuk İçecek"},
+	{ID: "wine", Label: "Şarap"},
+	{ID: "beer", Label: "Bira"},
+	{ID: "milk", Label: "Süt"},
+	{ID: "ice-cream", Label: "Dondurma"},
+	{ID: "cake", Label: "Pasta"},
+	{ID: "cookie", Label: "Kurabiye"},
+	{ID: "croissant", Label: "Kruvasan"},
+	{ID: "donut", Label: "Donut"},
+	{ID: "candy", Label: "Şeker"},
+	{ID: "pizza", Label: "Pizza"},
+	{ID: "sandwich", Label: "Sandviç"},
+	{ID: "salad", Label: "Salata"},
+	{ID: "soup", Label: "Çorba"},
+	{ID: "snowflake", Label: "Kar Tanesi"},
+	{ID: "percent", Label: "İndirim"},
+	{ID: "tag", Label: "Etiket"},
+}
+
+// SplashExitAnimation is one exit transition of the splash screen.
+type SplashExitAnimation struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// SplashExitAnimations lists the exit transitions of the splash screen.
+// The ids match the businesses.splash_exit_animation CHECK constraint.
+var SplashExitAnimations = []SplashExitAnimation{
+	{ID: "fade", Label: "Yumuşak geçiş"},
+	{ID: "slide-up", Label: "Yukarı kayar"},
+	{ID: "slide-down", Label: "Aşağı kayar"},
+	{ID: "slide-left", Label: "Sola kayar"},
+	{ID: "slide-right", Label: "Sağa kayar"},
+	{ID: "zoom-in", Label: "Yakınlaşarak kaybolur"},
+	{ID: "zoom-out", Label: "Uzaklaşarak kaybolur"},
+}
+
+// SplashEasing is one timing curve of the splash exit animation.
+type SplashEasing struct {
+	ID    string `json:"id"`    // a CSS animation-timing-function keyword
+	Label string `json:"label"` // Turkish, shown in the dashboard picker
+}
+
+// SplashEasings lists the timing curves of the splash exit animation.
+// The ids match the businesses.splash_exit_easing CHECK constraint and are
+// used verbatim as CSS timing functions by the frontend.
+var SplashEasings = []SplashEasing{
+	{ID: "ease-in", Label: "Yavaş başla"},
+	{ID: "ease-out", Label: "Yavaş bitir"},
+	{ID: "ease-in-out", Label: "Yavaş başla ve bitir"},
+	{ID: "ease", Label: "Varsayılan"},
+	{ID: "linear", Label: "Sabit hız"},
+}
+
+// DisplayMode is one logo / text combination of a screen area. The splash
+// screen and the customer menu header share the shape but not the ids, so
+// they keep separate catalogues below.
+type DisplayMode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// SplashDisplayModes lists what the splash screen shows.
+// The ids match the businesses.splash_display CHECK constraint.
+var SplashDisplayModes = []DisplayMode{
+	{ID: "both", Label: "Logo ve yazı"},
+	{ID: "logo", Label: "Sadece logo"},
+	{ID: "text", Label: "Sadece yazı"},
+}
+
+// HeaderDisplayModes lists what the customer menu header shows.
+// The ids match the businesses.header_display CHECK constraint.
+var HeaderDisplayModes = []DisplayMode{
+	{ID: "both", Label: "Logo ve işletme adı"},
+	{ID: "logo", Label: "Sadece logo"},
+	{ID: "name", Label: "Sadece işletme adı"},
+}
+
 // Language is one of the supported menu languages.
 //
 // Short is the compact code shown in the interface (TR/EN/DE). We use it
@@ -153,4 +256,63 @@ func IsValidAllergen(code string) bool {
 		}
 	}
 	return false
+}
+
+// IsValidBadgeIcon reports whether a badge icon id exists in the catalogue.
+func IsValidBadgeIcon(id string) bool {
+	for _, icon := range BadgeIcons {
+		if icon.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidSplashExitAnimation reports whether a splash exit animation id exists
+// in the catalogue.
+func IsValidSplashExitAnimation(id string) bool {
+	for _, animation := range SplashExitAnimations {
+		if animation.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidSplashEasing reports whether a splash exit easing id exists in the
+// catalogue.
+func IsValidSplashEasing(id string) bool {
+	for _, easing := range SplashEasings {
+		if easing.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidSplashDisplay reports whether a splash display mode id exists in the
+// catalogue.
+func IsValidSplashDisplay(id string) bool {
+	for _, mode := range SplashDisplayModes {
+		if mode.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidHeaderDisplay reports whether a menu header display mode id exists in
+// the catalogue.
+func IsValidHeaderDisplay(id string) bool {
+	for _, mode := range HeaderDisplayModes {
+		if mode.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidBackgroundType reports whether a menu background type is supported.
+func IsValidBackgroundType(id string) bool {
+	return id == "color" || id == "image"
 }

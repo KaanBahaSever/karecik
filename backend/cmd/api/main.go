@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -87,8 +88,16 @@ func main() {
 		}
 	}()
 
-	addr := ":" + cfg.Port
-	log.Printf("[karecik] server listening   -> http://localhost:%s", cfg.Port)
+	// Bind to the loopback interface by default rather than every interface.
+	// ":8080" would listen on 0.0.0.0, which makes Windows Firewall pop up its
+	// "allow this app on your network?" dialog on every rebuild — the binary is
+	// new each time, so the granted exception never sticks. Loopback-only needs
+	// no exception at all.
+	//
+	// Set HOST=0.0.0.0 in .env to expose the API on the LAN (to open the menu on
+	// a real phone, say); the firewall prompt comes back with it.
+	addr := net.JoinHostPort(cfg.Host, cfg.Port)
+	log.Printf("[karecik] server listening   -> http://localhost:%s (bound to %s)", cfg.Port, cfg.Host)
 	log.Printf("[karecik] health check       -> http://localhost:%s/api/health", cfg.Port)
 	if !cfg.IsProduction() {
 		log.Printf("[karecik] demo menu          -> http://localhost:%s/api/public/menu/demo-kafe", cfg.Port)

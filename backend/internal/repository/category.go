@@ -12,12 +12,13 @@ import (
 	"karecik/backend/internal/models"
 )
 
-const categoryColumns = `id, business_id, translations, icon, image_url,
+const categoryColumns = `id, business_id, menu_id, translations, icon, image_url,
 	position, is_active, created_at, updated_at`
 
 func scanCategory(row pgx.Row) (*models.Category, error) {
 	var category models.Category
-	err := row.Scan(&category.ID, &category.BusinessID, &category.Translations, &category.Icon,
+	err := row.Scan(&category.ID, &category.BusinessID, &category.MenuID,
+		&category.Translations, &category.Icon,
 		&category.ImageURL, &category.Position, &category.IsActive,
 		&category.CreatedAt, &category.UpdatedAt)
 	if err != nil {
@@ -34,16 +35,35 @@ func scanCategory(row pgx.Row) (*models.Category, error) {
 
 // ListCategories returns the categories of a business ordered by position.
 // Each category also carries the number of products it holds (product_count).
-func ListCategories(ctx context.Context, db DB, businessID uuid.UUID) ([]models.Category, error) {
-	rows, err := db.Query(ctx, `
-		SELECT c.id, c.business_id, c.translations, c.icon, c.image_url,
+//
+// menuID == nil lists every category of the business — the bulk price and
+// reorder paths work on all of them. When a menu is given the result mirrors
+// what BuildPublicMenu shows for that menu, so the editor lists exactly what
+// the customer will see: a category that was never assigned to a menu still
+// belongs to the business and therefore stays on the default menu.
+func ListCategories(ctx context.Context, db DB, businessID uuid.UUID,
+	menuID *uuid.UUID) ([]models.Category, error) {
+
+	query := `
+		SELECT c.id, c.business_id, c.menu_id, c.translations, c.icon, c.image_url,
 		       c.position, c.is_active, c.created_at, c.updated_at,
 		       COUNT(p.id) AS product_count
 		FROM categories c
 		LEFT JOIN products p ON p.category_id = c.id
-		WHERE c.business_id = $1
+		WHERE c.business_id = $1`
+	args := []any{businessID}
+
+	if menuID != nil {
+		args = append(args, *menuID)
+		query += ` AND (c.menu_id = $2
+		           OR (c.menu_id IS NULL AND EXISTS (
+		               SELECT 1 FROM menus m WHERE m.id = $2 AND m.is_default)))`
+	}
+	query += `
 		GROUP BY c.id
-		ORDER BY c.position ASC, c.created_at ASC`, businessID)
+		ORDER BY c.position ASC, c.created_at ASC`
+
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +72,9 @@ func ListCategories(ctx context.Context, db DB, businessID uuid.UUID) ([]models.
 	categories := make([]models.Category, 0)
 	for rows.Next() {
 		var category models.Category
-		if err := rows.Scan(&category.ID, &category.BusinessID, &category.Translations,
-			&category.Icon, &category.ImageURL, &category.Position, &category.IsActive,
+		if err := rows.Scan(&category.ID, &category.BusinessID, &category.MenuID,
+			&category.Translations, &category.Icon, &category.ImageURL,
+			&category.Position, &category.IsActive,
 			&category.CreatedAt, &category.UpdatedAt, &category.ProductCount); err != nil {
 			return nil, err
 		}
@@ -72,8 +93,11 @@ func GetCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.
 		id, businessID))
 }
 
-// CreateCategory appends a new category to the end of the list.
-func CreateCategory(ctx context.Context, db DB, businessID uuid.UUID,
+// CreateCategory appends a new category to the end of the list of the given
+// menu. The caller resolves the menu (the business' default one when the
+// request did not name it) and has already checked that it belongs to the
+// business.
+func CreateCategory(ctx context.Context, db DB, businessID, menuID uuid.UUID,
 	translations models.Translations, icon, imageURL *string, isActive bool) (*models.Category, error) {
 
 	var nextPosition int
@@ -85,14 +109,17 @@ func CreateCategory(ctx context.Context, db DB, businessID uuid.UUID,
 	}
 
 	return scanCategory(db.QueryRow(ctx, `
-		INSERT INTO categories (business_id, translations, icon, image_url, position, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO categories (business_id, menu_id, translations, icon, image_url,
+		                        position, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+categoryColumns,
-		businessID, translations, icon, imageURL, nextPosition, isActive))
+		businessID, menuID, translations, icon, imageURL, nextPosition, isActive))
 }
 
+// menu_id is updatable so a category can be moved between menus.
 var categoryUpdatableColumns = map[string]bool{
 	"translations": true, "icon": true, "image_url": true, "is_active": true, "position": true,
+	"menu_id": true,
 }
 
 // UpdateCategory applies a partial update to the given columns.

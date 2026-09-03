@@ -22,6 +22,9 @@ var ErrNotFound = errors.New("record not found")
 // ErrDuplicate signals a unique constraint violation (email, slug).
 var ErrDuplicate = errors.New("record already exists")
 
+// ErrLastMenu signals an attempt to delete a business' only menu.
+var ErrLastMenu = errors.New("cannot delete the last menu")
+
 // isNoRows detects pgx's "no rows" error.
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)

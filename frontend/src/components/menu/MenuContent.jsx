@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Search, Star } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Check, Copy, Eye, EyeOff, Search, Star, Wifi } from 'lucide-react'
 
 import { formatPrice } from '../../lib/format'
-import { themeVariables } from '../../themes/themes'
+import { getSubdomain } from '../../lib/subdomain'
+import { backgroundStyles, themeVariables } from '../../themes/themes'
+import { BadgeIcon } from '../../themes/badges'
 import { fontStack, loadFont } from '../../themes/fonts'
 import { findAllergen, findLanguage, isRtl, t } from '../../locales/index.js'
 import ProductDetailModal from './ProductDetailModal.jsx'
@@ -19,7 +21,11 @@ import MenuFooter from './MenuFooter.jsx'
  * Colours come from theme-derived CSS custom properties rather than Tailwind
  * classes, so all six themes work with a single component tree.
  *
- * @param {object}   menu             - { business, categories, footer }
+ * The customer is standing in the venue, so the address and the map view are
+ * deliberately absent — the things worth showing here are the Wi-Fi details and
+ * the menu itself.
+ *
+ * @param {object}   menu             - { business, categories, footer, menus }
  * @param {string}   language         - Active language code
  * @param {Function} onLanguageChange - Called when the language changes
  * @param {boolean}  embedded         - Compact rendering for narrow containers
@@ -55,6 +61,64 @@ function lower(value) {
   return String(value || '').toLocaleLowerCase('tr')
 }
 
+/**
+ * What the header shows, from `business.header_display`.
+ *
+ * Anything unknown — including a payload from before the column existed —
+ * is 'both', which is the behaviour this component always had.
+ */
+function headerMode(value) {
+  return value === 'logo' || value === 'name' ? value : 'both'
+}
+
+/**
+ * Top padding of the content column.
+ *
+ * The dashboard preview draws a Dynamic Island over the first 34 px of its
+ * viewport and sets `--menu-safe-top` so the header clears it. On a real phone
+ * the variable is unset and the display cutout inset applies instead. Both are
+ * ADDED to the normal 20 px (`py-5`) padding rather than replacing it, so a
+ * device with neither still gets the ordinary spacing.
+ */
+const SAFE_TOP_PADDING = 'calc(1.25rem + var(--menu-safe-top, env(safe-area-inset-top, 0px)))'
+
+/**
+ * Copies one string to the clipboard.
+ *
+ * navigator.clipboard is unavailable on plain-HTTP hosts and on older in-app
+ * browsers, which is exactly where a QR menu tends to be opened, so the hidden
+ * textarea + execCommand path stays as a fallback.
+ */
+async function copyToClipboard(value) {
+  const text = String(value || '')
+  if (!text) return false
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    /* falls through to the textarea fallback below */
+  }
+
+  try {
+    const area = document.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.top = '-1000px'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const copied = document.execCommand('copy')
+    document.body.removeChild(area)
+    return copied
+  } catch {
+    return false
+  }
+}
+
 /** Clamp to two lines without needing the Tailwind line-clamp plugin. */
 const TWO_LINES = {
   display: '-webkit-box',
@@ -62,6 +126,9 @@ const TWO_LINES = {
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
 }
+
+/** How long the "Kopyalandı" confirmation stays on the button. */
+const COPY_FEEDBACK_MS = 1600
 
 export default function MenuContent({
   menu,
@@ -71,10 +138,14 @@ export default function MenuContent({
 }) {
   const business = menu?.business || {}
   const categories = useMemo(() => menu?.categories || [], [menu])
+  const menus = useMemo(() => (Array.isArray(menu?.menus) ? menu.menus : []), [menu])
 
   const [selectedCategoryId, setSelectedCategoryId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedProduct, setSelectedProduct] = useState(null)
+  const [wifiRevealed, setWifiRevealed] = useState(false)
+  const [copyState, setCopyState] = useState(null) // null | { field, ok }
+  const copyTimer = useRef(null)
 
   // Load the selected font
   useEffect(() => {
@@ -88,18 +159,69 @@ export default function MenuContent({
     }
   }, [categories, selectedCategoryId])
 
-  const style = themeVariables(
-    business.theme,
-    business.primary_color,
-    fontStack(business.font_family),
-  )
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
+
+  // The theme variables carry the theme's own background colour, so the
+  // business' background must be spread AFTER them to win.
+  const { containerStyle, overlayStyle } = backgroundStyles(business.theme, business)
+  const style = {
+    ...themeVariables(business.theme, business.primary_color, fontStack(business.font_family)),
+    ...containerStyle,
+  }
 
   const onAccentText = readableTextColor(business.primary_color)
   const languages = Array.isArray(business.languages) ? business.languages : []
+
+  /* Header display. 'logo' without a logo falls back to the name — a header with
+     nothing in it is worse than the wrong mode — and 'name' never draws the
+     initial-letter badge, so the name really is on its own there. */
+  const headerDisplay = headerMode(business.header_display)
+  const showLogo = headerDisplay !== 'name' && Boolean(business.logo_url)
+  const showInitial = headerDisplay === 'both' && !business.logo_url
+  const showName = headerDisplay !== 'logo' || !showLogo
+  const nameStandsAlone = showName && !showLogo && !showInitial
   const searchTerm = search.trim()
   const searching = searchTerm.length > 0
 
   const productCountLabel = (count) => (language === 'tr' ? `${count} ürün` : `${count} items`)
+
+  /* ------------------------------------------------------------------ wifi */
+
+  const wifiSsid = String(business.wifi_ssid || '').trim()
+  const wifiPassword = String(business.wifi_password || '').trim()
+
+  // The dot count is capped so a long password does not leak its length.
+  const maskedWifiPassword = '•'.repeat(Math.min(wifiPassword.length, 12))
+
+  const revealWifiButton = (
+    <button
+      type="button"
+      onClick={() => setWifiRevealed((visible) => !visible)}
+      aria-label={t('wifiPassword', language)}
+      aria-pressed={wifiRevealed}
+      className="shrink-0"
+      style={{ color: 'var(--menu-muted)' }}
+    >
+      {wifiRevealed ? (
+        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+      ) : (
+        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+    </button>
+  )
+
+  async function copyValue(field, value) {
+    const ok = await copyToClipboard(value)
+    setCopyState({ field, ok })
+    clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopyState(null), COPY_FEEDBACK_MS)
+  }
+
+  /** Label of a copy button: idle, confirmed or failed. */
+  function copyLabel(field) {
+    if (copyState?.field !== field) return t('copy', language)
+    return copyState.ok ? t('copied', language) : t('copyFailed', language)
+  }
 
   /* ----------------------------------------------------------------- search */
 
@@ -119,11 +241,50 @@ export default function MenuContent({
   }, [searching, searchTerm, categories])
 
   const selectedCategory = categories.find((category) => category.id === selectedCategoryId) || null
+  const isHome = !searching && !selectedCategory
+
+  /* --------------------------------------------------------- menu switching */
+
+  // The prop signature is fixed, so switching menus is a navigation rather than
+  // a callback: the branch form when the menu is served through a branch, the
+  // query form otherwise.
+  function switchMenu(slug) {
+    if (!slug || slug === business.menu_slug) return
+
+    // The dashboard live preview and the landing iframe render this component
+    // too; navigating there would tear the surrounding page down.
+    if (embedded) return
+
+    // On a branch subdomain the host already pins the branch and the subdomain
+    // router only knows `/<menuSlug>`. The `/b/...` form would fall through to
+    // its catch-all route and quietly reopen the default menu.
+    if (getSubdomain()) {
+      window.location.assign(`/${slug}`)
+      return
+    }
+
+    if (business.branch_slug) {
+      window.location.assign(`/b/${business.branch_slug}/${slug}`)
+      return
+    }
+
+    const url = new URL(window.location.href)
+    url.searchParams.set('menu', slug)
+    window.location.assign(url.toString())
+  }
 
   /* ------------------------------------------------------------- fragments */
 
   function ProductRow({ product, categoryName }) {
     const allergens = Array.isArray(product.allergens) ? product.allergens : []
+    const badges = Array.isArray(product.badges) ? product.badges.filter((b) => b?.text) : []
+    const calories = product.calories == null ? null : Number(product.calories)
+    const hasMeta =
+      badges.length > 0 ||
+      calories != null ||
+      allergens.length > 0 ||
+      product.is_featured ||
+      product.is_active === false
 
     return (
       <button
@@ -181,7 +342,8 @@ export default function MenuContent({
             </p>
           ) : null}
 
-          {(allergens.length > 0 || product.is_featured || product.is_active === false) && (
+          {/* One wrapping meta row: pills stay small so the card keeps its height */}
+          {hasMeta && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {product.is_featured ? (
                 <span
@@ -202,6 +364,29 @@ export default function MenuContent({
                   style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
                 >
                   Gizli
+                </span>
+              ) : null}
+
+              {badges.map((badge, index) => (
+                <span
+                  key={badge.id || `${badge.text}-${index}`}
+                  className="inline-flex max-w-[9rem] items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                  style={{
+                    backgroundColor: badge.bg_color || 'var(--menu-primary)',
+                    color: badge.text_color || '#ffffff',
+                  }}
+                >
+                  <BadgeIcon id={badge.icon} className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{badge.text}</span>
+                </span>
+              ))}
+
+              {calories != null ? (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[10px]"
+                  style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+                >
+                  {calories} {t('kcal', language)}
                 </span>
               ) : null}
 
@@ -267,22 +452,37 @@ export default function MenuContent({
 
   return (
     <div
-      className={embedded ? 'min-h-full w-full' : 'min-h-screen w-full'}
+      className={`relative ${embedded ? 'min-h-full w-full' : 'min-h-screen w-full'}`}
       style={style}
       dir={isRtl(language) ? 'rtl' : 'ltr'}
     >
-      <div className="mx-auto max-w-lg px-4 py-5">
+      {/* Background photo scrim; the content wrapper below sits on top of it. */}
+      {overlayStyle ? (
+        <div className="absolute inset-0 z-0" style={overlayStyle} aria-hidden="true" />
+      ) : null}
+
+      <div
+        className="relative z-10 mx-auto max-w-lg px-4 py-5"
+        style={{ paddingTop: SAFE_TOP_PADDING }}
+      >
         {/* ------------------------------------ header: logo in the TOP LEFT */}
+        {/* The `gap-3` is on the flex parent and every child below is either
+            rendered or `null`, so a hidden logo or name leaves no empty slot.
+            The language switcher stays pinned right in all three modes. */}
         <header className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            {business.logo_url ? (
+            {showLogo ? (
+              /* Wide logos are common — fit them instead of cropping a square.
+                 Standing on its own the logo may take a little more room. */
               <img
                 src={business.logo_url}
                 alt=""
-                className="h-12 w-12 shrink-0 object-contain"
+                className={`h-12 w-auto shrink-0 object-contain ${
+                  headerDisplay === 'logo' ? 'max-w-[220px]' : 'max-w-[160px]'
+                }`}
                 style={{ borderRadius: 'calc(var(--menu-radius) * 0.6)' }}
               />
-            ) : (
+            ) : showInitial ? (
               <div
                 className="flex h-12 w-12 shrink-0 items-center justify-center text-lg font-semibold"
                 style={{
@@ -294,21 +494,30 @@ export default function MenuContent({
               >
                 {String(business.name || '•').charAt(0).toLocaleUpperCase('tr')}
               </div>
-            )}
+            ) : null}
 
-            <div className="min-w-0">
-              <h1
-                className="truncate text-lg font-semibold leading-tight"
-                style={{ color: 'var(--menu-text)' }}
-              >
-                {business.name}
-              </h1>
-              {business.address ? (
-                <p className="truncate text-xs" style={{ color: 'var(--menu-muted)' }}>
-                  {business.address}
-                </p>
-              ) : null}
-            </div>
+            {/* The branch name stays in every mode: it says WHICH venue this is,
+                which the logo alone cannot. */}
+            {showName || business.branch_name ? (
+              <div className="min-w-0">
+                {showName ? (
+                  <h1
+                    className={`truncate font-semibold leading-tight ${
+                      nameStandsAlone ? 'text-xl' : 'text-lg'
+                    }`}
+                    style={{ color: 'var(--menu-text)' }}
+                  >
+                    {business.name}
+                  </h1>
+                ) : null}
+                {/* No address here on purpose: the customer is already in the venue. */}
+                {business.branch_name ? (
+                  <p className="truncate text-xs" style={{ color: 'var(--menu-muted)' }}>
+                    {business.branch_name}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {languages.length > 1 ? (
@@ -341,6 +550,82 @@ export default function MenuContent({
           ) : null}
         </header>
 
+        {/* ------------------------------------------------------ wi-fi card */}
+        {/* Only on the home view — deeper screens are about the products. */}
+        {isHome && (wifiSsid || wifiPassword) ? (
+          <div
+            className="mt-4 flex items-center gap-3 px-3.5 py-3"
+            style={{
+              backgroundColor: 'var(--menu-surface)',
+              border: '1px solid var(--menu-border)',
+              borderRadius: 'var(--menu-radius)',
+              boxShadow: 'var(--menu-shadow)',
+            }}
+          >
+            <Wifi
+              className="h-4 w-4 shrink-0"
+              style={{ color: 'var(--menu-primary)' }}
+              aria-hidden="true"
+            />
+
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] leading-none" style={{ color: 'var(--menu-muted)' }}>
+                {wifiSsid ? t('wifiName', language) : t('wifiPassword', language)}
+              </p>
+              {/* With an SSID the headline is the network name and the password
+                  sits on its own masked line below. Without one the password IS
+                  the headline — and must still be masked, never printed in the
+                  clear where anyone glancing at the table can read it. */}
+              {wifiSsid ? (
+                <p
+                  className="mt-1 truncate text-sm font-medium leading-none"
+                  style={{ color: 'var(--menu-text)' }}
+                >
+                  {wifiSsid}
+                </p>
+              ) : (
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span
+                    className="truncate text-sm font-medium leading-none"
+                    style={{ color: 'var(--menu-text)' }}
+                  >
+                    {wifiRevealed ? wifiPassword : maskedWifiPassword}
+                  </span>
+                  {revealWifiButton}
+                </div>
+              )}
+
+              {wifiSsid && wifiPassword ? (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <span
+                    className="truncate text-xs tracking-wide"
+                    style={{ color: 'var(--menu-muted)' }}
+                  >
+                    {wifiRevealed ? wifiPassword : maskedWifiPassword}
+                  </span>
+                  {revealWifiButton}
+                </div>
+              ) : null}
+            </div>
+
+            {wifiPassword ? (
+              <button
+                type="button"
+                onClick={() => copyValue('wifi', wifiPassword)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] font-medium"
+                style={{ backgroundColor: 'var(--menu-primary)', color: onAccentText }}
+              >
+                {copyState?.field === 'wifi' && copyState.ok ? (
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <Copy className="h-3 w-3" aria-hidden="true" />
+                )}
+                {copyLabel('wifi')}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* --------------------------------------------------------- search */}
         {categories.length > 0 ? (
           <div className="relative mt-4">
@@ -363,6 +648,37 @@ export default function MenuContent({
               }}
             />
           </div>
+        ) : null}
+
+        {/* ------------------------------------------------- menu switcher */}
+        {menus.length > 1 ? (
+          <nav
+            className="no-scrollbar -mx-4 mt-4 flex gap-2 overflow-x-auto px-4 pb-1"
+            aria-label={t('menuLabel', language)}
+          >
+            {menus.map((entry) => {
+              const isSelected = entry.slug === business.menu_slug
+              return (
+                <button
+                  key={entry.slug}
+                  type="button"
+                  onClick={() => switchMenu(entry.slug)}
+                  className="shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium"
+                  style={
+                    isSelected
+                      ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
+                      : {
+                          backgroundColor: 'var(--menu-surface)',
+                          color: 'var(--menu-muted)',
+                          border: '1px solid var(--menu-border)',
+                        }
+                  }
+                >
+                  {entry.name}
+                </button>
+              )
+            })}
+          </nav>
         ) : null}
 
         <div className="mt-4">
@@ -480,15 +796,15 @@ export default function MenuContent({
         </div>
 
         {/*
-          On the home view only "Karecik ile hazırlandı" is shown. The price
-          date, the VAT notice and the contact details live on the screens that
-          list products.
+          On the home view the footer is only the "Karecik ile hazırlandı"
+          signature. The price date, the VAT notice and the contact details live
+          on the screens that list products.
         */}
         <MenuFooter
           business={business}
           footer={menu?.footer}
           language={language}
-          scope={searching || selectedCategory ? 'products' : 'home'}
+          scope={isHome ? 'home' : 'products'}
         />
       </div>
 

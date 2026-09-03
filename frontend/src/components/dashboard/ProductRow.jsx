@@ -5,6 +5,11 @@ import { Eye, EyeOff, GripVertical, Image as ImageIcon, Pencil, Star, Trash2 } f
 
 import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
 import { allergenLabel, findAllergen } from '../../locales/index.js'
+import { BadgeIcon, DEFAULT_BADGE } from '../../themes/badges.js'
+
+/* The row must stay one line tall, so only this many badges get a pill; the
+   rest are folded into a "+N" chip. */
+const VISIBLE_BADGES = 2
 
 /**
  * Draggable product row in the menu editor.
@@ -51,6 +56,15 @@ export default function ProductRow({
 
   const allergens = Array.isArray(product.allergens) ? product.allergens : []
   const hidden = product.is_active === false
+
+  const badges = Array.isArray(product.badges)
+    ? product.badges.filter((badge) => badge && badge.text)
+    : []
+  const shownBadges = badges.slice(0, VISIBLE_BADGES)
+  const hiddenBadges = badges.slice(VISIBLE_BADGES)
+
+  const calories =
+    product.calories === null || product.calories === undefined ? null : Number(product.calories)
 
   /** Parses the input and notifies the parent only when the value really changed. */
   function applyPrice() {
@@ -122,6 +136,34 @@ export default function ProductRow({
           ) : null}
 
           <span className="truncate text-sm font-medium text-gray-900">{name}</span>
+
+          {shownBadges.map((badge, index) => (
+            <span
+              key={badge.id || `${badge.text}-${index}`}
+              title={badge.text}
+              className="inline-flex max-w-[104px] shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none"
+              style={{
+                backgroundColor: badge.bg_color || DEFAULT_BADGE.bg_color,
+                color: badge.text_color || DEFAULT_BADGE.text_color,
+              }}
+            >
+              <BadgeIcon id={badge.icon} className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">{badge.text}</span>
+            </span>
+          ))}
+
+          {hiddenBadges.length > 0 ? (
+            <span
+              title={hiddenBadges.map((badge) => badge.text).join(', ')}
+              className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium leading-none text-gray-500"
+            >
+              +{hiddenBadges.length}
+            </span>
+          ) : null}
+
+          {Number.isFinite(calories) ? (
+            <span className="shrink-0 text-[11px] leading-none text-gray-500">{calories} kcal</span>
+          ) : null}
 
           {allergens.length > 0 ? (
             <span className="shrink-0 text-xs leading-none" aria-hidden="true">

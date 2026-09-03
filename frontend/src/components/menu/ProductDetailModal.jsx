@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { formatPrice } from '../../lib/format'
+import { BadgeIcon } from '../../themes/badges'
 import { allergenLabel, findAllergen, t } from '../../locales/index.js'
 
 /**
@@ -63,6 +64,8 @@ export default function ProductDetailModal({ product, business, language = 'tr',
   const onAccentText = readableTextColor(business?.primary_color)
 
   const allergens = Array.isArray(product.allergens) ? product.allergens.filter(Boolean) : []
+  const badges = Array.isArray(product.badges) ? product.badges.filter((badge) => badge?.text) : []
+  const calories = product.calories == null ? null : Number(product.calories)
   const isDiscounted =
     Number(product.compare_price) > 0 && Number(product.compare_price) > Number(product.price)
 
@@ -124,8 +127,32 @@ export default function ProductDetailModal({ product, business, language = 'tr',
                   {formatPrice(product.compare_price, currency)}
                 </div>
               ) : null}
+              {calories != null ? (
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
+                  {t('calories', language)}: {calories} {t('kcal', language)}
+                </div>
+              ) : null}
             </div>
           </div>
+
+          {/* custom badges designed by the business */}
+          {badges.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {badges.map((badge, index) => (
+                <span
+                  key={badge.id || `${badge.text}-${index}`}
+                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+                  style={{
+                    backgroundColor: badge.bg_color || 'var(--menu-primary)',
+                    color: badge.text_color || '#ffffff',
+                  }}
+                >
+                  <BadgeIcon id={badge.icon} className="h-3.5 w-3.5 shrink-0" />
+                  {badge.text}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           {/* description */}
           {product.description ? (

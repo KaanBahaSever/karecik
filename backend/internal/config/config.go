@@ -13,6 +13,7 @@ import (
 type Config struct {
 	DatabaseURL    string
 	JWTSecret      string
+	Host           string // interface the API binds to
 	Port           string
 	AppDomain      string // production root domain, e.g. karecik.com
 	DevDomain      string // local root domain, e.g. localhost
@@ -40,6 +41,7 @@ func Load() *Config {
 	cfg := &Config{
 		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/karecik?sslmode=disable"),
 		JWTSecret:      env("JWT_SECRET", ""),
+		Host:           env("HOST", "127.0.0.1"),
 		Port:           env("PORT", "8080"),
 		AppDomain:      env("APP_DOMAIN", "karecik.com"),
 		DevDomain:      env("DEV_DOMAIN", "localhost"),

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Check, ChevronDown, Globe } from 'lucide-react'
 
 import { LANDING_LANGUAGES, landingText } from '../../locales/landing.js'
+import Logo from '../ui/Logo.jsx'
 
 /**
  * Top bar of the landing page.
@@ -157,23 +158,9 @@ function LanguagePicker({ language, onLanguageChange, label }) {
 }
 
 /**
- * Brand mark: a plain four-block symbol reminiscent of a QR code.
- * The shape is unchanged; only the colour follows the corporate blue.
+ * Brand mark at the landing-page size (34px on phones, 56px from sm up).
+ * The artwork itself is the shared logo — see components/ui/Logo.jsx.
  */
 function BrandMark() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-9 w-9 shrink-0 sm:h-14 sm:w-14"
-      fill="none"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect x="1" y="1" width="22" height="22" rx="5.5" fill="#1d4ed8" />
-      <rect x="5.5" y="5.5" width="5.5" height="5.5" rx="1.4" fill="#ffffff" />
-      <rect x="13" y="5.5" width="5.5" height="5.5" rx="1.4" fill="#ffffff" fillOpacity="0.55" />
-      <rect x="5.5" y="13" width="5.5" height="5.5" rx="1.4" fill="#ffffff" fillOpacity="0.55" />
-      <rect x="13" y="13" width="5.5" height="5.5" rx="1.4" fill="#ffffff" />
-    </svg>
-  )
+  return <Logo className="h-9 w-9 shrink-0 text-brand-600 sm:h-14 sm:w-14" title="" />
 }

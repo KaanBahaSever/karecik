@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 
 import api from '../../lib/api'
 import { getSubdomain } from '../../lib/subdomain'
@@ -11,17 +11,27 @@ import SplashScreen from '../../components/menu/SplashScreen.jsx'
 /**
  * The customer menu opened by scanning a QR code.
  *
- * The slug can arrive in three ways:
+ * The address can arrive in four ways:
  *   1. as a prop     -> <CustomerMenu slug="demo-kafe" />  (landing page iframe)
  *   2. from the path -> /m/:slug                            (fallback address)
- *   3. from the host -> kahve-duragi.karecik.com            (primary address)
+ *   3. per branch    -> /b/:branchSlug[/:menuSlug]          (multi-branch business)
+ *   4. from the host -> kahve-duragi.karecik.com[/:menuSlug]  (primary address)
+ *
+ * A business may publish several menus. The active one is picked by the
+ * `:menuSlug` path segment or, when the switcher had to fall back to the query
+ * form, by `?menu=<slug>`. Without either the backend serves the default menu.
  *
  * @param {string}  slug     - Forces a specific business (optional)
  * @param {boolean} embedded - Rendered inside an iframe / narrow container
  */
 export default function CustomerMenu({ slug: slugProp, embedded = false }) {
-  const { slug: slugParam } = useParams()
-  const slug = slugProp || slugParam || getSubdomain() || ''
+  const { slug: slugParam, branchSlug, menuSlug: menuSlugParam } = useParams()
+  const [searchParams] = useSearchParams()
+
+  // A branch slug is resolved before a business slug on the backend, so the two
+  // never need to be sent together.
+  const slug = branchSlug ? '' : slugProp || slugParam || getSubdomain() || ''
+  const menuSlug = menuSlugParam || searchParams.get('menu') || ''
 
   // Stays empty until the visitor picks a language; the backend then serves the
   // business' own default language.
@@ -44,9 +54,14 @@ export default function CustomerMenu({ slug: slugProp, embedded = false }) {
       setLoading(true)
       setError('')
       try {
-        const data = slug
-          ? await api.publicMenu(slug, selectedLanguage)
-          : await api.publicMenuByHost(selectedLanguage)
+        let data
+        if (branchSlug) {
+          data = await api.publicMenuByBranch(branchSlug, menuSlug, selectedLanguage)
+        } else if (slug) {
+          data = await api.publicMenu(slug, selectedLanguage, menuSlug)
+        } else {
+          data = await api.publicMenuByHost(selectedLanguage, menuSlug)
+        }
         if (cancelled) return
         setMenu(data)
       } catch (err) {
@@ -61,7 +76,7 @@ export default function CustomerMenu({ slug: slugProp, embedded = false }) {
     return () => {
       cancelled = true
     }
-  }, [slug, selectedLanguage])
+  }, [branchSlug, slug, menuSlug, selectedLanguage])
 
   /* --------------------------------------------- scrollbar in embedded mode */
   // The phone frame on the landing page renders this page inside an iframe.
@@ -85,7 +100,7 @@ export default function CustomerMenu({ slug: slugProp, embedded = false }) {
     if (embedded || !menu?.business?.splash_enabled) return
     if (splashShown.current) return
 
-    const key = `karecik_splash_${menu.business.slug || slug}`
+    const key = `karecik_splash_${menu.business.slug || branchSlug || slug}`
     try {
       if (sessionStorage.getItem(key)) {
         splashShown.current = true
@@ -98,7 +113,7 @@ export default function CustomerMenu({ slug: slugProp, embedded = false }) {
 
     splashShown.current = true
     setShowSplash(true)
-  }, [menu, embedded, slug])
+  }, [menu, embedded, branchSlug, slug])
 
   /* -------------------------------------------------------------- tab title */
   useEffect(() => {

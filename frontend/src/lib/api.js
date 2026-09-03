@@ -120,7 +120,9 @@ export const api = {
   updateBusiness: (payload) => request('/api/business', { method: 'PUT', body: payload }),
 
   /* categories */
-  listCategories: () => request('/api/categories'),
+  // `params` may carry { menu_id } to scope the list to one menu; no argument
+  // returns every category of the business.
+  listCategories: (params) => request(`/api/categories${qs(params)}`),
   createCategory: (payload) => request('/api/categories', { method: 'POST', body: payload }),
   updateCategory: (id, payload) =>
     request(`/api/categories/${id}`, { method: 'PUT', body: payload }),
@@ -149,10 +151,43 @@ export const api = {
     return request('/api/uploads', { method: 'POST', body: form, isForm: true })
   },
 
-  /* menus */
-  previewMenu: (lang) => request(`/api/preview/menu${qs({ lang })}`),
-  publicMenu: (slug, lang) => request(`/api/public/menu/${slug}${qs({ lang })}`, { auth: false }),
-  publicMenuByHost: (lang) => request(`/api/public/menu${qs({ lang })}`, { auth: false }),
+  /* menus (a business may publish several menus) */
+  listMenus: () => request('/api/menus'),
+  createMenu: (payload) => request('/api/menus', { method: 'POST', body: payload }),
+  updateMenu: (id, payload) => request(`/api/menus/${id}`, { method: 'PUT', body: payload }),
+  deleteMenu: (id) => request(`/api/menus/${id}`, { method: 'DELETE' }),
+
+  /* branches */
+  listBranches: () => request('/api/branches'),
+  createBranch: (payload) => request('/api/branches', { method: 'POST', body: payload }),
+  updateBranch: (id, payload) => request(`/api/branches/${id}`, { method: 'PUT', body: payload }),
+  deleteBranch: (id) => request(`/api/branches/${id}`, { method: 'DELETE' }),
+  setBranchMenus: (id, menuIds, defaultMenuId) =>
+    request(`/api/branches/${id}/menus`, {
+      method: 'PUT',
+      body: { menu_ids: menuIds, default_menu_id: defaultMenuId },
+    }),
+
+  /* branch-specific prices and availability */
+  listBranchPrices: (id) => request(`/api/branches/${id}/prices`),
+  setBranchPrice: (id, productId, payload) =>
+    request(`/api/branches/${id}/prices/${productId}`, { method: 'PUT', body: payload }),
+  clearBranchPrice: (id, productId) =>
+    request(`/api/branches/${id}/prices/${productId}`, { method: 'DELETE' }),
+
+  /* customer menu payloads */
+  // `params` may carry { branch, menu } slugs; both are optional.
+  previewMenu: (lang, params) =>
+    request(`/api/preview/menu${qs({ lang, ...(params || {}) })}`),
+  publicMenu: (slug, lang, menuSlug) =>
+    request(`/api/public/menu/${slug}${qs({ lang, menu: menuSlug })}`, { auth: false }),
+  publicMenuByHost: (lang, menuSlug) =>
+    request(`/api/public/menu${qs({ lang, menu: menuSlug })}`, { auth: false }),
+  publicMenuByBranch: (branchSlug, menuSlug, lang) =>
+    request(
+      `/api/public/b/${branchSlug}${menuSlug ? `/${menuSlug}` : ''}${qs({ lang })}`,
+      { auth: false },
+    ),
 }
 
 export default api

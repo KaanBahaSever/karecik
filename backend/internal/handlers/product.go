@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,8 +20,10 @@ type productRequest struct {
 	Translations models.Translations `json:"translations"`
 	Price        float64             `json:"price"`
 	ComparePrice *float64            `json:"compare_price"`
+	Calories     *int                `json:"calories"`
 	ImageURL     *string             `json:"image_url"`
 	Allergens    []string            `json:"allergens"`
+	Badges       models.Badges       `json:"badges"`
 	IsActive     *bool               `json:"is_active"`
 	IsFeatured   *bool               `json:"is_featured"`
 }
@@ -91,6 +94,14 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	if req.ComparePrice != nil && *req.ComparePrice < 0 {
 		return utils.Unprocessable(c, "Karşılaştırma fiyatı sıfırdan küçük olamaz.")
 	}
+	if errMessage := validateCalories(req.Calories); errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
+	}
+
+	badges, errMessage := sanitizeBadges(req.Badges)
+	if errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
+	}
 
 	isActive, isFeatured := true, false
 	if req.IsActive != nil {
@@ -101,8 +112,8 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	}
 
 	product, err := repository.CreateProduct(c.Context(), h.DB, businessID, req.CategoryID,
-		translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.ImageURL,
-		sanitizeAllergens(req.Allergens), isActive, isFeatured)
+		translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.Calories,
+		req.ImageURL, sanitizeAllergens(req.Allergens), badges, isActive, isFeatured)
 	if err != nil {
 		return utils.Internal(c, err)
 	}
@@ -175,6 +186,22 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		}
 	}
 
+	// null clears the calorie value, which is optional on every product.
+	if value, ok := raw["calories"]; ok {
+		if string(value) == "null" {
+			fields["calories"] = (*int)(nil)
+		} else {
+			calories, err := decodeInt(value)
+			if err != nil {
+				return utils.Unprocessable(c, "Kalori değeri tam sayı olmalıdır.")
+			}
+			if errMessage := validateCalories(&calories); errMessage != "" {
+				return utils.Unprocessable(c, errMessage)
+			}
+			fields["calories"] = &calories
+		}
+	}
+
 	if value, ok := raw["image_url"]; ok {
 		ptr, err := decodeNullableString(value)
 		if err != nil {
@@ -189,6 +216,22 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 			return utils.Unprocessable(c, "Alerjen listesi geçersiz.")
 		}
 		fields["allergens"] = sanitizeAllergens(allergens)
+	}
+
+	if value, ok := raw["badges"]; ok {
+		var badges models.Badges
+		if string(value) != "null" {
+			if err := json.Unmarshal(value, &badges); err != nil {
+				return utils.Unprocessable(c, "Rozet listesi geçersiz.")
+			}
+		}
+		// badges is a NOT NULL jsonb column, so sanitizeBadges always returns
+		// a non-nil list — a nil one would be written as the literal null.
+		cleaned, errMessage := sanitizeBadges(badges)
+		if errMessage != "" {
+			return utils.Unprocessable(c, errMessage)
+		}
+		fields["badges"] = cleaned
 	}
 
 	for _, key := range []string{"is_active", "is_featured"} {
@@ -367,6 +410,76 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 }
 
 // ------------------------------------------------------------------ helpers
+
+// Fallback colours of a custom badge, used when the dashboard sends none.
+const (
+	defaultBadgeBgColor   = "#1d4ed8"
+	defaultBadgeTextColor = "#ffffff"
+)
+
+// sanitizeBadges validates the custom badges of a product and fills in the
+// missing identifiers and colours. It returns the cleaned list plus an error
+// message, which is empty when everything is valid.
+//
+// NOTE: the message is shown to the end user and is therefore Turkish.
+func sanitizeBadges(in models.Badges) (models.Badges, string) {
+	if len(in) > models.MaxBadges {
+		return nil, fmt.Sprintf("En fazla %d rozet ekleyebilirsiniz.", models.MaxBadges)
+	}
+
+	out := make(models.Badges, 0, len(in))
+
+	for _, badge := range in {
+		badge.Text = strings.TrimSpace(badge.Text)
+		if badge.Text == "" {
+			return nil, "Rozet metni boş olamaz."
+		}
+		if len([]rune(badge.Text)) > models.MaxBadgeTextRunes {
+			return nil, fmt.Sprintf("Rozet metni en fazla %d karakter olabilir.",
+				models.MaxBadgeTextRunes)
+		}
+
+		badge.Icon = strings.TrimSpace(badge.Icon)
+		if badge.Icon != "" && !utils.IsValidBadgeIcon(badge.Icon) {
+			return nil, "Geçersiz rozet simgesi: " + badge.Icon
+		}
+
+		badge.BgColor = strings.TrimSpace(badge.BgColor)
+		if badge.BgColor == "" {
+			badge.BgColor = defaultBadgeBgColor
+		}
+		badge.TextColor = strings.TrimSpace(badge.TextColor)
+		if badge.TextColor == "" {
+			badge.TextColor = defaultBadgeTextColor
+		}
+		if !hexColorPattern.MatchString(badge.BgColor) ||
+			!hexColorPattern.MatchString(badge.TextColor) {
+			return nil, "Rozet renkleri #RRGGBB biçiminde olmalıdır."
+		}
+
+		if strings.TrimSpace(badge.ID) == "" {
+			badge.ID = uuid.NewString()
+		}
+
+		out = append(out, badge)
+	}
+
+	// Normalize is the last pass: it trims the fields and guarantees a non-nil
+	// slice, which the NOT NULL jsonb column needs.
+	return out.Normalize(), ""
+}
+
+// validateCalories checks the optional calorie value of a product; nil means
+// "not stated" and is always allowed.
+func validateCalories(value *int) string {
+	if value == nil {
+		return ""
+	}
+	if *value < 0 || *value > 20000 {
+		return "Kalori değeri 0 ile 20000 arasında olmalıdır."
+	}
+	return ""
+}
 
 // sanitizeAllergens drops unknown allergen codes and removes duplicates.
 func sanitizeAllergens(in []string) []string {

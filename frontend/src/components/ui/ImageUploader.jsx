@@ -56,7 +56,8 @@ export default function ImageUploader({
           }`}
         >
           {value ? (
-            <img src={value} alt="" className="h-full w-full object-cover" />
+            /* Never crop: wide (horizontal) logos are explicitly supported. */
+            <img src={value} alt="" className="max-h-full max-w-full object-contain" />
           ) : (
             <ImagePlus className="h-5 w-5 text-gray-300" aria-hidden="true" />
           )}
@@ -98,7 +99,7 @@ export default function ImageUploader({
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
         className="hidden"
         onChange={onFileSelected}
       />

@@ -5,28 +5,17 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../lib/auth.jsx'
 import { useToast } from '../components/ui/Toast.jsx'
 import Loading from '../components/ui/Loading.jsx'
+import { BrandLockup } from '../components/ui/Logo.jsx'
 
 /* Seeded account, handy for signing in quickly during development */
 const DEMO_EMAIL = 'demo@karecik.com'
 const DEMO_PASSWORD = 'demo1234'
 
-/** Karecik brand lockup: small QR-like mark plus the wordmark. */
+/** Karecik brand lockup, linking back to the landing page. */
 function BrandLogo() {
   return (
-    <Link to="/" className="inline-flex items-center gap-2.5">
-      <svg viewBox="0 0 32 32" className="h-9 w-9 text-brand-600" aria-hidden="true">
-        <rect className="fill-current" width="32" height="32" rx="8" />
-        <g fill="#ffffff">
-          <path d="M7 7h7v7H7V7zm2 2v3h3V9H9z" />
-          <path d="M18 7h7v7h-7V7zm2 2v3h3V9h-3z" />
-          <path d="M7 18h7v7H7v-7zm2 2v3h3v-3H9z" />
-          <rect x="18" y="18" width="3" height="3" rx="0.7" />
-          <rect x="22.5" y="22.5" width="2.5" height="2.5" rx="0.6" />
-          <rect x="18" y="23" width="2" height="2" rx="0.5" />
-          <rect x="23" y="18" width="2" height="2" rx="0.5" />
-        </g>
-      </svg>
-      <span className="text-xl font-bold tracking-tight text-gray-900">Karecik</span>
+    <Link to="/" aria-label="Karecik">
+      <BrandLockup />
     </Link>
   )
 }

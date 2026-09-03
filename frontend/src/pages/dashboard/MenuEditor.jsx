@@ -17,6 +17,7 @@ import { LayoutList, Percent, Plus } from 'lucide-react'
 
 import api from '../../lib/api'
 import { useAuth } from '../../lib/auth.jsx'
+import { useBranchMenu } from '../../lib/branchContext.jsx'
 import { findLanguage } from '../../locales/index.js'
 
 import { useToast } from '../../components/ui/Toast.jsx'
@@ -69,6 +70,14 @@ export default function MenuEditor() {
   const { business } = useAuth()
   const toast = useToast()
 
+  /* --------------------------------------------------------- active menu */
+
+  // The topbar switcher decides which menu is edited here. Until it has
+  // resolved one, nothing is fetched: an unscoped request would list every
+  // category of the business and be thrown away a moment later.
+  const { menus, activeBranch, activeMenu, loading: branchesLoading } = useBranchMenu()
+  const activeMenuID = activeMenu?.id || null
+
   /* ------------------------------------------------------------ business */
 
   const languages = useMemo(() => {
@@ -115,25 +124,32 @@ export default function MenuEditor() {
   /* ------------------------------------------------------------- loading */
 
   const loadData = useCallback(async () => {
+    // Wait for the branch context; it clears `loading` even when it fails, and
+    // an unresolved menu then simply falls back to the whole business.
+    if (branchesLoading) return
+
     setLoading(true)
     try {
       const [incomingCategories, incomingProducts] = await Promise.all([
-        api.listCategories(),
+        api.listCategories(activeMenuID ? { menu_id: activeMenuID } : undefined),
         api.listProducts(),
       ])
 
       const list = Array.isArray(incomingCategories) ? incomingCategories : []
       setCategories(list)
       setProductsByCategory(groupProducts(incomingProducts))
-      setExpandedIds((previous) =>
-        previous.length > 0 ? previous : list.slice(0, 1).map((category) => category.id),
-      )
+      // Switching menus replaces the whole list, so ids that no longer exist are
+      // dropped and the first category of the new menu is opened instead.
+      setExpandedIds((previous) => {
+        const kept = previous.filter((id) => list.some((category) => category.id === id))
+        return kept.length > 0 ? kept : list.slice(0, 1).map((category) => category.id)
+      })
     } catch (err) {
       toast.error(err.message)
     } finally {
       setLoading(false)
     }
-  }, [toast])
+  }, [toast, branchesLoading, activeMenuID])
 
   useEffect(() => {
     loadData()
@@ -410,7 +426,15 @@ export default function MenuEditor() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold text-gray-900">Menü Yönetimi</h1>
+          {/* With a single menu the name would say nothing; it only earns its
+              place once the topbar switcher can change which menu is edited. */}
           <p className="mt-1 text-sm text-gray-500">
+            {menus.length > 1 && activeMenu ? (
+              <>
+                <b className="font-medium text-gray-700">{activeMenu.name}</b> menüsünü
+                düzenliyorsunuz.{' '}
+              </>
+            ) : null}
             Kategorileri ve ürünleri sürükleyerek sıralayabilirsiniz.
           </p>
         </div>
@@ -457,7 +481,7 @@ export default function MenuEditor() {
       ) : null}
 
       {/* ------------------------------------------------------ main layout */}
-      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_clamp(340px,30vw,460px)]">
         {/* ------------------------------------------------------- editor */}
         <div className="min-w-0">
           {loading ? (
@@ -557,7 +581,15 @@ export default function MenuEditor() {
         {/* ------------------------------------------------------ live preview */}
         <div className="hidden xl:block">
           <div className="sticky top-6">
-            <LivePreview business={business} refresh={previewCounter} />
+            {/* Slugs, not ids: the preview endpoint resolves branch and menu by
+                slug, exactly like the public menu does. */}
+            <LivePreview
+              business={business}
+              refresh={previewCounter}
+              branchSlug={activeBranch?.slug || ''}
+              menuSlug={activeMenu?.slug || ''}
+              showSplashControl
+            />
           </div>
         </div>
       </div>
@@ -572,6 +604,7 @@ export default function MenuEditor() {
         category={editingCategory}
         languages={languages}
         defaultLanguage={defaultLanguage}
+        menuId={activeMenuID || undefined}
         onSaved={onCategorySaved}
       />
 

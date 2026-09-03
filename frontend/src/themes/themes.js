@@ -132,3 +132,65 @@ export function themeVariables(theme, accentColor, fontStack) {
     fontFamily: fontStack || "'Inter', system-ui, sans-serif",
   }
 }
+
+/* ------------------------------------------------------------- background */
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+/** Turns "#1d4ed8" into "rgb(29 78 216 / 0.4)". */
+function hexToRgba(hex, alpha) {
+  const red = parseInt(hex.slice(1, 3), 16)
+  const green = parseInt(hex.slice(3, 5), 16)
+  const blue = parseInt(hex.slice(5, 7), 16)
+  return `rgb(${red} ${green} ${blue} / ${alpha})`
+}
+
+/**
+ * Background layer styles for the customer menu.
+ *
+ * The business may either tint the theme background with its own colour or put
+ * a photo behind the whole menu. A photo needs a scrim on top of it, otherwise
+ * the card text stops being readable — hence the second style object.
+ *
+ * @param {object|string} theme    - Theme object or its id
+ * @param {object}        business - Carries background_type, background_color,
+ *                                   background_image_url and
+ *                                   background_overlay_opacity
+ * @returns {{containerStyle: object, overlayStyle: object|null}}
+ */
+export function backgroundStyles(theme, business) {
+  const resolved = typeof theme === 'string' ? findTheme(theme) : theme || DEFAULT_THEME
+  const source = business || {}
+  const imageUrl = (source.background_image_url || '').trim()
+
+  if (source.background_type === 'image' && imageUrl) {
+    const raw = Number(source.background_overlay_opacity)
+    const opacity = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.4
+
+    return {
+      containerStyle: {
+        backgroundImage: `url("${imageUrl}")`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        // `fixed` janks on iOS Safari while the menu scrolls.
+        backgroundAttachment: 'scroll',
+      },
+      overlayStyle: {
+        position: 'absolute',
+        inset: 0,
+        backgroundColor: hexToRgba(resolved.colors.background, opacity),
+        backdropFilter: 'blur(2px)',
+        pointerEvents: 'none',
+      },
+    }
+  }
+
+  const color = (source.background_color || '').trim()
+
+  return {
+    containerStyle: {
+      backgroundColor: HEX_COLOR.test(color) ? color : resolved.colors.background,
+    },
+    overlayStyle: null,
+  }
+}

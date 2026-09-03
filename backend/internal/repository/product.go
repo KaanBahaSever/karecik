@@ -13,15 +13,19 @@ import (
 	"karecik/backend/internal/models"
 )
 
+// productColumns is the single source of truth for the product scan order:
+// scanProduct, the inline scan in ListProducts and the product scan in
+// BuildPublicMenu all read the columns in exactly this order.
 const productColumns = `id, business_id, category_id, translations, price, compare_price,
-	image_url, allergens, is_active, is_featured, position, created_at, updated_at`
+	calories, image_url, allergens, badges, is_active, is_featured, position,
+	created_at, updated_at`
 
 func scanProduct(row pgx.Row) (*models.Product, error) {
 	var product models.Product
 	err := row.Scan(&product.ID, &product.BusinessID, &product.CategoryID, &product.Translations,
-		&product.Price, &product.ComparePrice, &product.ImageURL, &product.Allergens,
-		&product.IsActive, &product.IsFeatured, &product.Position,
-		&product.CreatedAt, &product.UpdatedAt)
+		&product.Price, &product.ComparePrice, &product.Calories, &product.ImageURL,
+		&product.Allergens, &product.Badges, &product.IsActive, &product.IsFeatured,
+		&product.Position, &product.CreatedAt, &product.UpdatedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, ErrNotFound
@@ -38,6 +42,9 @@ func normalizeProduct(product *models.Product) {
 	}
 	if product.Allergens == nil {
 		product.Allergens = []string{}
+	}
+	if product.Badges == nil {
+		product.Badges = models.Badges{}
 	}
 }
 
@@ -61,8 +68,8 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 
 	query := `
 		SELECT p.id, p.business_id, p.category_id, p.translations, p.price, p.compare_price,
-		       p.image_url, p.allergens, p.is_active, p.is_featured, p.position,
-		       p.created_at, p.updated_at
+		       p.calories, p.image_url, p.allergens, p.badges, p.is_active, p.is_featured,
+		       p.position, p.created_at, p.updated_at
 		FROM products p
 		JOIN categories c ON c.id = p.category_id
 		WHERE ` + strings.Join(conditions, " AND ") + `
@@ -78,8 +85,9 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 	for rows.Next() {
 		var product models.Product
 		if err := rows.Scan(&product.ID, &product.BusinessID, &product.CategoryID,
-			&product.Translations, &product.Price, &product.ComparePrice, &product.ImageURL,
-			&product.Allergens, &product.IsActive, &product.IsFeatured, &product.Position,
+			&product.Translations, &product.Price, &product.ComparePrice, &product.Calories,
+			&product.ImageURL, &product.Allergens, &product.Badges, &product.IsActive,
+			&product.IsFeatured, &product.Position,
 			&product.CreatedAt, &product.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -98,11 +106,16 @@ func GetProduct(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.P
 
 // CreateProduct appends a product to the end of its category.
 func CreateProduct(ctx context.Context, db DB, businessID, categoryID uuid.UUID,
-	translations models.Translations, price float64, comparePrice *float64,
-	imageURL *string, allergens []string, isActive, isFeatured bool) (*models.Product, error) {
+	translations models.Translations, price float64, comparePrice *float64, calories *int,
+	imageURL *string, allergens []string, badges models.Badges,
+	isActive, isFeatured bool) (*models.Product, error) {
 
 	if allergens == nil {
 		allergens = []string{}
+	}
+	// badges is a NOT NULL jsonb column, so a nil slice becomes an empty array.
+	if badges == nil {
+		badges = models.Badges{}
 	}
 
 	var nextPosition int
@@ -115,17 +128,18 @@ func CreateProduct(ctx context.Context, db DB, businessID, categoryID uuid.UUID,
 
 	return scanProduct(db.QueryRow(ctx, `
 		INSERT INTO products (business_id, category_id, translations, price, compare_price,
-		                      image_url, allergens, is_active, is_featured, position)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                      calories, image_url, allergens, badges, is_active, is_featured,
+		                      position)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+productColumns,
-		businessID, categoryID, translations, price, comparePrice,
-		imageURL, allergens, isActive, isFeatured, nextPosition))
+		businessID, categoryID, translations, price, comparePrice, calories,
+		imageURL, allergens, badges, isActive, isFeatured, nextPosition))
 }
 
 var productUpdatableColumns = map[string]bool{
 	"category_id": true, "translations": true, "price": true, "compare_price": true,
-	"image_url": true, "allergens": true, "is_active": true, "is_featured": true,
-	"position": true,
+	"calories": true, "image_url": true, "allergens": true, "badges": true,
+	"is_active": true, "is_featured": true, "position": true,
 }
 
 // UpdateProduct applies a partial update to the given columns.

@@ -21,6 +21,9 @@ const ICON_OPTIONS = [
  * @param {object|null} category        - null creates a new record
  * @param {string[]}    languages       - the business' menu languages, e.g. ['tr','en']
  * @param {string}      defaultLanguage - the language in which the name is required
+ * @param {string}      menuId          - the menu a NEW category is created in;
+ *                                        omitted, the API falls back to the
+ *                                        business' default menu
  * @param {Function}    onSaved         - (category) => void
  */
 export default function CategoryModal({
@@ -29,6 +32,7 @@ export default function CategoryModal({
   category,
   languages,
   defaultLanguage,
+  menuId,
   onSaved,
 }) {
   const toast = useToast()
@@ -107,6 +111,10 @@ export default function CategoryModal({
       image_url: imageUrl || null,
       is_active: visible,
     }
+
+    // A new category belongs to the menu currently being edited. An existing one
+    // is never moved implicitly — that is the branch/menu assignment's job.
+    if (!category && menuId) payload.menu_id = menuId
 
     setSaving(true)
     try {

@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Info, Palette, Save } from 'lucide-react'
+import { Palette, Save } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
 import { THEMES } from '../../themes/themes'
 import { FONTS, loadAllFonts } from '../../themes/fonts'
+import {
+  DEFAULT_SPLASH_EXIT,
+  isValidSplashAnimation,
+  isValidSplashEasing,
+  SPLASH_DISPLAY_MODES,
+  SPLASH_EASINGS,
+  SPLASH_EXIT_ANIMATIONS,
+} from '../../themes/splash'
 import Loading from '../../components/ui/Loading.jsx'
+import ImageUploader from '../../components/ui/ImageUploader.jsx'
 import { useToast } from '../../components/ui/Toast.jsx'
 import LivePreview from '../../components/dashboard/LivePreview.jsx'
 
@@ -17,7 +26,16 @@ const DESIGN_FIELDS = [
   'splash_duration',
   'splash_bg_color',
   'splash_text',
+  'splash_logo_url',
+  'splash_headline',
+  'splash_exit_animation',
+  'splash_exit_easing',
+  'splash_exit_duration',
+  'splash_display',
 ]
+
+/* Fields sent as numbers even though the inputs hand back strings */
+const NUMERIC_FIELDS = ['splash_duration', 'splash_exit_duration']
 
 const PRESET_COLORS = [
   '#1d4ed8',
@@ -51,20 +69,15 @@ function safeColor(value, fallback) {
   return isValidColor(value) ? value : fallback
 }
 
-/** 1200 -> "1,2 saniye" */
+/**
+ * 1200 -> "1,2 saniye", 450 -> "0,45 saniye".
+ * One decimal is enough for the hold duration, but the exit animation is set in
+ * 50 ms steps, so a second decimal is kept when it carries information.
+ */
 function formatDuration(milliseconds) {
   const seconds = Number(milliseconds || 0) / 1000
-  return `${seconds.toFixed(1).replace('.', ',')} saniye`
-}
-
-/** White text on dark backgrounds, dark text on light ones. */
-function textColorOn(hex) {
-  if (!isValidColor(hex)) return '#ffffff'
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  const luminance = (r * 299 + g * 587 + b * 114) / 1000
-  return luminance > 150 ? '#111827' : '#ffffff'
+  const text = seconds.toFixed(2).replace(/0$/, '')
+  return `${text.replace('.', ',')} saniye`
 }
 
 export default function Design() {
@@ -101,6 +114,19 @@ export default function Design() {
   const primaryColorInvalid = !isValidColor(draft.primary_color)
   const splashBackgroundInvalid = !isValidColor(draft.splash_bg_color)
 
+  // The selects are controlled, so a value the catalogue does not know would
+  // leave them blank — every one of them falls back to the column default.
+  const splashExitAnimation = isValidSplashAnimation(draft.splash_exit_animation)
+    ? draft.splash_exit_animation
+    : DEFAULT_SPLASH_EXIT.animation
+  const splashExitEasing = isValidSplashEasing(draft.splash_exit_easing)
+    ? draft.splash_exit_easing
+    : DEFAULT_SPLASH_EXIT.easing
+  const splashExitDuration = Number(draft.splash_exit_duration) || DEFAULT_SPLASH_EXIT.duration
+  const splashDisplay = SPLASH_DISPLAY_MODES.some((mode) => mode.id === draft.splash_display)
+    ? draft.splash_display
+    : 'both'
+
   const revert = () => {
     setDraft({ ...business })
   }
@@ -120,7 +146,20 @@ export default function Design() {
     // Send only the fields that actually changed.
     const body = {}
     changedFields.forEach((field) => {
-      body[field] = field === 'splash_duration' ? Number(draft[field]) : draft[field]
+      if (NUMERIC_FIELDS.includes(field)) {
+        body[field] = Number(draft[field])
+        return
+      }
+      if (field === 'splash_logo_url') {
+        // An empty logo clears the column instead of storing "".
+        body.splash_logo_url = draft.splash_logo_url || null
+        return
+      }
+      if (field === 'splash_headline') {
+        body.splash_headline = String(draft.splash_headline || '').trim()
+        return
+      }
+      body[field] = draft[field]
     })
 
     setSaving(true)
@@ -166,7 +205,7 @@ export default function Design() {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_clamp(340px,30vw,460px)]">
         {/* ------------------------------------------------------ left column */}
         <div className="min-w-0 space-y-6">
           {/* 1. Theme */}
@@ -319,7 +358,7 @@ export default function Design() {
                 <h2 className="text-base font-semibold text-gray-900">Karşılama Ekranı</h2>
                 <p className="help-text max-w-xl">
                   Menü açıldığında logonuzla birlikte kısa bir karşılama ekranı gösterilir.
-                  Yalnızca müşteri menüsünde görünür, panelde çalışmaz.
+                  Müşterilere oturum başına yalnızca bir kez görünür.
                 </p>
               </div>
 
@@ -342,8 +381,151 @@ export default function Design() {
             </div>
 
             <div className={`mt-5 grid gap-5 lg:grid-cols-2 ${splashEnabled ? '' : 'opacity-60'}`}>
+              {/* ------------------------------------------- logo and text */}
               <div className="space-y-5">
-                {/* Duration */}
+                {/* What the splash screen shows */}
+                <div>
+                  <span className="label">Görünüm</span>
+                  <div
+                    className="inline-flex flex-wrap rounded-lg border border-gray-200 bg-gray-50 p-1"
+                    role="group"
+                    aria-label="Karşılama ekranı görünümü"
+                  >
+                    {SPLASH_DISPLAY_MODES.map((mode) => {
+                      const isSelected = splashDisplay === mode.id
+                      return (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          onClick={() => update('splash_display', mode.id)}
+                          disabled={!splashEnabled}
+                          aria-pressed={isSelected}
+                          className={`rounded-md px-3 py-1.5 text-sm disabled:cursor-not-allowed ${
+                            isSelected
+                              ? 'bg-white font-medium text-gray-900 shadow-card'
+                              : 'text-gray-500 hover:text-gray-700'
+                          }`}
+                        >
+                          {mode.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="help-text">
+                    Sadece yazı seçilirse logo gösterilmez, sadece logo seçilirse başlık ve alt
+                    başlık gizlenir.
+                  </p>
+                </div>
+
+                <div>
+                  <ImageUploader
+                    value={draft.splash_logo_url || null}
+                    onChange={(url) => update('splash_logo_url', url)}
+                    label="Karşılama logosu"
+                    hint="Yatay logolar desteklenir · SVG, PNG veya JPG"
+                  />
+                  <p className="help-text">Boş bırakırsanız işletme logonuz kullanılır.</p>
+                </div>
+
+                {/* Headline */}
+                <div>
+                  <label htmlFor="splash-headline" className="label">
+                    Karşılama başlığı (opsiyonel)
+                  </label>
+                  <input
+                    id="splash-headline"
+                    type="text"
+                    className="input"
+                    value={draft.splash_headline || ''}
+                    onChange={(event) => update('splash_headline', event.target.value.slice(0, 60))}
+                    placeholder={draft.name || 'Kahve Durağı'}
+                    maxLength={60}
+                    disabled={!splashEnabled}
+                  />
+                  <p className="help-text">
+                    Boş bırakırsanız gösterilmez ·{' '}
+                    {(draft.splash_headline || '').length} / 60 karakter
+                  </p>
+                </div>
+
+                {/* Tagline */}
+                <div>
+                  <label htmlFor="splash-text" className="label">
+                    Alt başlık (opsiyonel)
+                  </label>
+                  <input
+                    id="splash-text"
+                    type="text"
+                    className="input"
+                    value={draft.splash_text || ''}
+                    onChange={(event) => update('splash_text', event.target.value.slice(0, 200))}
+                    placeholder="Hoş geldiniz"
+                    maxLength={200}
+                    disabled={!splashEnabled}
+                  />
+                  <p className="help-text">{(draft.splash_text || '').length} / 200 karakter</p>
+                </div>
+              </div>
+
+              {/* --------------------------------------- colour and timing */}
+              <div className="space-y-5">
+                {/* Background colour */}
+                <div>
+                  <span className="label">Arka plan rengi</span>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <input
+                      type="color"
+                      value={splashBackground}
+                      onChange={(event) => update('splash_bg_color', event.target.value)}
+                      disabled={!splashEnabled}
+                      aria-label="Karşılama arka plan rengi seçici"
+                      className="h-11 w-14 shrink-0 cursor-pointer rounded-lg border border-gray-300 bg-white p-1 disabled:cursor-not-allowed"
+                    />
+                    <div className="w-40">
+                      <input
+                        type="text"
+                        value={draft.splash_bg_color || ''}
+                        onChange={(event) => update('splash_bg_color', event.target.value.trim())}
+                        placeholder="#0f172a"
+                        maxLength={7}
+                        disabled={!splashEnabled}
+                        aria-label="Karşılama arka plan renk kodu"
+                        className={`input font-mono uppercase ${
+                          splashBackgroundInvalid
+                            ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
+                            : ''
+                        }`}
+                      />
+                      {splashBackgroundInvalid ? (
+                        <p className="error-text">#RRGGBB biçiminde yazın.</p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {PRESET_SPLASH_COLORS.map((color) => {
+                      const isSelected = String(draft.splash_bg_color || '').toLowerCase() === color
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() => update('splash_bg_color', color)}
+                          disabled={!splashEnabled}
+                          title={color}
+                          aria-label={`Arka planı ${color} yap`}
+                          className={`h-9 w-9 rounded-lg border disabled:cursor-not-allowed ${
+                            isSelected
+                              ? 'border-transparent ring-2 ring-brand-600'
+                              : 'border-gray-200'
+                          }`}
+                          style={{ backgroundColor: color }}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Hold duration */}
                 <div>
                   <div className="flex items-center justify-between gap-3">
                     <label htmlFor="splash-duration" className="label mb-0">
@@ -370,133 +552,89 @@ export default function Design() {
                   </div>
                 </div>
 
-                {/* Background colour */}
+                {/* Exit animation */}
                 <div>
-                  <span className="label">Arka plan rengi</span>
-                  <div className="flex flex-wrap items-start gap-3">
-                    <input
-                      type="color"
-                      value={splashBackground}
-                      onChange={(event) => update('splash_bg_color', event.target.value)}
-                      disabled={!splashEnabled}
-                      aria-label="Karşılama arka plan rengi seçici"
-                      className="h-11 w-14 shrink-0 cursor-pointer rounded-lg border border-gray-300 bg-white p-1 disabled:cursor-not-allowed"
-                    />
-                    <div className="w-40">
-                      <input
-                        type="text"
-                        value={draft.splash_bg_color || ''}
-                        onChange={(event) =>
-                          update('splash_bg_color', event.target.value.trim())
-                        }
-                        placeholder="#0f172a"
-                        maxLength={7}
-                        disabled={!splashEnabled}
-                        aria-label="Karşılama arka plan renk kodu"
-                        className={`input font-mono uppercase ${
-                          splashBackgroundInvalid
-                            ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
-                            : ''
-                        }`}
-                      />
-                      {splashBackgroundInvalid ? (
-                        <p className="error-text">#RRGGBB biçiminde yazın.</p>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {PRESET_SPLASH_COLORS.map((color) => {
-                      const isSelected =
-                        String(draft.splash_bg_color || '').toLowerCase() === color
-                      return (
-                        <button
-                          key={color}
-                          type="button"
-                          onClick={() => update('splash_bg_color', color)}
-                          disabled={!splashEnabled}
-                          title={color}
-                          aria-label={`Arka planı ${color} yap`}
-                          className={`h-9 w-9 rounded-lg border disabled:cursor-not-allowed ${
-                            isSelected
-                              ? 'border-transparent ring-2 ring-brand-600'
-                              : 'border-gray-200'
-                          }`}
-                          style={{ backgroundColor: color }}
-                        />
-                      )
-                    })}
-                  </div>
-                </div>
-
-                {/* Text */}
-                <div>
-                  <label htmlFor="splash-text" className="label">
-                    Karşılama metni
+                  <label htmlFor="splash-exit-animation" className="label">
+                    Çıkış animasyonu
                   </label>
-                  <input
-                    id="splash-text"
-                    type="text"
+                  <select
+                    id="splash-exit-animation"
                     className="input"
-                    value={draft.splash_text || ''}
-                    onChange={(event) => update('splash_text', event.target.value.slice(0, 200))}
-                    placeholder="Hoş geldiniz"
-                    maxLength={200}
+                    value={splashExitAnimation}
+                    onChange={(event) => update('splash_exit_animation', event.target.value)}
                     disabled={!splashEnabled}
-                  />
-                  <p className="help-text">{(draft.splash_text || '').length} / 200 karakter</p>
-                </div>
-              </div>
-
-              {/* Static preview box */}
-              <div>
-                <span className="label">Önizleme</span>
-                <div
-                  className="flex h-56 flex-col items-center justify-center gap-3 rounded-xl border border-gray-200 px-6 text-center"
-                  style={{ backgroundColor: splashBackground }}
-                >
-                  {draft.logo_url ? (
-                    <img
-                      src={draft.logo_url}
-                      alt=""
-                      className="h-16 w-16 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div
-                      className="flex h-16 w-16 items-center justify-center rounded-full text-lg font-semibold"
-                      style={{
-                        backgroundColor: primaryColor,
-                        color: textColorOn(primaryColor),
-                      }}
-                    >
-                      {(draft.name || 'K').trim().charAt(0).toUpperCase()}
-                    </div>
-                  )}
-
-                  <p
-                    className="text-base font-medium"
-                    style={{ color: textColorOn(splashBackground) }}
                   >
-                    {draft.splash_text || 'Hoş geldiniz'}
-                  </p>
+                    {SPLASH_EXIT_ANIMATIONS.map((animation) => (
+                      <option key={animation.id} value={animation.id}>
+                        {animation.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="help-text">Karşılama ekranı menüye bu şekilde geçer.</p>
                 </div>
 
-                <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
-                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
-                  <p className="text-xs leading-snug text-blue-800">
-                    Karşılama ekranı yalnızca müşteriler menüyü ilk açtığında görünür; sağdaki
-                    canlı önizlemede gösterilmez.
-                  </p>
+                {/* Exit easing */}
+                <div>
+                  <label htmlFor="splash-exit-easing" className="label">
+                    Animasyon eğrisi
+                  </label>
+                  <select
+                    id="splash-exit-easing"
+                    className="input"
+                    value={splashExitEasing}
+                    onChange={(event) => update('splash_exit_easing', event.target.value)}
+                    disabled={!splashEnabled}
+                  >
+                    {SPLASH_EASINGS.map((easing) => (
+                      <option key={easing.id} value={easing.id}>
+                        {easing.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="help-text">Çıkış animasyonunun hızlanma ve yavaşlama şekli.</p>
+                </div>
+
+                {/* Exit duration */}
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label htmlFor="splash-exit-duration" className="label mb-0">
+                      Çıkış süresi
+                    </label>
+                    <span className="text-sm font-medium text-gray-900">
+                      {formatDuration(splashExitDuration)}
+                    </span>
+                  </div>
+                  <input
+                    id="splash-exit-duration"
+                    type="range"
+                    min={100}
+                    max={2000}
+                    step={50}
+                    value={splashExitDuration}
+                    onChange={(event) => update('splash_exit_duration', Number(event.target.value))}
+                    disabled={!splashEnabled}
+                    className="mt-2 w-full accent-brand-600 disabled:cursor-not-allowed"
+                  />
+                  <div className="mt-1 flex justify-between text-[11px] text-gray-400">
+                    <span>0,1 sn</span>
+                    <span>2,0 sn</span>
+                  </div>
                 </div>
               </div>
             </div>
+
+            <p className="help-text mt-5">
+              Sağdaki önizlemede{' '}
+              <b className="font-medium text-gray-700">Karşılama ekranını oynat</b> düğmesine basarak
+              nasıl göründüğünü deneyebilirsiniz.
+            </p>
           </section>
         </div>
 
         {/* ----------------------------------------------------- right column */}
         <div className="min-w-0">
           <div className="xl:sticky xl:top-6">
-            <LivePreview business={draft} refresh={0} />
+            <LivePreview business={draft} refresh={0} showSplashControl />
           </div>
         </div>
       </div>
