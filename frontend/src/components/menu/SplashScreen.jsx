@@ -44,6 +44,24 @@ const ANIMATION_STYLE = `
   from { opacity: 1; transform: translateX(0); }
   to   { opacity: 0; transform: translateX(100%); }
 }
+/* The same four slides without the fade: a solid curtain sliding away.
+   Opacity is pinned so the panel cannot inherit a fade from anywhere. */
+@keyframes karecikSplashSolidUp {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(-100%); }
+}
+@keyframes karecikSplashSolidDown {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(100%); }
+}
+@keyframes karecikSplashSolidLeft {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 1; transform: translateX(-100%); }
+}
+@keyframes karecikSplashSolidRight {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 1; transform: translateX(100%); }
+}
 @keyframes karecikSplashOutZoomIn {
   from { opacity: 1; transform: scale(1); }
   to   { opacity: 0; transform: scale(1.25); }
@@ -74,6 +92,18 @@ const EXIT_KEYFRAMES = {
   'zoom-in': 'karecikSplashOutZoomIn',
   'zoom-out': 'karecikSplashOutZoomOut',
   fade: 'karecikSplashOutFade',
+}
+
+/**
+ * The solid-curtain variants of the four slide exits: identical movement, but
+ * the panel keeps 100% opacity all the way out. Picked when the menu sets
+ * splash_slide_fade to false; every non-slide animation ignores the flag.
+ */
+const SOLID_SLIDE_KEYFRAMES = {
+  'slide-up': 'karecikSplashSolidUp',
+  'slide-down': 'karecikSplashSolidDown',
+  'slide-left': 'karecikSplashSolidLeft',
+  'slide-right': 'karecikSplashSolidRight',
 }
 
 /** "#0f172a" or "#fff" -> { r, g, b }; null when unparseable. */
@@ -125,8 +155,16 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
       ? Math.min(Math.max(configuredExit, 100), 2000)
       : 450
 
+  // splash_slide_fade only ever applies to the four slide-* exits: false keeps
+  // the panel fully opaque so it leaves like a curtain. A missing flag means
+  // "fade", which mirrors the column default.
+  const exitAnimation = business?.splash_exit_animation
+  const solidSlide =
+    business?.splash_slide_fade === false && Boolean(SOLID_SLIDE_KEYFRAMES[exitAnimation])
+
   const exitKeyframes =
-    EXIT_KEYFRAMES[business?.splash_exit_animation] || EXIT_KEYFRAMES.fade
+    (solidSlide ? SOLID_SLIDE_KEYFRAMES[exitAnimation] : EXIT_KEYFRAMES[exitAnimation]) ||
+    EXIT_KEYFRAMES.fade
 
   // The easing goes straight into the `animation` shorthand, where an unknown
   // keyword would invalidate the whole declaration — hence the catalogue check.

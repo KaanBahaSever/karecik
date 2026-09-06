@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { useAuth } from './lib/auth.jsx'
-import { BranchMenuProvider } from './lib/branchContext.jsx'
+import { MenuProvider } from './lib/menuContext.jsx'
 import { getSubdomain } from './lib/subdomain'
 import Loading from './components/ui/Loading.jsx'
 
@@ -12,10 +12,8 @@ import CustomerMenu from './pages/menu/CustomerMenu.jsx'
 
 import DashboardLayout from './pages/dashboard/DashboardLayout.jsx'
 import MenuEditor from './pages/dashboard/MenuEditor.jsx'
-import Branches from './pages/dashboard/Branches.jsx'
-import Design from './pages/dashboard/Design.jsx'
-import Settings from './pages/dashboard/Settings.jsx'
-import QrCode from './pages/dashboard/QrCode.jsx'
+import MenuSettings from './pages/dashboard/MenuSettings.jsx'
+import QrHub from './pages/dashboard/QrHub.jsx'
 
 /** Guards routes that require an active session. */
 function ProtectedRoute({ children }) {
@@ -27,18 +25,26 @@ function ProtectedRoute({ children }) {
 }
 
 export default function App() {
-  // When the visitor arrives through a subdomain such as
-  // kahve-duragi.karecik.com, every path renders that business' customer menu.
+  //   {business-slug}.karecik.com / {menu-slug}
+  //    └── identifies the tenant   └── identifies one menu within that tenant
+  //
+  // The subdomain names the BUSINESS, never a menu — menu slugs are unique only
+  // within a business, so the path is what picks one out.
   const subdomain = getSubdomain()
 
   if (subdomain) {
-    // A business may publish several menus; on a subdomain the first path
-    // segment selects one (kahve-duragi.karecik.com/kahvalti).
     return (
       <Routes>
-        <Route path="/" element={<CustomerMenu slug={subdomain} />} />
-        <Route path="/:menuSlug" element={<CustomerMenu slug={subdomain} />} />
-        <Route path="*" element={<CustomerMenu slug={subdomain} />} />
+        {/* The bare tenant address. CustomerMenu decides from the payload:
+            one menu -> replace the address with that menu's own URL,
+            two or more -> the directory, none -> the empty placeholder. */}
+        <Route path="/" element={<CustomerMenu businessSlug={subdomain} />} />
+
+        {/* One menu of this tenant */}
+        <Route path="/:menuSlug" element={<CustomerMenu businessSlug={subdomain} />} />
+
+        {/* Nothing deeper than one segment exists under a tenant subdomain */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     )
   }
@@ -49,34 +55,32 @@ export default function App() {
       <Route path="/giris" element={<Login />} />
       <Route path="/kayit" element={<SignUp />} />
 
-      {/* Path-based menu access — needs no hosts file entry */}
-      <Route path="/m/:slug" element={<CustomerMenu />} />
+      {/* Path-based menu access — needs no hosts file entry. Both segments are
+          required to name a menu; the first one alone is the tenant address. */}
+      <Route path="/m/:businessSlug" element={<CustomerMenu />} />
+      <Route path="/m/:businessSlug/:menuSlug" element={<CustomerMenu />} />
 
-      {/* Branch menus: /b/<branch> and /b/<branch>/<menu> */}
-      <Route path="/b/:branchSlug" element={<CustomerMenu />} />
-      <Route path="/b/:branchSlug/:menuSlug" element={<CustomerMenu />} />
-
-      {/* Demo menu rendered inside the iPhone frame on the landing page */}
-      <Route path="/demo" element={<CustomerMenu slug="demo-kafe" embedded />} />
+      {/* Demo tenant rendered inside the iPhone frame on the landing page. No
+          menu slug: the seed gives melly-coffee a single menu, which the backend
+          resolves on its own — and being embedded, this never navigates. */}
+      <Route path="/demo" element={<CustomerMenu businessSlug="melly-coffee" embedded />} />
 
       <Route
         path="/panel"
         element={
           <ProtectedRoute>
-            {/* The branch / menu selection is shared by every dashboard page,
-                and only by them: the landing page and the customer menu have no
-                session, so the provider must stay inside the guard. */}
-            <BranchMenuProvider>
+            {/* The menu being edited is shared by every dashboard page, and only
+                by them: the landing page and the customer menu have no session,
+                so the provider must stay inside the guard. */}
+            <MenuProvider>
               <DashboardLayout />
-            </BranchMenuProvider>
+            </MenuProvider>
           </ProtectedRoute>
         }
       >
         <Route index element={<MenuEditor />} />
-        <Route path="subeler" element={<Branches />} />
-        <Route path="tasarim" element={<Design />} />
-        <Route path="ayarlar" element={<Settings />} />
-        <Route path="qr" element={<QrCode />} />
+        <Route path="ayarlar" element={<MenuSettings />} />
+        <Route path="qr" element={<QrHub />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

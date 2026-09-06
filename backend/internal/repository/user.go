@@ -51,7 +51,11 @@ func EmailExists(ctx context.Context, db DB, email string) (bool, error) {
 	return exists, err
 }
 
-// CreateAccount creates the user and the business inside a single transaction.
+// CreateAccount creates the user and the business inside a single transaction —
+// and nothing more. A brand new tenant owns zero menus: the account is the
+// subdomain, a menu is a path under it, and which menus exist is the owner's
+// decision from the first minute.
+//
 // The slug is derived from the business name; on a collision -2, -3 ... is added.
 func CreateAccount(ctx context.Context, pool *pgxpool.Pool,
 	businessName, email, passwordHash string) (*models.User, *models.Business, error) {
@@ -95,8 +99,13 @@ func CreateAccount(ctx context.Context, pool *pgxpool.Pool,
 }
 
 // uniqueSlug returns the first free slug variant: kahve, kahve-2, kahve-3 ...
-// Branch slugs live in the same subdomain namespace and are resolved before
-// business slugs, so a candidate already taken by a branch is skipped too.
+//
+// This is the BUSINESS slug — the subdomain — so the candidates are checked
+// against businesses.slug and the namespace is global. A candidate reserved by
+// the system is skipped as well, because a hostname label like "admin" or
+// "www" could never be served. Menu slugs are the opposite in both respects:
+// they are path segments, scoped to one business and never reserved-checked —
+// see EnsureUniqueMenuSlug.
 func uniqueSlug(ctx context.Context, db DB, base string) (string, error) {
 	if utils.IsReservedSlug(base) {
 		base += "-menu"
@@ -104,18 +113,16 @@ func uniqueSlug(ctx context.Context, db DB, base string) (string, error) {
 
 	candidate := base
 	for i := 2; i < 200; i++ {
-		var exists bool
+		var taken bool
 		err := db.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM businesses WHERE slug = $1)
-			     OR EXISTS (SELECT 1 FROM branches WHERE slug = $1)`,
-			candidate).Scan(&exists)
+			`SELECT EXISTS (SELECT 1 FROM businesses WHERE slug = $1)`, candidate).Scan(&taken)
 		if err != nil {
 			return "", err
 		}
-		if !exists {
+		if !taken && !utils.IsReservedSlug(candidate) {
 			return candidate, nil
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
-	return "", fmt.Errorf("could not generate a free menu address")
+	return "", fmt.Errorf("could not generate a free business address")
 }

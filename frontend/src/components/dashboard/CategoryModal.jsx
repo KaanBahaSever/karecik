@@ -21,9 +21,11 @@ const ICON_OPTIONS = [
  * @param {object|null} category        - null creates a new record
  * @param {string[]}    languages       - the business' menu languages, e.g. ['tr','en']
  * @param {string}      defaultLanguage - the language in which the name is required
- * @param {string}      menuId          - the menu a NEW category is created in;
- *                                        omitted, the API falls back to the
- *                                        business' default menu
+ * @param {string}      menuId          - the menu a NEW category is created in.
+ *                                        There is no default menu to fall back
+ *                                        to, so the API answers 422 without it;
+ *                                        MenuEditor only mounts this dialog once
+ *                                        a menu is selected.
  * @param {Function}    onSaved         - (category) => void
  */
 export default function CategoryModal({
@@ -112,8 +114,9 @@ export default function CategoryModal({
       is_active: visible,
     }
 
-    // A new category belongs to the menu currently being edited. An existing one
-    // is never moved implicitly — that is the branch/menu assignment's job.
+    // A new category belongs to the menu currently being edited, and the server
+    // requires it — nothing picks a menu on the user's behalf. An existing
+    // category is never moved implicitly; it stays in the menu it was created in.
     if (!category && menuId) payload.menu_id = menuId
 
     setSaving(true)

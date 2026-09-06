@@ -77,7 +77,18 @@ export default function Landing() {
           {/* right column: a real sample menu built on the platform */}
           <div className="flex justify-center lg:justify-end">
             <PhoneFrame>
-              <iframe src="/demo" title={t.demoTitle} className="h-full w-full border-0" />
+              {/*
+                No `scrolling="no"` here: it would take the touch scrolling with
+                it, and the whole point of the mockup is that the menu inside is
+                real and can be browsed. The bar is hidden instead — `no-scrollbar`
+                on the frame and on the iframe element, plus the same class that
+                CustomerMenu puts on the embedded document while it is embedded.
+              */}
+              <iframe
+                src="/demo"
+                title={t.demoTitle}
+                className="no-scrollbar h-full w-full border-0"
+              />
             </PhoneFrame>
           </div>
         </section>

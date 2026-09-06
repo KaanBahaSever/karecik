@@ -3,47 +3,11 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 
 import { useAuth } from '../lib/auth.jsx'
+import { slugify } from '../lib/slugify'
+import { APP_DOMAIN } from '../lib/subdomain'
 import { useToast } from '../components/ui/Toast.jsx'
 import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
-
-/* ASCII equivalents of Turkish letters — used when building the slug. */
-const TURKISH_ASCII = {
-  ç: 'c',
-  Ç: 'c',
-  ğ: 'g',
-  Ğ: 'g',
-  ı: 'i',
-  I: 'i',
-  İ: 'i',
-  i: 'i',
-  ö: 'o',
-  Ö: 'o',
-  ş: 's',
-  Ş: 's',
-  ü: 'u',
-  Ü: 'u',
-}
-
-/**
- * Builds the menu address (slug) from a business name.
- * "Kahve Durağı" -> "kahve-duragi"
- *
- * Mirrors Slugify() in backend/internal/utils/slug.go.
- */
-function buildSlug(text) {
-  const ascii = String(text || '')
-    .split('')
-    .map((letter) => TURKISH_ASCII[letter] || letter)
-    .join('')
-
-  return ascii
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '')
-}
 
 /** Karecik brand lockup, linking back to the landing page. */
 function BrandLogo() {
@@ -66,7 +30,14 @@ export default function SignUp() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  const slug = buildSlug(businessName)
+  // The BUSINESS slug — the subdomain the account is reached at. Sign-up creates
+  // no menu, so there is no menu address to preview yet; menus are published as
+  // paths under this host.
+  //
+  // The empty fallback is deliberate: the server would name a nameless business
+  // "isletme", but asking for a letter or a digit is better than handing someone
+  // an address they never chose. The validation below relies on it.
+  const slug = slugify(businessName, '')
 
   async function onSubmit(event) {
     event.preventDefault()
@@ -146,10 +117,11 @@ export default function SignUp() {
                 disabled={submitting}
               />
               <p className="help-text">
-                Menü adresiniz:{' '}
+                İşletme adresiniz:{' '}
                 <span className="font-medium text-gray-700">
-                  {slug || 'isletmeniz'}.karecik.com
-                </span>
+                  {slug || 'isletmeniz'}.{APP_DOMAIN}
+                </span>{' '}
+                — menüleriniz bu adresin altında yayınlanır.
               </p>
             </div>
 

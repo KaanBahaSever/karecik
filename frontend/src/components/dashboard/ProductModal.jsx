@@ -41,6 +41,57 @@ function badgeRowsOf(product) {
   )
 }
 
+/** Mirrors models.MaxOptionGroups / MaxOptionItems / MaxOptionNameRunes. */
+const MAX_OPTION_GROUPS = 8
+const MAX_OPTION_ITEMS = 20
+const MAX_OPTION_NAME = 60
+
+/** The two group types the backend accepts (models.OptionType*). */
+const OPTION_TYPES = [
+  { value: 'single', label: 'Tek seçim' },
+  { value: 'multiple', label: 'Çoklu seçim' },
+]
+
+/* Option groups and their items have no id at all, so — exactly like the badge
+   rows above — the editor keeps a local `uid` purely as the React key. Both are
+   stripped before the payload is sent. */
+let optionGroupCounter = 0
+let optionItemCounter = 0
+
+function newOptionItem(values) {
+  optionItemCounter += 1
+  return { uid: `option-item-${optionItemCounter}`, name: '', price: '', ...(values || {}) }
+}
+
+function newOptionGroup(values) {
+  optionGroupCounter += 1
+  return {
+    uid: `option-group-${optionGroupCounter}`,
+    name: '',
+    type: OPTION_TYPES[0].value,
+    required: false,
+    items: [newOptionItem()],
+    ...(values || {}),
+  }
+}
+
+/** Turns the stored option array into editable rows. */
+function optionGroupsOf(product) {
+  if (!Array.isArray(product?.options)) return []
+  return product.options.map((group) =>
+    newOptionGroup({
+      name: group?.name || '',
+      type: group?.type === 'multiple' ? 'multiple' : 'single',
+      required: Boolean(group?.required),
+      items: Array.isArray(group?.items)
+        ? group.items.map((item) =>
+            newOptionItem({ name: item?.name || '', price: priceToInput(item?.price) }),
+          )
+        : [],
+    }),
+  )
+}
+
 /** Checks that an input such as "145,00" / "145.00" can be parsed as a number. */
 function isValidPriceText(text) {
   const clean = String(text ?? '').trim()
@@ -103,6 +154,7 @@ export default function ProductModal({
   const [imageUrl, setImageUrl] = useState(null)
   const [allergens, setAllergens] = useState([])
   const [badges, setBadges] = useState([])
+  const [optionGroups, setOptionGroups] = useState([])
   const [visible, setVisible] = useState(true)
   const [featured, setFeatured] = useState(false)
   const [errors, setErrors] = useState({})
@@ -137,6 +189,7 @@ export default function ProductModal({
     setImageUrl(product?.image_url || null)
     setAllergens(Array.isArray(product?.allergens) ? [...product.allergens] : [])
     setBadges(badgeRowsOf(product))
+    setOptionGroups(optionGroupsOf(product))
     setVisible(product?.is_active !== false)
     setFeatured(Boolean(product?.is_featured))
     setActiveLanguage(primaryLanguage)
@@ -177,6 +230,59 @@ export default function ProductModal({
 
   function removeBadge(uid) {
     setBadges((previous) => previous.filter((badge) => badge.uid !== uid))
+  }
+
+  /* ------------------------------------------------------------ options */
+
+  function addOptionGroup() {
+    setOptionGroups((previous) =>
+      previous.length >= MAX_OPTION_GROUPS ? previous : [...previous, newOptionGroup()],
+    )
+  }
+
+  function updateOptionGroup(uid, patch) {
+    setOptionGroups((previous) =>
+      previous.map((group) => (group.uid === uid ? { ...group, ...patch } : group)),
+    )
+  }
+
+  function removeOptionGroup(uid) {
+    setOptionGroups((previous) => previous.filter((group) => group.uid !== uid))
+  }
+
+  function addOptionItem(groupUid) {
+    setOptionGroups((previous) =>
+      previous.map((group) =>
+        group.uid === groupUid && group.items.length < MAX_OPTION_ITEMS
+          ? { ...group, items: [...group.items, newOptionItem()] }
+          : group,
+      ),
+    )
+  }
+
+  function updateOptionItem(groupUid, itemUid, patch) {
+    setOptionGroups((previous) =>
+      previous.map((group) =>
+        group.uid === groupUid
+          ? {
+              ...group,
+              items: group.items.map((item) =>
+                item.uid === itemUid ? { ...item, ...patch } : item,
+              ),
+            }
+          : group,
+      ),
+    )
+  }
+
+  function removeOptionItem(groupUid, itemUid) {
+    setOptionGroups((previous) =>
+      previous.map((group) =>
+        group.uid === groupUid
+          ? { ...group, items: group.items.filter((item) => item.uid !== itemUid) }
+          : group,
+      ),
+    )
   }
 
   async function save() {
@@ -248,6 +354,20 @@ export default function ProductModal({
       })
       .filter((badge) => badge.text !== '')
 
+    // An unnamed group, or one nobody can answer, is dropped rather than
+    // rejected — a half-finished row must never block the save. `uid` is a
+    // local React key and never leaves the form.
+    const payloadOptions = optionGroups
+      .map((group) => ({
+        name: (group.name || '').trim(),
+        type: group.type === 'multiple' ? 'multiple' : 'single',
+        required: Boolean(group.required),
+        items: group.items
+          .map((item) => ({ name: (item.name || '').trim(), price: parsePrice(item.price) }))
+          .filter((item) => item.name !== ''),
+      }))
+      .filter((group) => group.name !== '' && group.items.length > 0)
+
     const payload = {
       category_id: categoryId,
       translations: payloadTranslations,
@@ -257,6 +377,7 @@ export default function ProductModal({
       image_url: imageUrl || null,
       allergens,
       badges: payloadBadges,
+      options: payloadOptions,
       is_active: visible,
       is_featured: featured,
     }
@@ -720,6 +841,199 @@ export default function ProductModal({
               ))}
 
               <p className="help-text">Metni boş bırakılan rozetler kaydedilmez.</p>
+            </div>
+          )}
+        </div>
+
+        {/* --------------------------------------------- options and extras */}
+        <div className="rounded-xl border border-gray-200 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <span className="label mb-0.5">Opsiyonlar ve ekstralar (opsiyonel)</span>
+              <p className="text-xs text-gray-500">
+                Müşteri ürünü açtığında seçer; fiyat farkı ürün fiyatına eklenir. En fazla{' '}
+                {MAX_OPTION_GROUPS} grup ekleyebilirsiniz.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={addOptionGroup}
+              disabled={optionGroups.length >= MAX_OPTION_GROUPS}
+              className="btn-secondary btn-sm shrink-0"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Grup ekle
+            </button>
+          </div>
+
+          {optionGroups.length === 0 ? (
+            <p className="mt-3 rounded-lg border border-dashed border-gray-300 px-3 py-4 text-center text-xs text-gray-500">
+              Henüz seçenek grubu yok. Örn. “Süt Tercihi”, “Porsiyon”, “Ek Şuruplar”.
+            </p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {optionGroups.map((group, groupIndex) => (
+                <div key={group.uid} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  {/* group name + remove */}
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <label className="sr-only" htmlFor={`option-group-${group.uid}`}>
+                        {groupIndex + 1}. grubun adı
+                      </label>
+                      <input
+                        id={`option-group-${group.uid}`}
+                        type="text"
+                        className="input bg-white py-2"
+                        value={group.name}
+                        onChange={(event) =>
+                          updateOptionGroup(group.uid, { name: event.target.value })
+                        }
+                        placeholder="Örn. Süt Tercihi"
+                        maxLength={MAX_OPTION_NAME}
+                        autoComplete="off"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeOptionGroup(group.uid)}
+                      className="shrink-0 rounded-md p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                      aria-label="Grubu kaldır"
+                      title="Grubu kaldır"
+                    >
+                      <X className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+
+                  {/* selection type + required */}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <div
+                      className="inline-flex rounded-lg border border-gray-200 bg-white p-1"
+                      role="group"
+                      aria-label="Seçim türü"
+                    >
+                      {OPTION_TYPES.map((option) => {
+                        const isSelected = group.type === option.value
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => updateOptionGroup(group.uid, { type: option.value })}
+                            aria-pressed={isSelected}
+                            className={`rounded-md px-3 py-1 text-xs ${
+                              isSelected
+                                ? 'bg-brand-50 font-medium text-brand-700'
+                                : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    <div className="inline-flex items-center gap-2">
+                      <span className="text-xs font-medium text-gray-600">Zorunlu</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={group.required}
+                        aria-label="Bu grup zorunlu"
+                        onClick={() =>
+                          updateOptionGroup(group.uid, { required: !group.required })
+                        }
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-100 ${
+                          group.required ? 'bg-brand-600' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                            group.required ? 'translate-x-[18px]' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* items — name + surcharge */}
+                  <div className="mt-3 space-y-2">
+                    {group.items.map((item, itemIndex) => (
+                      <div key={item.uid} className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <label className="sr-only" htmlFor={`option-item-${item.uid}`}>
+                            {itemIndex + 1}. seçeneğin adı
+                          </label>
+                          <input
+                            id={`option-item-${item.uid}`}
+                            type="text"
+                            className="input bg-white py-2"
+                            value={item.name}
+                            onChange={(event) =>
+                              updateOptionItem(group.uid, item.uid, { name: event.target.value })
+                            }
+                            placeholder="Örn. Yulaf Sütü"
+                            maxLength={MAX_OPTION_NAME}
+                            autoComplete="off"
+                          />
+                        </div>
+
+                        <div className="relative w-28 shrink-0">
+                          <label className="sr-only" htmlFor={`option-price-${item.uid}`}>
+                            {itemIndex + 1}. seçeneğin fiyat farkı
+                          </label>
+                          <input
+                            id={`option-price-${item.uid}`}
+                            type="text"
+                            inputMode="decimal"
+                            className="input bg-white py-2 pr-9"
+                            value={item.price}
+                            onChange={(event) =>
+                              updateOptionItem(group.uid, item.uid, { price: event.target.value })
+                            }
+                            onBlur={() => {
+                              if (isValidPriceText(item.price)) {
+                                updateOptionItem(group.uid, item.uid, {
+                                  price: priceToInput(parsePrice(item.price)),
+                                })
+                              }
+                            }}
+                            placeholder="0,00"
+                            autoComplete="off"
+                          />
+                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                            {symbol}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removeOptionItem(group.uid, item.uid)}
+                          className="shrink-0 rounded-md p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          aria-label="Seçeneği kaldır"
+                          title="Seçeneği kaldır"
+                        >
+                          <X className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={() => addOptionItem(group.uid)}
+                      disabled={group.items.length >= MAX_OPTION_ITEMS}
+                      className="btn-secondary btn-sm"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      Seçenek ekle
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              <p className="help-text">
+                Adı boş bırakılan gruplar ve seçenekler kaydedilmez. Fiyat farkı yoksa 0 bırakın.
+              </p>
             </div>
           )}
         </div>

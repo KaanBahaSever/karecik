@@ -16,8 +16,7 @@ import {
 import { LayoutList, Percent, Plus } from 'lucide-react'
 
 import api from '../../lib/api'
-import { useAuth } from '../../lib/auth.jsx'
-import { useBranchMenu } from '../../lib/branchContext.jsx'
+import { useActiveMenu } from '../../lib/menuContext.jsx'
 import { findLanguage } from '../../locales/index.js'
 
 import { useToast } from '../../components/ui/Toast.jsx'
@@ -30,6 +29,7 @@ import ProductRow from '../../components/dashboard/ProductRow.jsx'
 import CategoryModal from '../../components/dashboard/CategoryModal.jsx'
 import ProductModal from '../../components/dashboard/ProductModal.jsx'
 import BulkPriceModal from '../../components/dashboard/BulkPriceModal.jsx'
+import ActiveMenuBar from '../../components/dashboard/ActiveMenuBar.jsx'
 import LivePreview from '../../components/dashboard/LivePreview.jsx'
 
 /** Groups products by category_id and sorts each group by position. */
@@ -67,26 +67,31 @@ function getProductName(product, language) {
 }
 
 export default function MenuEditor() {
-  const { business } = useAuth()
   const toast = useToast()
 
   /* --------------------------------------------------------- active menu */
 
-  // The topbar switcher decides which menu is edited here. Until it has
-  // resolved one, nothing is fetched: an unscoped request would list every
+  // The bar at the top of the page decides which menu is edited here. Until it
+  // has resolved one, nothing is fetched: an unscoped request would list every
   // category of the business and be thrown away a moment later.
-  const { menus, activeBranch, activeMenu, loading: branchesLoading } = useBranchMenu()
+  const { activeMenu, loading: menusLoading } = useActiveMenu()
   const activeMenuID = activeMenu?.id || null
 
-  /* ------------------------------------------------------------ business */
+  // A business may own no menus at all. Neither the categories nor the forms
+  // below exist then — there is nothing to scope them to.
+  const hasMenu = Boolean(activeMenuID)
 
+  /* ---------------------------------------------------- menu settings */
+
+  // Languages, the default language and the currency belong to the menu, so
+  // switching menus re-labels the editor as well as reloading its content.
   const languages = useMemo(() => {
-    const list = business?.languages
+    const list = activeMenu?.languages
     return Array.isArray(list) && list.length > 0 ? list : ['tr']
-  }, [business])
+  }, [activeMenu])
 
-  const defaultLanguage = business?.default_language || languages[0] || 'tr'
-  const currency = business?.currency || 'TRY'
+  const defaultLanguage = activeMenu?.default_language || languages[0] || 'tr'
+  const currency = activeMenu?.currency || 'TRY'
 
   const [language, setLanguage] = useState(defaultLanguage)
 
@@ -124,14 +129,23 @@ export default function MenuEditor() {
   /* ------------------------------------------------------------- loading */
 
   const loadData = useCallback(async () => {
-    // Wait for the branch context; it clears `loading` even when it fails, and
-    // an unresolved menu then simply falls back to the whole business.
-    if (branchesLoading) return
+    // Wait for the menu context; it clears `loading` even when it fails.
+    if (menusLoading) return
+
+    // No menu resolved: there is nothing to scope the categories to, and the
+    // bar above already tells the user why the page is empty.
+    if (!activeMenuID) {
+      setCategories([])
+      setProductsByCategory({})
+      setExpandedIds([])
+      setLoading(false)
+      return
+    }
 
     setLoading(true)
     try {
       const [incomingCategories, incomingProducts] = await Promise.all([
-        api.listCategories(activeMenuID ? { menu_id: activeMenuID } : undefined),
+        api.listCategories({ menu_id: activeMenuID }),
         api.listProducts(),
       ])
 
@@ -149,7 +163,7 @@ export default function MenuEditor() {
     } finally {
       setLoading(false)
     }
-  }, [toast, branchesLoading, activeMenuID])
+  }, [toast, menusLoading, activeMenuID])
 
   useEffect(() => {
     loadData()
@@ -422,38 +436,38 @@ export default function MenuEditor() {
 
   return (
     <div>
+      {/* The bar names the menu every action on this page applies to, so the
+          heading below no longer has to repeat it. */}
+      <ActiveMenuBar />
+
       {/* --------------------------------------------------------- header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold text-gray-900">Menü Yönetimi</h1>
-          {/* With a single menu the name would say nothing; it only earns its
-              place once the topbar switcher can change which menu is edited. */}
           <p className="mt-1 text-sm text-gray-500">
-            {menus.length > 1 && activeMenu ? (
-              <>
-                <b className="font-medium text-gray-700">{activeMenu.name}</b> menüsünü
-                düzenliyorsunuz.{' '}
-              </>
-            ) : null}
             Kategorileri ve ürünleri sürükleyerek sıralayabilirsiniz.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn-secondary" onClick={() => setBulkPriceOpen(true)}>
-            <Percent className="h-4 w-4" aria-hidden="true" />
-            Toplu Fiyat Güncelle
-          </button>
+        {/* Both actions need a menu to write into, so with none they are gone
+            rather than disabled — there is nothing to enable them. */}
+        {hasMenu ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary" onClick={() => setBulkPriceOpen(true)}>
+              <Percent className="h-4 w-4" aria-hidden="true" />
+              Toplu Fiyat Güncelle
+            </button>
 
-          <button type="button" className="btn-primary" onClick={openCreateCategory}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            Kategori Ekle
-          </button>
-        </div>
+            <button type="button" className="btn-primary" onClick={openCreateCategory}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Kategori Ekle
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* ------------------------------------------------- language picker */}
-      {languages.length > 1 ? (
+      {hasMenu && languages.length > 1 ? (
         <div className="mt-4 inline-flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
           {languages.map((code) => {
             const info = findLanguage(code)
@@ -486,6 +500,12 @@ export default function MenuEditor() {
         <div className="min-w-0">
           {loading ? (
             <Loading text="Menü yükleniyor..." />
+          ) : !hasMenu ? (
+            <EmptyState
+              icon={LayoutList}
+              title="Henüz bir menünüz yok"
+              description="Başlamak için bir menü oluşturun."
+            />
           ) : categories.length === 0 ? (
             <EmptyState
               icon={LayoutList}
@@ -581,12 +601,12 @@ export default function MenuEditor() {
         {/* ------------------------------------------------------ live preview */}
         <div className="hidden xl:block">
           <div className="sticky top-6">
-            {/* Slugs, not ids: the preview endpoint resolves branch and menu by
-                slug, exactly like the public menu does. */}
+            {/* A slug, not an id: the preview endpoint resolves the menu by slug,
+                exactly like the public menu does. Empty when there is no menu,
+                which is what makes the frame show its placeholder. */}
             <LivePreview
-              business={business}
+              business={activeMenu || {}}
               refresh={previewCounter}
-              branchSlug={activeBranch?.slug || ''}
               menuSlug={activeMenu?.slug || ''}
               showSplashControl
             />
@@ -595,71 +615,80 @@ export default function MenuEditor() {
       </div>
 
       {/* ---------------------------------------------------------- modals */}
-      <CategoryModal
-        open={categoryModalOpen}
-        onClose={() => {
-          setCategoryModalOpen(false)
-          setEditingCategory(null)
-        }}
-        category={editingCategory}
-        languages={languages}
-        defaultLanguage={defaultLanguage}
-        menuId={activeMenuID || undefined}
-        onSaved={onCategorySaved}
-      />
+      {/* Every form below writes into the active menu, so without one none of
+          them is mounted at all. */}
+      {hasMenu ? (
+        <>
+          <CategoryModal
+            open={categoryModalOpen}
+            onClose={() => {
+              setCategoryModalOpen(false)
+              setEditingCategory(null)
+            }}
+            category={editingCategory}
+            languages={languages}
+            defaultLanguage={defaultLanguage}
+            menuId={activeMenuID}
+            onSaved={onCategorySaved}
+          />
 
-      <ProductModal
-        open={productModalOpen}
-        onClose={() => {
-          setProductModalOpen(false)
-          setEditingProduct(null)
-        }}
-        product={editingProduct}
-        categories={categories}
-        selectedCategoryId={targetCategoryId}
-        languages={languages}
-        defaultLanguage={defaultLanguage}
-        currency={currency}
-        onSaved={onProductSaved}
-      />
+          <ProductModal
+            open={productModalOpen}
+            onClose={() => {
+              setProductModalOpen(false)
+              setEditingProduct(null)
+            }}
+            product={editingProduct}
+            categories={categories}
+            selectedCategoryId={targetCategoryId}
+            languages={languages}
+            defaultLanguage={defaultLanguage}
+            currency={currency}
+            onSaved={onProductSaved}
+          />
 
-      <BulkPriceModal
-        open={bulkPriceOpen}
-        onClose={() => setBulkPriceOpen(false)}
-        categories={categories}
-        currency={currency}
-        onApplied={onBulkPriceApplied}
-      />
+          {/* Prices belong to the menu they are printed on, so the update is
+              scoped to the active one — the server rejects an unscoped body. */}
+          <BulkPriceModal
+            open={bulkPriceOpen}
+            onClose={() => setBulkPriceOpen(false)}
+            menuId={activeMenuID}
+            categories={categories}
+            currency={currency}
+            onApplied={onBulkPriceApplied}
+          />
 
-      <ConfirmModal
-        open={Boolean(categoryToDelete)}
-        onClose={() => setCategoryToDelete(null)}
-        onConfirm={confirmCategoryDelete}
-        title="Kategoriyi sil"
-        message={
-          categoryToDelete
-            ? `"${getCategoryName(categoryToDelete, language)}" kategorisi ve içindeki ${
-                getProducts(categoryToDelete.id).length
-              } ürün kalıcı olarak silinecek.`
-            : ''
-        }
-        confirmText="Sil"
-        busy={deleting}
-      />
+          <ConfirmModal
+            open={Boolean(categoryToDelete)}
+            onClose={() => setCategoryToDelete(null)}
+            onConfirm={confirmCategoryDelete}
+            title="Kategoriyi sil"
+            message={
+              categoryToDelete
+                ? `"${getCategoryName(categoryToDelete, language)}" kategorisi ve içindeki ${
+                    getProducts(categoryToDelete.id).length
+                  } ürün kalıcı olarak silinecek.`
+                : ''
+            }
+            confirmText="Sil"
+            busy={deleting}
+          />
 
-      <ConfirmModal
-        open={Boolean(productToDelete)}
-        onClose={() => setProductToDelete(null)}
-        onConfirm={confirmProductDelete}
-        title="Ürünü sil"
-        message={
-          productToDelete
-            ? `"${getProductName(productToDelete, language)}" ürünü kalıcı olarak silinecek.`
-            : ''
-        }
-        confirmText="Sil"
-        busy={deleting}
-      />
+          <ConfirmModal
+            open={Boolean(productToDelete)}
+            onClose={() => setProductToDelete(null)}
+            onConfirm={confirmProductDelete}
+            title="Ürünü sil"
+            message={
+              productToDelete
+                ? `"${getProductName(productToDelete, language)}" ürünü kalıcı olarak silinecek.`
+                : ''
+            }
+            confirmText="Sil"
+            busy={deleting}
+          />
+        </>
+      ) : null}
     </div>
   )
 }

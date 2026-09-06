@@ -103,6 +103,9 @@ export function findTheme(id) {
   return THEMES.find((theme) => theme.id === id) || DEFAULT_THEME
 }
 
+/** Matches the #RRGGBB form every colour column in this schema stores. */
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
 /**
  * Turns a theme into CSS custom properties. The result is applied as the
  * `style` of the menu container, and every component inside reads the values
@@ -112,30 +115,40 @@ export function findTheme(id) {
  * @param {string}        accentColor - The business' own primary_color; when set
  *                                      it overrides the theme's primary tone
  * @param {string}        fontStack   - CSS font-family value
+ * @param {string}        [textColor] - OPTIONAL. The business' own text_color.
+ *                                      A valid #RRGGBB overrides the theme's
+ *                                      text tone; anything else (missing, empty,
+ *                                      malformed) leaves the theme's own value
+ *                                      standing, so the three-argument call
+ *                                      signature keeps behaving exactly as before.
  */
-export function themeVariables(theme, accentColor, fontStack) {
+export function themeVariables(theme, accentColor, fontStack, textColor) {
   const resolved = typeof theme === 'string' ? findTheme(theme) : theme || DEFAULT_THEME
   const primary = accentColor || resolved.colors.primary
+
+  /* The override lands on BOTH --menu-text and the container's own `color`:
+     components that name the variable and components that simply inherit have
+     to agree, otherwise the two drift apart. */
+  const candidate = String(textColor || '').trim()
+  const text = HEX_COLOR.test(candidate) ? candidate : resolved.colors.text
 
   return {
     '--menu-primary': primary,
     '--menu-bg': resolved.colors.background,
     '--menu-surface': resolved.colors.surface,
-    '--menu-text': resolved.colors.text,
+    '--menu-text': text,
     '--menu-muted': resolved.colors.muted,
     '--menu-border': resolved.colors.border,
     '--menu-radius': resolved.style.radius,
     '--menu-shadow': resolved.style.cardShadow,
     '--menu-font': fontStack || "'Inter', system-ui, sans-serif",
     backgroundColor: resolved.colors.background,
-    color: resolved.colors.text,
+    color: text,
     fontFamily: fontStack || "'Inter', system-ui, sans-serif",
   }
 }
 
 /* ------------------------------------------------------------- background */
-
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 
 /** Turns "#1d4ed8" into "rgb(29 78 216 / 0.4)". */
 function hexToRgba(hex, alpha) {

@@ -29,6 +29,11 @@ import MenuFooter from './MenuFooter.jsx'
  * @param {string}   language         - Active language code
  * @param {Function} onLanguageChange - Called when the language changes
  * @param {boolean}  embedded         - Compact rendering for narrow containers
+ * @param {boolean}  showMenuSwitcher - Draw the in-menu switcher pill row when the
+ *                                      tenant owns more than one menu. A visitor who
+ *                                      opened a dedicated menu address asked for THAT
+ *                                      menu, so CustomerMenu turns it off there; the
+ *                                      dashboard preview keeps the default.
  */
 
 /** Picks a readable text colour to sit on top of the accent colour. */
@@ -62,7 +67,14 @@ function lower(value) {
 }
 
 /**
- * What the header shows, from `business.header_display`.
+ * What the header's TOP LINE shows, from `business.header_display`.
+ *
+ *   'logo'  logo alone
+ *   'name'  the business name alone
+ *   'both'  logo + business name
+ *
+ * It governs the top line only: the menu name underneath is a separate line
+ * that renders in all three modes.
  *
  * Anything unknown — including a payload from before the column existed —
  * is 'both', which is the behaviour this component always had.
@@ -70,6 +82,32 @@ function lower(value) {
 function headerMode(value) {
   return value === 'logo' || value === 'name' ? value : 'both'
 }
+
+/**
+ * The logo's optional entrance, from `business.logo_fade_in`.
+ *
+ * Injected the same way SplashScreen.jsx does it — a plain <style> beside the
+ * element, no library and no global stylesheet — and namespaced so it cannot
+ * collide with anything else on the page.
+ *
+ * Reduced motion keeps the fade but drops the movement, which is the part the
+ * preference is actually about.
+ */
+const LOGO_ANIMATION_STYLE = `
+@keyframes karecikLogoFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes karecikLogoFadeInReduced {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .karecik-menu-logo {
+    animation-name: karecikLogoFadeInReduced !important;
+  }
+}
+`
 
 /**
  * Top padding of the content column.
@@ -135,6 +173,7 @@ export default function MenuContent({
   language = 'tr',
   onLanguageChange,
   embedded = false,
+  showMenuSwitcher = true,
 }) {
   const business = menu?.business || {}
   const categories = useMemo(() => menu?.categories || [], [menu])
@@ -165,7 +204,16 @@ export default function MenuContent({
   // business' background must be spread AFTER them to win.
   const { containerStyle, overlayStyle } = backgroundStyles(business.theme, business)
   const style = {
-    ...themeVariables(business.theme, business.primary_color, fontStack(business.font_family)),
+    /* text_color is the fourth argument: it overrides --menu-text (and the
+       container's inherited `color`) for the whole tree. Category headings,
+       product titles and body text already read var(--menu-text), so this one
+       override is enough — no inline colours anywhere else. */
+    ...themeVariables(
+      business.theme,
+      business.primary_color,
+      fontStack(business.font_family),
+      business.text_color,
+    ),
     ...containerStyle,
   }
 
@@ -180,6 +228,24 @@ export default function MenuContent({
   const showInitial = headerDisplay === 'both' && !business.logo_url
   const showName = headerDisplay !== 'logo' || !showLogo
   const nameStandsAlone = showName && !showLogo && !showInitial
+
+  /* The two names, in the order the customer needs them. `business_name` is the
+     TENANT ("Melly Coffee") and `name` is the MENU ("Suadiye"), so the tenant is
+     the heading and the menu is the quiet line underneath it. A payload with no
+     tenant name — a preview of an older draft, say — puts the menu name on the
+     top line rather than leaving the header empty. */
+  const businessName = String(business.business_name || '').trim()
+  const menuName = String(business.name || '').trim()
+  const topLineName = businessName || menuName
+
+  /* A tenant whose only menu is named after itself must not print the same words
+     twice. Compared case-insensitively because "Melly Coffee" and "melly coffee"
+     are one name to the customer reading them. */
+  const showMenuName = Boolean(menuName) && lower(menuName) !== lower(topLineName)
+
+  /* The logo's entrance is opt-in per menu; false means no animation at all. */
+  const logoFadeIn = business.logo_fade_in === true
+
   const searchTerm = search.trim()
   const searching = searchTerm.length > 0
 
@@ -246,8 +312,10 @@ export default function MenuContent({
   /* --------------------------------------------------------- menu switching */
 
   // The prop signature is fixed, so switching menus is a navigation rather than
-  // a callback: the branch form when the menu is served through a branch, the
-  // query form otherwise.
+  // a callback. Both targets are routes of this same app, so only the path
+  // changes: on a tenant subdomain the host already names the business and the
+  // menu is one segment away, while the path fallback has to carry both slugs —
+  // a menu slug is unique only inside its own business.
   function switchMenu(slug) {
     if (!slug || slug === business.menu_slug) return
 
@@ -255,22 +323,16 @@ export default function MenuContent({
     // too; navigating there would tear the surrounding page down.
     if (embedded) return
 
-    // On a branch subdomain the host already pins the branch and the subdomain
-    // router only knows `/<menuSlug>`. The `/b/...` form would fall through to
-    // its catch-all route and quietly reopen the default menu.
     if (getSubdomain()) {
       window.location.assign(`/${slug}`)
       return
     }
 
-    if (business.branch_slug) {
-      window.location.assign(`/b/${business.branch_slug}/${slug}`)
-      return
-    }
-
-    const url = new URL(window.location.href)
-    url.searchParams.set('menu', slug)
-    window.location.assign(url.toString())
+    // Without the tenant segment `/m/{slug}` resolves the MENU slug as a
+    // business slug and 404s, so an unidentified tenant stays where it is.
+    const tenant = business.business_slug
+    if (!tenant) return
+    window.location.assign(`/m/${tenant}/${slug}`)
   }
 
   /* ------------------------------------------------------------- fragments */
@@ -278,10 +340,20 @@ export default function MenuContent({
   function ProductRow({ product, categoryName }) {
     const allergens = Array.isArray(product.allergens) ? product.allergens : []
     const badges = Array.isArray(product.badges) ? product.badges.filter((b) => b?.text) : []
-    const calories = product.calories == null ? null : Number(product.calories)
+    /* The chip states a fact, so anything that is not a positive number — null,
+       a zero, a stray string — reads as "unknown" and the chip stays away. The
+       detail sheet applies exactly the same rule, so a product can never carry
+       a calorie chip on the card and none in the sheet. */
+    const caloriesNumber = Number(product.calories)
+    const calories =
+      Number.isFinite(caloriesNumber) && caloriesNumber > 0 ? caloriesNumber : null
+    // Only that the product HAS options is shown here; the groups themselves
+    // belong to the detail sheet, which is where a choice can be made.
+    const hasOptions = Array.isArray(product.options) && product.options.length > 0
     const hasMeta =
       badges.length > 0 ||
       calories != null ||
+      hasOptions ||
       allergens.length > 0 ||
       product.is_featured ||
       product.is_active === false
@@ -390,6 +462,19 @@ export default function MenuContent({
                 </span>
               ) : null}
 
+              {/* Quiet like the calorie chip on purpose: it is a hint that the
+                  detail sheet has choices, not a badge competing with them.
+                  It joins the existing wrapping row, so the card keeps its
+                  height. */}
+              {hasOptions ? (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[10px]"
+                  style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+                >
+                  + Seçenekler
+                </span>
+              ) : null}
+
               {allergens.map((code) => {
                 const allergen = findAllergen(code)
                 if (!allergen) return null
@@ -466,57 +551,70 @@ export default function MenuContent({
         style={{ paddingTop: SAFE_TOP_PADDING }}
       >
         {/* ------------------------------------ header: logo in the TOP LEFT */}
-        {/* The `gap-3` is on the flex parent and every child below is either
+        {/* Two stacked lines: the tenant on top (logo and/or business name, per
+            `header_display`) and the menu name underneath in all three modes.
+            The `gap-3` is on the inner flex row and every child is either
             rendered or `null`, so a hidden logo or name leaves no empty slot.
-            The language switcher stays pinned right in all three modes. */}
+            The language switcher stays pinned right. */}
         <header className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            {showLogo ? (
-              /* Wide logos are common — fit them instead of cropping a square.
-                 Standing on its own the logo may take a little more room. */
-              <img
-                src={business.logo_url}
-                alt=""
-                className={`h-12 w-auto shrink-0 object-contain ${
-                  headerDisplay === 'logo' ? 'max-w-[220px]' : 'max-w-[160px]'
-                }`}
-                style={{ borderRadius: 'calc(var(--menu-radius) * 0.6)' }}
-              />
-            ) : showInitial ? (
-              <div
-                className="flex h-12 w-12 shrink-0 items-center justify-center text-lg font-semibold"
-                style={{
-                  backgroundColor: 'var(--menu-primary)',
-                  color: onAccentText,
-                  borderRadius: 'calc(var(--menu-radius) * 0.6)',
-                }}
-                aria-hidden="true"
-              >
-                {String(business.name || '•').charAt(0).toLocaleUpperCase('tr')}
-              </div>
-            ) : null}
-
-            {/* The branch name stays in every mode: it says WHICH venue this is,
-                which the logo alone cannot. */}
-            {showName || business.branch_name ? (
-              <div className="min-w-0">
-                {showName ? (
-                  <h1
-                    className={`truncate font-semibold leading-tight ${
-                      nameStandsAlone ? 'text-xl' : 'text-lg'
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-3">
+              {showLogo ? (
+                /* Wide logos are common — fit them instead of cropping a square.
+                   Standing on its own the logo may take a little more room.
+                   The entrance is attached only when the menu asked for it: with
+                   `logo_fade_in` false there is no animation property at all, so
+                   nothing to compute and nothing to replay. */
+                <>
+                  {logoFadeIn ? <style>{LOGO_ANIMATION_STYLE}</style> : null}
+                  <img
+                    src={business.logo_url}
+                    alt=""
+                    className={`karecik-menu-logo h-12 w-auto shrink-0 object-contain ${
+                      headerDisplay === 'logo' ? 'max-w-[220px]' : 'max-w-[160px]'
                     }`}
-                    style={{ color: 'var(--menu-text)' }}
-                  >
-                    {business.name}
-                  </h1>
-                ) : null}
-                {/* No address here on purpose: the customer is already in the venue. */}
-                {business.branch_name ? (
-                  <p className="truncate text-xs" style={{ color: 'var(--menu-muted)' }}>
-                    {business.branch_name}
-                  </p>
-                ) : null}
-              </div>
+                    style={{
+                      borderRadius: 'calc(var(--menu-radius) * 0.6)',
+                      animation: logoFadeIn
+                        ? 'karecikLogoFadeIn 500ms ease-out both'
+                        : undefined,
+                    }}
+                  />
+                </>
+              ) : showInitial ? (
+                <div
+                  className="flex h-12 w-12 shrink-0 items-center justify-center text-lg font-semibold"
+                  style={{
+                    backgroundColor: 'var(--menu-primary)',
+                    color: onAccentText,
+                    borderRadius: 'calc(var(--menu-radius) * 0.6)',
+                  }}
+                  aria-hidden="true"
+                >
+                  {String(topLineName || '•').charAt(0).toLocaleUpperCase('tr')}
+                </div>
+              ) : null}
+
+              {/* The venue's own name — the words on the sign outside.
+                  No address here on purpose: the customer is already inside. */}
+              {showName ? (
+                <h1
+                  className={`min-w-0 truncate font-semibold leading-tight ${
+                    nameStandsAlone ? 'text-xl' : 'text-lg'
+                  }`}
+                  style={{ color: 'var(--menu-text)' }}
+                >
+                  {topLineName}
+                </h1>
+              ) : null}
+            </div>
+
+            {/* Which of the venue's menus this is — smaller and muted, because it
+                answers a question the customer only asks second. */}
+            {showMenuName ? (
+              <p className="mt-1 truncate text-sm" style={{ color: 'var(--menu-muted)' }}>
+                {menuName}
+              </p>
             ) : null}
           </div>
 
@@ -651,7 +749,11 @@ export default function MenuContent({
         ) : null}
 
         {/* ------------------------------------------------- menu switcher */}
-        {menus.length > 1 ? (
+        {/* Only where the visitor did not already name a menu. A dedicated menu
+            address is a request for THAT menu, so offering the tenant's other
+            menus there is the picker the customer just walked past; the
+            dashboard preview, which has no address, keeps it. */}
+        {showMenuSwitcher && menus.length > 1 ? (
           <nav
             className="no-scrollbar -mx-4 mt-4 flex gap-2 overflow-x-auto px-4 pb-1"
             aria-label={t('menuLabel', language)}

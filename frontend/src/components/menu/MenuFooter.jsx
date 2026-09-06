@@ -17,10 +17,15 @@ import Logo from '../ui/Logo.jsx'
  *                     and the automatically generated legal notices appear here:
  *                       "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
  *                       "Fiyatlarımıza KDV dahildir."
+ *                     plus, when the business enables it, the "Yerli Üretim"
+ *                     block just above the signature.
  *
  * Both notices are produced by the backend (repository/menu.go -> buildFooter)
  * and merely displayed here. When the business turns them off they arrive empty
- * and the corresponding line is not rendered.
+ * and the corresponding line is not rendered. The single exception is the VAT
+ * line inside the dashboard live preview, where the footer payload is the last
+ * SAVED one and cannot know about an unsaved draft — see the note beside
+ * `draftVatNote` below.
  *
  * The address is deliberately absent: the customer is standing in the venue, so
  * a street address and a map view are noise. Wi-Fi is what they actually want.
@@ -36,6 +41,17 @@ import Logo from '../ui/Logo.jsx'
 
 /** How long the "Kopyalandı" confirmation stays on the button. */
 const COPY_FEEDBACK_MS = 1600
+
+/**
+ * The VAT sentence that accompanies the "Yerli Üretim" block.
+ *
+ * It is only a FALLBACK. The menu already owns a VAT line of its own
+ * (show_vat_note + vat_note_text, resolved into `vatNote` below and printed
+ * with the other legal notices), and a menu that printed two VAT sentences
+ * would look sloppy, so whenever the business has written its own the
+ * business' text wins and this one is dropped.
+ */
+const DEFAULT_VAT_NOTICE = 'Tüm fiyatlarımıza KDV dahildir.'
 
 /**
  * Copies one string to the clipboard.
@@ -113,6 +129,38 @@ function CopyButton({ value, language, label }) {
   )
 }
 
+/**
+ * The "Yerli Üretim" badge.
+ *
+ * `Yerli Üretim Logosu` is an official certification mark administered by the
+ * Ticaret Bakanlığı, so this component NEVER draws or approximates it. Either
+ * the business supplies its own certified artwork — uploaded through the
+ * dashboard, or seeded as an absolute URL — and it is rendered as-is, or the
+ * fallback is a plain bordered text pill that claims nothing visually.
+ *
+ * @param {string} logoUrl - business.yerli_uretim_logo_url, may be empty
+ */
+function YerliUretimBadge({ logoUrl }) {
+  if (logoUrl) {
+    return (
+      <img
+        src={logoUrl}
+        alt="Yerli Üretim"
+        className="h-10 w-auto max-w-[120px] object-contain"
+      />
+    )
+  }
+
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-medium"
+      style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+    >
+      Yerli Üretim
+    </span>
+  )
+}
+
 /** The Karecik signature: always the last thing on the page. */
 function Signature({ text }) {
   return (
@@ -148,7 +196,29 @@ export default function MenuFooter({ business, footer, language = 'tr', scope = 
   const hasContact = Boolean(phone || wifiSsid || wifiPassword || instagram)
 
   const priceNote = footer?.price_note?.trim()
-  const vatNote = footer?.vat_note?.trim()
+
+  /* The menu's own VAT line. `footer.vat_note` is the source of truth and the
+     backend only fills it when show_vat_note is on with non-empty text.
+
+     The dashboard live preview is the one place where the two halves disagree:
+     it keeps the SAVED footer payload while the draft changes underneath it,
+     and refetching cannot help because the new text is not persisted yet. So
+     the draft's own fields stand in — the very sentence the server will emit
+     once the settings are saved — and an explicit show_vat_note=false drops a
+     served note that is merely stale. On the customer menu the payload and the
+     business fields always agree, so nothing changes there. */
+  const draftVatNote = business?.show_vat_note ? business?.vat_note_text?.trim() || '' : ''
+  const vatNote =
+    business?.show_vat_note === false ? '' : footer?.vat_note?.trim() || draftVatNote
+
+  /* The "Yerli Üretim" block: the badge, and a VAT sentence UNDER it.
+     DO NOT PRINT TWO VAT SENTENCES. The menu already drives a VAT line of its
+     own (`vatNote` above, printed with the other legal notices) and whenever
+     that one is live IT WINS — the fixed sentence below is only the fallback
+     for a business that has not written one. */
+  const showYerliUretim = Boolean(business?.show_yerli_uretim)
+  const yerliUretimLogoUrl = business?.yerli_uretim_logo_url?.trim() || ''
+  const hasOwnVatNote = Boolean(vatNote)
 
   return (
     <footer className="text-center" style={{ color: 'var(--menu-muted)' }}>
@@ -216,6 +286,13 @@ export default function MenuFooter({ business, footer, language = 'tr', scope = 
               {vatNote ? <p>{vatNote}</p> : null}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {showYerliUretim ? (
+        <div className="mt-8 flex flex-col items-center gap-2 text-[11px] leading-relaxed">
+          <YerliUretimBadge logoUrl={yerliUretimLogoUrl} />
+          {hasOwnVatNote ? null : <p>{DEFAULT_VAT_NOTICE}</p>}
         </div>
       ) : null}
 

@@ -65,12 +65,21 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 	}
 
 	businessID := middleware.BusinessID(c)
-	business, err := repository.GetBusinessByID(c.Context(), h.DB, businessID)
-	if err != nil {
-		return utils.Internal(c, err)
+
+	// A category always lands on a menu — categories.menu_id is NOT NULL — and
+	// the body has to name which one. There is no default menu to fall back to,
+	// and guessing would silently file the category under a menu the user never
+	// picked, so a missing menu_id is a plain 422.
+	if req.MenuID == nil || *req.MenuID == uuid.Nil {
+		return utils.Unprocessable(c, "Önce bir menü oluşturmalısınız.")
+	}
+	menu, err := h.ownsMenu(c, businessID, *req.MenuID, "Bu menüye kategori ekleyemezsiniz.")
+	if menu == nil {
+		return err
 	}
 
-	translations, errMessage := sanitizeTranslations(req.Translations, business.DefaultLanguage, "Kategori")
+	// The texts are required in the language of the menu the category lands on.
+	translations, errMessage := sanitizeTranslations(req.Translations, menu.DefaultLanguage, "Kategori")
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
 	}
@@ -80,27 +89,7 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 		isActive = *req.IsActive
 	}
 
-	// A category always lands on a menu: the one the dashboard is editing when
-	// it names it, otherwise the default menu of the business.
-	var menuID uuid.UUID
-	if req.MenuID != nil {
-		ok, err := h.ownsMenu(c, businessID, *req.MenuID, "Bu menüye kategori ekleyemezsiniz.")
-		if !ok {
-			return err
-		}
-		menuID = *req.MenuID
-	} else {
-		menu, err := repository.GetDefaultMenu(c.Context(), h.DB, businessID)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return utils.Unprocessable(c, "Önce bir menü oluşturmalısınız.")
-			}
-			return utils.Internal(c, err)
-		}
-		menuID = menu.ID
-	}
-
-	category, err := repository.CreateCategory(c.Context(), h.DB, businessID, menuID,
+	category, err := repository.CreateCategory(c.Context(), h.DB, businessID, menu.ID,
 		translations, req.Icon, req.ImageURL, isActive)
 	if err != nil {
 		return utils.Internal(c, err)
@@ -109,22 +98,24 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 }
 
 // ownsMenu proves that a menu id coming from a request belongs to this
-// business before a category is written into it — without the check a forged
-// id would move the category into a foreign tenant's menu. The Turkish
+// business before anything is written into it — without the check a forged id
+// would move the record into a foreign tenant's menu. It returns the menu
+// itself, because the caller needs its default_language as well. The Turkish
 // `denied` message is what the caller shows on refusal.
 //
-// A refused request is reported through the false `ok` after the response has
+// A refused request is reported through the nil menu after the response has
 // already been written, the same way public.go's previewMenuOf does it.
 func (h *Handler) ownsMenu(c *fiber.Ctx, businessID, menuID uuid.UUID,
-	denied string) (bool, error) {
+	denied string) (*models.Menu, error) {
 
-	if _, err := repository.GetMenu(c.Context(), h.DB, menuID, businessID); err != nil {
+	menu, err := repository.GetMenu(c.Context(), h.DB, menuID, businessID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return false, utils.Forbidden(c, denied)
+			return nil, utils.Forbidden(c, denied)
 		}
-		return false, utils.Internal(c, err)
+		return nil, utils.Internal(c, err)
 	}
-	return true, nil
+	return menu, nil
 }
 
 // UpdateCategory — PUT /api/categories/:id
@@ -142,16 +133,41 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 	businessID := middleware.BusinessID(c)
 	fields := make(map[string]any)
 
+	// Moving a category to another menu is an ownership decision, not a plain
+	// column write — and it comes first, because the target menu is the one
+	// whose default language the new texts have to satisfy.
+	var target *models.Menu
+	if value, ok := raw["menu_id"]; ok {
+		menuID, err := decodeUUID(value)
+		if err != nil || menuID == uuid.Nil {
+			return utils.Unprocessable(c, "menu_id alanı geçerli bir menü kimliği olmalıdır.")
+		}
+		owned, err := h.ownsMenu(c, businessID, menuID, "Kategoriyi bu menüye taşıyamazsınız.")
+		if owned == nil {
+			return err
+		}
+		target = owned
+		fields["menu_id"] = menuID
+	}
+
 	if value, ok := raw["translations"]; ok {
 		var translations models.Translations
 		if err := json.Unmarshal(value, &translations); err != nil {
 			return utils.Unprocessable(c, "Çeviri alanı geçersiz.")
 		}
-		business, err := repository.GetBusinessByID(c.Context(), h.DB, businessID)
-		if err != nil {
-			return utils.Internal(c, err)
+		// The texts are required in the language of the menu the category lives
+		// on — the one it is being moved to when the body moves it.
+		var lang string
+		if target != nil {
+			lang = target.DefaultLanguage
+		} else {
+			resolved, err := h.categoryLanguage(c, businessID, id)
+			if err != nil {
+				return utils.Internal(c, err)
+			}
+			lang = resolved
 		}
-		cleaned, errMessage := sanitizeTranslations(translations, business.DefaultLanguage, "Kategori")
+		cleaned, errMessage := sanitizeTranslations(translations, lang, "Kategori")
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
@@ -174,19 +190,6 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 			return utils.Unprocessable(c, "is_active alanı true/false olmalıdır.")
 		}
 		fields["is_active"] = flag
-	}
-
-	// Moving a category to another menu is an ownership decision, not a plain
-	// column write.
-	if value, ok := raw["menu_id"]; ok {
-		menuID, err := decodeUUID(value)
-		if err != nil || menuID == uuid.Nil {
-			return utils.Unprocessable(c, "menu_id alanı geçerli bir menü kimliği olmalıdır.")
-		}
-		if ok, err := h.ownsMenu(c, businessID, menuID, "Kategoriyi bu menüye taşıyamazsınız."); !ok {
-			return err
-		}
-		fields["menu_id"] = menuID
 	}
 
 	category, err := repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields)

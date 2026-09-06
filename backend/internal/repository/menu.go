@@ -10,64 +10,62 @@ import (
 	"karecik/backend/internal/utils"
 )
 
+// poweredBy is the footer credit of every customer-facing payload, the tenant
+// directory included.
+//
+// NOTE: the wording is customer-facing and therefore Turkish on purpose.
+const poweredBy = "Karecik ile hazırlandı"
+
 // PublicMenuOptions scopes the customer menu payload.
 type PublicMenuOptions struct {
 	Lang            string
-	IncludeInactive bool           // dashboard preview
-	Branch          *models.Branch // nil = business-wide menu
-	Menu            *models.Menu   // nil = the business' default menu
+	IncludeInactive bool // dashboard preview
 }
 
-// BuildPublicMenu assembles the customer-facing menu payload.
+// BuildPublicMenu assembles the customer-facing payload of one menu.
 // Translations are resolved into the requested language, so the translations
 // map itself never leaves the server.
+//
+// It takes both halves of the address: the business identifies the tenant —
+// the subdomain of {business-slug}.karecik.com — and the menu identifies what
+// is served under it. The menu owns every branding and contact setting of the
+// payload and its categories are selected strictly by menu_id; the business
+// only lends its name and slug, so the customer frontend can spell the real
+// address without a second request.
 //
 // opts.IncludeInactive = false -> only published categories/products (the real menu)
 // opts.IncludeInactive = true  -> inactive records are included too (dashboard preview)
 func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
-	opts PublicMenuOptions) (*models.PublicMenu, error) {
+	menu *models.Menu, opts PublicMenuOptions) (*models.PublicMenu, error) {
 
-	lang := resolveLanguage(business, opts.Lang)
-	fallback := business.DefaultLanguage
+	lang := resolveLanguage(menu, opts.Lang)
+	fallback := menu.DefaultLanguage
 
+	// categories.menu_id is NOT NULL since 005, so a category belongs to
+	// exactly one menu and nothing has to be inherited any more.
 	categoryQuery := `SELECT ` + categoryColumns + `
-		FROM categories WHERE business_id = $1`
-	categoryArgs := []any{business.ID}
-	productQuery := `SELECT ` + productColumns + `
-		FROM products WHERE business_id = $1`
+		FROM categories WHERE business_id = $1 AND menu_id = $2`
 
-	// A category that was never assigned to a menu still belongs to the
-	// business, so it keeps showing up on the default menu.
-	if opts.Menu != nil {
-		categoryArgs = append(categoryArgs, opts.Menu.ID)
-		if opts.Menu.IsDefault {
-			categoryQuery += ` AND (menu_id = $2 OR menu_id IS NULL)`
-		} else {
-			categoryQuery += ` AND menu_id = $2`
-		}
-	}
+	// The products are reached through their category, which is what scopes
+	// them to this menu.
+	productQuery := `
+		SELECT p.id, p.business_id, p.category_id, p.translations, p.price,
+		       p.compare_price, p.calories, p.image_url, p.allergens, p.badges,
+		       p.options, p.is_active, p.is_featured, p.position,
+		       p.created_at, p.updated_at
+		FROM products p
+		JOIN categories c ON c.id = p.category_id
+		WHERE p.business_id = $1 AND c.menu_id = $2`
 
 	if !opts.IncludeInactive {
 		categoryQuery += ` AND is_active = true`
-		productQuery += ` AND is_active = true`
+		productQuery += ` AND p.is_active = true`
 	}
 	categoryQuery += ` ORDER BY position ASC, created_at ASC`
-	productQuery += ` ORDER BY position ASC, created_at ASC`
-
-	// --- branch pricing
-	// A NULL override price means "inherit the product's own price"; an
-	// unavailable product is dropped from the menu of that branch.
-	var branchPrices map[uuid.UUID]models.BranchPrice
-	if opts.Branch != nil {
-		prices, err := ListBranchPrices(ctx, db, opts.Branch.ID)
-		if err != nil {
-			return nil, fmt.Errorf("could not read the branch prices: %w", err)
-		}
-		branchPrices = prices
-	}
+	productQuery += ` ORDER BY p.position ASC, p.created_at ASC`
 
 	// --- categories
-	categoryRows, err := db.Query(ctx, categoryQuery, categoryArgs...)
+	categoryRows, err := db.Query(ctx, categoryQuery, menu.BusinessID, menu.ID)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the categories: %w", err)
 	}
@@ -106,7 +104,7 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	}
 
 	// --- products
-	productRows, err := db.Query(ctx, productQuery, business.ID)
+	productRows, err := db.Query(ctx, productQuery, menu.BusinessID, menu.ID)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the products: %w", err)
 	}
@@ -115,8 +113,8 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 		var product models.Product
 		if err := productRows.Scan(&product.ID, &product.BusinessID, &product.CategoryID,
 			&product.Translations, &product.Price, &product.ComparePrice, &product.Calories,
-			&product.ImageURL, &product.Allergens, &product.Badges, &product.IsActive,
-			&product.IsFeatured, &product.Position,
+			&product.ImageURL, &product.Allergens, &product.Badges, &product.Options,
+			&product.IsActive, &product.IsFeatured, &product.Position,
 			&product.CreatedAt, &product.UpdatedAt); err != nil {
 			productRows.Close()
 			return nil, err
@@ -128,20 +126,6 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 			continue // a product whose category is inactive never shows up
 		}
 
-		price := product.Price
-		comparePrice := product.ComparePrice
-		if override, ok := branchPrices[product.ID]; ok {
-			if !override.IsAvailable && !opts.IncludeInactive {
-				continue // the branch does not serve this product
-			}
-			if override.Price != nil {
-				price = *override.Price
-			}
-			if override.ComparePrice != nil {
-				comparePrice = override.ComparePrice
-			}
-		}
-
 		translation := product.Translations.Resolve(lang, fallback)
 
 		categories[index].Products = append(categories[index].Products, models.PublicProduct{
@@ -149,12 +133,13 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 			Name:         translation.Name,
 			Description:  translation.Description,
 			Ingredients:  translation.Ingredients,
-			Price:        utils.Round2(price),
-			ComparePrice: comparePrice,
+			Price:        utils.Round2(product.Price),
+			ComparePrice: product.ComparePrice,
 			Calories:     product.Calories,
 			ImageURL:     product.ImageURL,
 			Allergens:    product.Allergens,
 			Badges:       product.Badges,
+			Options:      product.Options,
 			IsFeatured:   product.IsFeatured,
 			IsActive:     product.IsActive,
 		})
@@ -164,150 +149,191 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 		return nil, err
 	}
 
-	menus, err := publicMenuRefs(ctx, db, business, opts)
+	menus, err := publicMenuRefs(ctx, db, business.ID, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return &models.PublicMenu{
-		Business:   toPublicBusiness(business, opts),
-		Categories: categories,
-		Footer:     buildFooter(business),
-		Menus:      menus,
+		Business:     toPublicBusiness(business, menu),
+		Categories:   categories,
+		Footer:       buildFooter(menu),
+		Menus:        menus,
+		MenuResolved: true,
 	}, nil
 }
 
-// publicMenuRefs lists the menus reachable from this context: the menus of the
-// branch when the request came through one, otherwise the menus of the
-// business. The result is always non-nil and stays empty when there is nothing
-// to switch between.
-func publicMenuRefs(ctx context.Context, db DB, business *models.Business,
-	opts PublicMenuOptions) ([]models.MenuRef, error) {
+// BuildPublicDirectory assembles the payload of a tenant whose request did not
+// resolve to a single menu: the subdomain was right but the path named no menu
+// and the business publishes zero menus, or two and more.
+//
+// It is a 200 with menu_resolved false, an empty category list and the menu
+// list — never a 404, because the business itself exists. That payload is what
+// makes the frontend render the tenant directory (or its "no active menus"
+// placeholder) instead of a menu.
+func BuildPublicDirectory(ctx context.Context, db DB, business *models.Business,
+	opts PublicMenuOptions) (*models.PublicMenu, error) {
+
+	menus, err := publicMenuRefs(ctx, db, business.ID, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.PublicMenu{
+		Business:     toDirectoryBusiness(business),
+		Categories:   make([]models.PublicCategory, 0),
+		Footer:       models.PublicFooter{PoweredBy: poweredBy},
+		Menus:        menus,
+		MenuResolved: false,
+	}, nil
+}
+
+// publicMenuRefs lists the menus of the tenant — the current one included, when
+// there is one — so the customer menu can render a switcher and the directory
+// page can render its cards. The result is always non-nil and every entry is a
+// real address: {business-slug}.karecik.com/{slug}.
+//
+// The owner's own preview also sees the unpublished ones; a customer never
+// does.
+func publicMenuRefs(ctx context.Context, db DB, businessID uuid.UUID,
+	opts PublicMenuOptions) ([]models.PublicMenuRef, error) {
 
 	var (
 		menus []models.Menu
 		err   error
 	)
-	if opts.Branch != nil {
-		menus, err = ListBranchMenus(ctx, db, opts.Branch.ID)
+	if opts.IncludeInactive {
+		menus, err = ListMenus(ctx, db, businessID)
 	} else {
-		menus, err = ListMenus(ctx, db, business.ID)
+		menus, err = ListActiveMenus(ctx, db, businessID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("could not read the menus: %w", err)
 	}
 
-	refs := make([]models.MenuRef, 0, len(menus))
-	for _, menu := range menus {
-		if !menu.IsActive && !opts.IncludeInactive {
-			continue
-		}
-		refs = append(refs, models.MenuRef{Slug: menu.Slug, Name: menu.Name})
-	}
-	if len(refs) < 2 {
-		return make([]models.MenuRef, 0), nil
+	refs := make([]models.PublicMenuRef, 0, len(menus))
+	for _, sibling := range menus {
+		refs = append(refs, models.PublicMenuRef{
+			Slug:        sibling.Slug,
+			Name:        sibling.Name,
+			Description: sibling.Description,
+		})
 	}
 	return refs, nil
 }
 
-// resolveLanguage validates the requested language, falling back to the default.
-func resolveLanguage(business *models.Business, lang string) string {
+// resolveLanguage validates the requested language, falling back to the default
+// language of the menu.
+func resolveLanguage(menu *models.Menu, lang string) string {
 	if lang == "" {
-		return business.DefaultLanguage
+		return menu.DefaultLanguage
 	}
-	for _, supported := range business.Languages {
+	for _, supported := range menu.Languages {
 		if supported == lang {
 			return lang
 		}
 	}
-	return business.DefaultLanguage
+	return menu.DefaultLanguage
 }
 
-func toPublicBusiness(business *models.Business, opts PublicMenuOptions) models.PublicBusiness {
-	public := models.PublicBusiness{
-		Name:            business.Name,
-		Slug:            business.Slug,
-		LogoURL:         business.LogoURL,
-		CoverURL:        business.CoverURL,
-		Currency:        business.Currency,
-		CurrencySymbol:  utils.CurrencySymbol(business.Currency),
-		Theme:           business.Theme,
-		FontFamily:      business.FontFamily,
-		PrimaryColor:    business.PrimaryColor,
-		DefaultLanguage: business.DefaultLanguage,
-		Languages:       business.Languages,
+// toPublicBusiness turns the menu into the header block of the customer
+// payload. Name and Slug are the MENU's — the menu is the venue the customer
+// opened — while BusinessName and BusinessSlug carry the tenant alongside them,
+// so the two together spell {business_slug}.karecik.com/{menu_slug}.
+//
+// CurrencySymbol is the stored one, never re-derived: the repository is the
+// only writer of that column, so what is stored is by definition what belongs
+// to the currency.
+func toPublicBusiness(business *models.Business, menu *models.Menu) models.PublicBusiness {
+	name := menu.Name
 
-		SplashEnabled:       business.SplashEnabled,
-		SplashDuration:      business.SplashDuration,
-		SplashBgColor:       business.SplashBgColor,
-		SplashText:          business.SplashText,
-		SplashLogoURL:       business.SplashLogoURL,
-		SplashHeadline:      business.SplashHeadline,
-		SplashExitAnimation: business.SplashExitAnimation,
-		SplashExitDuration:  business.SplashExitDuration,
-		SplashExitEasing:    business.SplashExitEasing,
-		SplashDisplay:       business.SplashDisplay,
+	return models.PublicBusiness{
+		Name:            menu.Name,
+		Slug:            menu.Slug,
+		LogoURL:         menu.LogoURL,
+		CoverURL:        menu.CoverURL,
+		Currency:        menu.Currency,
+		CurrencySymbol:  menu.CurrencySymbol,
+		Theme:           menu.Theme,
+		FontFamily:      menu.FontFamily,
+		PrimaryColor:    menu.PrimaryColor,
+		DefaultLanguage: menu.DefaultLanguage,
+		Languages:       menu.Languages,
 
-		BackgroundType:           business.BackgroundType,
-		BackgroundColor:          business.BackgroundColor,
-		BackgroundImageURL:       business.BackgroundImageURL,
-		BackgroundOverlayOpacity: business.BackgroundOverlayOpacity,
+		SplashEnabled:       menu.SplashEnabled,
+		SplashDuration:      menu.SplashDuration,
+		SplashBgColor:       menu.SplashBgColor,
+		SplashText:          menu.SplashText,
+		SplashLogoURL:       menu.SplashLogoURL,
+		SplashHeadline:      menu.SplashHeadline,
+		SplashExitAnimation: menu.SplashExitAnimation,
+		SplashExitDuration:  menu.SplashExitDuration,
+		SplashExitEasing:    menu.SplashExitEasing,
+		SplashDisplay:       menu.SplashDisplay,
+		SplashSlideFade:     menu.SplashSlideFade,
 
-		HeaderDisplay: business.HeaderDisplay,
+		BackgroundType:           menu.BackgroundType,
+		BackgroundColor:          menu.BackgroundColor,
+		BackgroundImageURL:       menu.BackgroundImageURL,
+		BackgroundOverlayOpacity: menu.BackgroundOverlayOpacity,
 
-		ShowVatNote:    business.ShowVatNote,
-		VatNoteText:    business.VatNoteText,
-		ShowPriceDate:  business.ShowPriceDate,
-		PriceUpdatedAt: business.PriceUpdatedAt,
+		HeaderDisplay: menu.HeaderDisplay,
+		LogoFadeIn:    menu.LogoFadeIn,
 
-		Phone:        business.Phone,
-		Address:      business.Address,
-		Instagram:    business.Instagram,
-		WifiSSID:     business.WifiSSID,
-		WifiPassword: business.WifiPassword,
+		// The customer view tints its text with TextColor and builds the legal
+		// footer from the other two. YerliUretimLogoURL is passed through as it
+		// is stored — nil means "no artwork", which is what makes the footer
+		// fall back to a plain text pill instead of drawing the official mark.
+		TextColor:          menu.TextColor,
+		ShowYerliUretim:    menu.ShowYerliUretim,
+		YerliUretimLogoURL: menu.YerliUretimLogoURL,
+
+		ShowVatNote:    menu.ShowVatNote,
+		VatNoteText:    menu.VatNoteText,
+		ShowPriceDate:  menu.ShowPriceDate,
+		PriceUpdatedAt: menu.PriceUpdatedAt,
+
+		Phone:        menu.Phone,
+		Address:      menu.Address,
+		Instagram:    menu.Instagram,
+		WifiSSID:     menu.WifiSSID,
+		WifiPassword: menu.WifiPassword,
+
+		BusinessName: business.Name,
+		BusinessSlug: business.Slug,
+		MenuSlug:     menu.Slug,
+		MenuName:     &name,
 	}
+}
 
-	// A branch overrides the contact details it fills in itself; whatever it
-	// leaves empty keeps falling back to the business.
-	if branch := opts.Branch; branch != nil {
-		if branch.Phone != nil {
-			public.Phone = branch.Phone
-		}
-		if branch.Address != nil {
-			public.Address = branch.Address
-		}
-		if branch.WifiSSID != nil {
-			public.WifiSSID = branch.WifiSSID
-		}
-		if branch.WifiPassword != nil {
-			public.WifiPassword = branch.WifiPassword
-		}
-		name, slug := branch.Name, branch.Slug
-		public.BranchName = &name
-		public.BranchSlug = &slug
+// toDirectoryBusiness is the header block when no menu resolved: the tenant
+// identity and nothing else. Every menu-sourced setting stays at its zero
+// value, because there is no menu to source it from — the directory page paints
+// itself with the neutral theme defaults. Languages is still an empty slice so
+// the payload carries [] instead of null.
+func toDirectoryBusiness(business *models.Business) models.PublicBusiness {
+	return models.PublicBusiness{
+		BusinessName: business.Name,
+		BusinessSlug: business.Slug,
+		Languages:    []string{},
 	}
-	if menu := opts.Menu; menu != nil {
-		name, slug := menu.Name, menu.Slug
-		public.MenuName = &name
-		public.MenuSlug = &slug
-	}
-	return public
 }
 
 // buildFooter produces the legal notices at the bottom of the menu.
-// The price date refreshes automatically after every bulk price update.
+// The price date refreshes automatically after every bulk price update of that
+// menu.
 //
 // NOTE: the wording is customer-facing and therefore Turkish on purpose.
-func buildFooter(business *models.Business) models.PublicFooter {
-	footer := models.PublicFooter{PoweredBy: "Karecik ile hazırlandı"}
+func buildFooter(menu *models.Menu) models.PublicFooter {
+	footer := models.PublicFooter{PoweredBy: poweredBy}
 
-	if business.ShowPriceDate {
+	if menu.ShowPriceDate {
 		footer.PriceNote = fmt.Sprintf(
 			"Fiyatlarımız %s tarihinden itibaren geçerlidir.",
-			business.PriceUpdatedAt.Local().Format("02.01.2006"))
+			menu.PriceUpdatedAt.Local().Format("02.01.2006"))
 	}
-	if business.ShowVatNote {
-		footer.VatNote = business.VatNoteText
+	if menu.ShowVatNote {
+		footer.VatNote = menu.VatNoteText
 	}
 	return footer
 }

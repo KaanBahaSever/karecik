@@ -31,13 +31,25 @@ function categoryName(category) {
 /**
  * Bulk price update dialog (increase / discount plus rounding).
  *
+ * Prices belong to the menu they are printed on, so every request is scoped to
+ * one menu: `menu_id` is required by the server and there is no default menu to
+ * fall back to.
+ *
  * @param {boolean}  open
  * @param {Function} onClose
- * @param {Array}    categories
+ * @param {string}   menuId     - the menu whose prices are updated (required)
+ * @param {Array}    categories - the categories OF THAT MENU
  * @param {string}   currency
  * @param {Function} onApplied - lets the caller refresh its list afterwards
  */
-export default function BulkPriceModal({ open, onClose, categories, currency, onApplied }) {
+export default function BulkPriceModal({
+  open,
+  onClose,
+  menuId,
+  categories,
+  currency,
+  onApplied,
+}) {
   const toast = useToast()
   const categoryList = Array.isArray(categories) ? categories : []
 
@@ -74,6 +86,9 @@ export default function BulkPriceModal({ open, onClose, categories, currency, on
 
   function requestBody(apply) {
     return {
+      // The server refuses an unscoped update with a 422: raising every price
+      // of a menu the user did not pick is not a fallback worth having.
+      menu_id: menuId,
       percentage: percentageValue,
       rounding,
       category_ids: allProducts ? [] : selectedCategories,
@@ -82,6 +97,10 @@ export default function BulkPriceModal({ open, onClose, categories, currency, on
   }
 
   function validate() {
+    if (!menuId) {
+      setError('Önce bir menü oluşturmalısınız.')
+      return false
+    }
     if (!percentageValid) {
       setError('Bir yüzde değeri girin.')
       return false

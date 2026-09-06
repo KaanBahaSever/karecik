@@ -7,9 +7,13 @@ import { useToast } from '../components/ui/Toast.jsx'
 import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
 
-/* Seeded account, handy for signing in quickly during development */
-const DEMO_EMAIL = 'demo@karecik.com'
-const DEMO_PASSWORD = 'demo1234'
+/* Seeded account, handy for signing in quickly during development.
+   These are the credentials database/seed.go writes for the Melly Coffee
+   tenant. The legacy demo account this box used to advertise is DELETED by
+   that same seed, so offering it here would hand out a login that no longer
+   exists — keep these two in step with the seed. */
+const DEMO_EMAIL = 'melly@karecik.com'
+const DEMO_PASSWORD = 'melly1234'
 
 /** Karecik brand lockup, linking back to the landing page. */
 function BrandLogo() {

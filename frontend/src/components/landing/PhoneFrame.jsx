@@ -33,7 +33,10 @@ export default function PhoneFrame({ children, className = '' }) {
       {/* outer body */}
       <div className="relative aspect-[390/844] w-full rounded-[3rem] bg-gray-900 p-3 shadow-2xl">
         {/* screen area */}
-        <div className="relative h-full w-full overflow-hidden rounded-[2.5rem] bg-white">
+        {/* `no-scrollbar` beside the clipping: a real phone shows no scrollbar
+            track, and the class hides the bar without disabling the scrolling
+            itself, which the content inside still needs. */}
+        <div className="no-scrollbar relative h-full w-full overflow-hidden rounded-[2.5rem] bg-white">
           {/*
             Safe area: the Dynamic Island sits at top-2 (8px) and is 26px tall,
             so its bottom edge is at 34px. Starting the content 44px down keeps

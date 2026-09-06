@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AlertCircle, Eye, Play } from 'lucide-react'
+import { AlertCircle, Eye, LayoutList, Play } from 'lucide-react'
 
 import api from '../../lib/api'
 import { currencySymbol } from '../../lib/format'
@@ -29,12 +29,28 @@ const CHROME_ALLOWANCE = 190
    stops being readable and a scrollbar is the better trade. */
 const MIN_FRAME_HEIGHT = 460
 
-/* Contact details a branch may override. The server has already resolved these
-   against the previewed branch, so the business-level draft must NOT be spread
-   over them — otherwise a branch with its own Wi-Fi or phone number would be
-   previewed with the head office' values and the preview would stop matching
-   what the customer sees at that branch. */
-const BRANCH_SCOPED_FIELDS = ['phone', 'address', 'wifi_ssid', 'wifi_password']
+/* Every setting whose change should replay the menu's entrance: the splash
+   screen itself, plus the header logo's fade-in, which plays right after the
+   splash leaves. They are joined into one string and watched as a single value,
+   so any change to any of them replays without a twelve-entry dependency array. */
+const REPLAY_FIELDS = [
+  'splash_enabled',
+  'splash_logo_url',
+  'splash_headline',
+  'splash_text',
+  'splash_bg_color',
+  'splash_duration',
+  'splash_exit_animation',
+  'splash_exit_duration',
+  'splash_exit_easing',
+  'splash_display',
+  'splash_slide_fade',
+  'logo_fade_in',
+]
+
+/* Long enough that dragging the duration slider replays the splash once, when
+   the pointer settles, instead of on every pixel of the drag. */
+const SPLASH_REPLAY_DELAY = 250
 
 /**
  * Phone-shaped preview that shows how dashboard changes look in the customer menu.
@@ -43,24 +59,25 @@ const BRANCH_SCOPED_FIELDS = ['phone', 'address', 'wifi_ssid', 'wifi_password']
  * settings come from the `business` prop — which may still be unsaved. That is
  * what lets a theme, font or colour change show up before it is persisted.
  *
- * @param {object}  business          - Draft (possibly unsaved) business settings
+ * With no menu slug there is no menu to preview — a business may own none — so
+ * the request is skipped entirely and the frame shows a placeholder instead.
+ *
+ * @param {object}  business          - Draft (possibly unsaved) menu settings
  * @param {number}  refresh           - Bump this value to refetch the menu
- * @param {string}  branchSlug        - Preview this branch (defaults to the business')
- * @param {string}  menuSlug          - Preview this menu (defaults to the default menu)
+ * @param {string}  menuSlug          - Preview this menu; empty means "no menu"
  * @param {string}  className
  * @param {boolean} showSplashControl - Adds the "replay splash screen" button
  */
 export default function LivePreview({
   business,
   refresh = 0,
-  branchSlug = '',
   menuSlug = '',
   className = '',
   showSplashControl = false,
 }) {
   const [language, setLanguage] = useState(business?.default_language || 'tr')
   const [menu, setMenu] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(Boolean(menuSlug))
   const [error, setError] = useState('')
 
   // Splash replay: `splashKey` is handed to SplashScreen as `replayKey`, so
@@ -130,13 +147,20 @@ export default function LivePreview({
   useEffect(() => {
     let cancelled = false
 
+    // Nothing to preview: there is no default menu to fall back to, so the
+    // request is not made at all and the frame renders its placeholder.
+    if (!menuSlug) {
+      setMenu(null)
+      setError('')
+      setLoading(false)
+      return undefined
+    }
+
     async function loadMenu() {
       setLoading(true)
       setError('')
       try {
-        // Empty slugs are dropped by the query builder, so the server keeps
-        // falling back to the business' default branch and menu.
-        const data = await api.previewMenu(language, { branch: branchSlug, menu: menuSlug })
+        const data = await api.previewMenu(language, { menu: menuSlug })
         if (cancelled) return
         setMenu(data)
       } catch (err) {
@@ -152,21 +176,25 @@ export default function LivePreview({
     return () => {
       cancelled = true
     }
-  }, [refresh, language, branchSlug, menuSlug])
+  }, [refresh, language, menuSlug])
 
-  // Merge the draft settings over the business object returned by the server.
+  /* Merge the draft settings over the menu payload returned by the server.
+
+     This is a WHOLE-OBJECT spread on purpose — there is no field allowlist —
+     so every column the dashboard draft carries reaches the customer
+     components the moment `buildDraft` knows about it, with no change here.
+     That is what makes text_color, show_yerli_uretim and yerli_uretim_logo_url
+     preview live: MenuContent hands text_color to themeVariables and
+     MenuFooter reads the other two, both straight off this object.
+
+     The one thing to watch is that a key merely PRESENT on the draft wins,
+     even when its value is undefined — so a draft field must be built with a
+     real default (null for a clearable URL) rather than left undefined, or it
+     would blank out the server's value in the preview alone. */
   const previewBusiness = {
     ...(menu?.business || {}),
     ...(business || {}),
     currency_symbol: currencySymbol(business?.currency),
-  }
-
-  // ...except the contact details, which the server resolved for the branch
-  // being previewed. `branch_slug` is only set when a branch actually resolved.
-  if (menu?.business?.branch_slug) {
-    BRANCH_SCOPED_FIELDS.forEach((field) => {
-      previewBusiness[field] = menu.business[field]
-    })
   }
 
   const previewMenu = menu ? { ...menu, business: previewBusiness } : null
@@ -178,6 +206,45 @@ export default function LivePreview({
     setSplashOpen(true)
   }
 
+  /* Auto-replay: editing any splash setting should show its result without the
+     user reaching for the button.
+
+     The first settings the preview ever sees are the baseline, never a replay —
+     mounting is not a change. That baseline is the first NON-EMPTY reading and
+     not simply the first render: the menu editor mounts this component before
+     the menu context has resolved a menu, so on that page the settings arrive a
+     tick late and would otherwise read as an edit.
+
+     Every later run schedules the replay instead of playing it at once, and the
+     cleanup cancels a pending one — so dragging the duration slider replays
+     once, when it comes to rest, and never after the preview is unmounted. */
+  const replaySignature = REPLAY_FIELDS.map((field) => String(business?.[field] ?? '')).join('|')
+  const replaySettled =
+    Boolean(business) && REPLAY_FIELDS.some((field) => business[field] !== undefined)
+  const splashBaselineRef = useRef(false)
+
+  useEffect(() => {
+    if (!replaySettled) return undefined
+
+    if (!splashBaselineRef.current) {
+      splashBaselineRef.current = true
+      return undefined
+    }
+
+    // Switching the splash off is a change too, but replaying a screen the
+    // customer will never see would only confuse. The logo fade-in still shows
+    // itself in that case: MenuContent adds and removes the animation property
+    // on the header logo as the toggle flips, so it plays on the spot.
+    if (business?.splash_enabled === false) return undefined
+
+    const timer = setTimeout(() => {
+      setSplashKey((previous) => previous + 1)
+      setSplashOpen(true)
+    }, SPLASH_REPLAY_DELAY)
+
+    return () => clearTimeout(timer)
+  }, [replaySignature]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className={className}>
       {/* header row */}
@@ -188,7 +255,7 @@ export default function LivePreview({
         </div>
 
         <div className="flex items-center gap-2">
-          {showSplashControl ? (
+          {showSplashControl && menuSlug ? (
             <button
               type="button"
               onClick={playSplash}
@@ -274,7 +341,22 @@ export default function LivePreview({
               className="no-scrollbar h-full overflow-y-auto overflow-x-hidden"
               style={{ '--menu-safe-top': '54px' }}
             >
-              {loading ? (
+              {!menuSlug ? (
+                /* No menu to preview. The placeholder stays inside the phone so
+                   the dashboard keeps its shape while the account has no menu. */
+                <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+                  <span
+                    className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 text-gray-400"
+                    aria-hidden="true"
+                  >
+                    <LayoutList className="h-6 w-6" />
+                  </span>
+                  <p className="text-sm font-semibold text-gray-900">Henüz menü eklenmedi</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Bir menü oluşturduğunuzda burada görünecek
+                  </p>
+                </div>
+              ) : loading ? (
                 <Loading text="Önizleme hazırlanıyor..." />
               ) : error ? (
                 <div className="flex h-full items-center justify-center p-6">

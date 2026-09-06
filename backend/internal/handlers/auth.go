@@ -30,8 +30,11 @@ type authResponse struct {
 }
 
 // Register — POST /api/auth/register
-// Creates the user and business records, derives the subdomain slug and
-// returns a token.
+// Creates the user and the business records, derives the subdomain slug from
+// the business name and returns a token.
+//
+// It creates NO menu: a fresh tenant owns zero of them and the dashboard's
+// empty states invite the owner to create the first one themselves.
 func (h *Handler) Register(c *fiber.Ctx) error {
 	var req registerRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -81,7 +84,7 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 	return utils.Created(c, authResponse{
 		Token:    token,
 		User:     user,
-		Business: h.withMenuURL(business),
+		Business: h.withHomeURL(business),
 	})
 }
 
@@ -123,7 +126,7 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 	return utils.OK(c, authResponse{
 		Token:    token,
 		User:     user,
-		Business: h.withMenuURL(business),
+		Business: h.withHomeURL(business),
 	})
 }
 
@@ -145,6 +148,6 @@ func (h *Handler) Me(c *fiber.Ctx) error {
 
 	return utils.OK(c, fiber.Map{
 		"user":     user,
-		"business": h.withMenuURL(business),
+		"business": h.withHomeURL(business),
 	})
 }

@@ -17,15 +17,15 @@ import (
 // scanProduct, the inline scan in ListProducts and the product scan in
 // BuildPublicMenu all read the columns in exactly this order.
 const productColumns = `id, business_id, category_id, translations, price, compare_price,
-	calories, image_url, allergens, badges, is_active, is_featured, position,
+	calories, image_url, allergens, badges, options, is_active, is_featured, position,
 	created_at, updated_at`
 
 func scanProduct(row pgx.Row) (*models.Product, error) {
 	var product models.Product
 	err := row.Scan(&product.ID, &product.BusinessID, &product.CategoryID, &product.Translations,
 		&product.Price, &product.ComparePrice, &product.Calories, &product.ImageURL,
-		&product.Allergens, &product.Badges, &product.IsActive, &product.IsFeatured,
-		&product.Position, &product.CreatedAt, &product.UpdatedAt)
+		&product.Allergens, &product.Badges, &product.Options, &product.IsActive,
+		&product.IsFeatured, &product.Position, &product.CreatedAt, &product.UpdatedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, ErrNotFound
@@ -45,6 +45,11 @@ func normalizeProduct(product *models.Product) {
 	}
 	if product.Badges == nil {
 		product.Badges = models.Badges{}
+	}
+	// options is a NOT NULL jsonb column like badges, so the payload has to
+	// carry [] and never null.
+	if product.Options == nil {
+		product.Options = models.ProductOptions{}
 	}
 }
 
@@ -68,8 +73,8 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 
 	query := `
 		SELECT p.id, p.business_id, p.category_id, p.translations, p.price, p.compare_price,
-		       p.calories, p.image_url, p.allergens, p.badges, p.is_active, p.is_featured,
-		       p.position, p.created_at, p.updated_at
+		       p.calories, p.image_url, p.allergens, p.badges, p.options, p.is_active,
+		       p.is_featured, p.position, p.created_at, p.updated_at
 		FROM products p
 		JOIN categories c ON c.id = p.category_id
 		WHERE ` + strings.Join(conditions, " AND ") + `
@@ -86,8 +91,8 @@ func ListProducts(ctx context.Context, db DB, businessID uuid.UUID,
 		var product models.Product
 		if err := rows.Scan(&product.ID, &product.BusinessID, &product.CategoryID,
 			&product.Translations, &product.Price, &product.ComparePrice, &product.Calories,
-			&product.ImageURL, &product.Allergens, &product.Badges, &product.IsActive,
-			&product.IsFeatured, &product.Position,
+			&product.ImageURL, &product.Allergens, &product.Badges, &product.Options,
+			&product.IsActive, &product.IsFeatured, &product.Position,
 			&product.CreatedAt, &product.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -107,15 +112,19 @@ func GetProduct(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.P
 // CreateProduct appends a product to the end of its category.
 func CreateProduct(ctx context.Context, db DB, businessID, categoryID uuid.UUID,
 	translations models.Translations, price float64, comparePrice *float64, calories *int,
-	imageURL *string, allergens []string, badges models.Badges,
+	imageURL *string, allergens []string, badges models.Badges, options models.ProductOptions,
 	isActive, isFeatured bool) (*models.Product, error) {
 
 	if allergens == nil {
 		allergens = []string{}
 	}
-	// badges is a NOT NULL jsonb column, so a nil slice becomes an empty array.
+	// badges and options are NOT NULL jsonb columns, so a nil slice becomes an
+	// empty array — encoding/json would write the literal null instead.
 	if badges == nil {
 		badges = models.Badges{}
+	}
+	if options == nil {
+		options = models.ProductOptions{}
 	}
 
 	var nextPosition int
@@ -128,18 +137,18 @@ func CreateProduct(ctx context.Context, db DB, businessID, categoryID uuid.UUID,
 
 	return scanProduct(db.QueryRow(ctx, `
 		INSERT INTO products (business_id, category_id, translations, price, compare_price,
-		                      calories, image_url, allergens, badges, is_active, is_featured,
-		                      position)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		                      calories, image_url, allergens, badges, options, is_active,
+		                      is_featured, position)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING `+productColumns,
 		businessID, categoryID, translations, price, comparePrice, calories,
-		imageURL, allergens, badges, isActive, isFeatured, nextPosition))
+		imageURL, allergens, badges, options, isActive, isFeatured, nextPosition))
 }
 
 var productUpdatableColumns = map[string]bool{
 	"category_id": true, "translations": true, "price": true, "compare_price": true,
 	"calories": true, "image_url": true, "allergens": true, "badges": true,
-	"is_active": true, "is_featured": true, "position": true,
+	"options": true, "is_active": true, "is_featured": true, "position": true,
 }
 
 // UpdateProduct applies a partial update to the given columns.
@@ -209,15 +218,17 @@ type PriceRow struct {
 }
 
 // ListPriceRows returns the products that take part in a bulk update.
-// An empty categoryIDs selects every product of the business.
-func ListPriceRows(ctx context.Context, db DB, businessID uuid.UUID,
+// A bulk update is scoped to one menu — prices belong to the menu they are
+// printed on — so the products are reached through their category. An empty
+// categoryIDs selects every product of that menu.
+func ListPriceRows(ctx context.Context, db DB, businessID, menuID uuid.UUID,
 	categoryIDs []uuid.UUID) ([]PriceRow, error) {
 
 	query := `SELECT p.id, p.price, p.translations
 	          FROM products p
 	          JOIN categories c ON c.id = p.category_id
-	          WHERE p.business_id = $1`
-	args := []any{businessID}
+	          WHERE p.business_id = $1 AND c.menu_id = $2`
+	args := []any{businessID, menuID}
 
 	if len(categoryIDs) > 0 {
 		args = append(args, categoryIDs)
@@ -246,7 +257,9 @@ func ListPriceRows(ctx context.Context, db DB, businessID uuid.UUID,
 }
 
 // ApplyPrices writes the computed new prices inside a single transaction.
-func ApplyPrices(ctx context.Context, pool *pgxpool.Pool, businessID uuid.UUID,
+// The menu scopes the write exactly like it scopes ListPriceRows, so a product
+// id from another menu of the same business cannot slip through.
+func ApplyPrices(ctx context.Context, pool *pgxpool.Pool, businessID, menuID uuid.UUID,
 	newPrices map[uuid.UUID]float64) (int, error) {
 
 	if len(newPrices) == 0 {
@@ -261,9 +274,14 @@ func ApplyPrices(ctx context.Context, pool *pgxpool.Pool, businessID uuid.UUID,
 
 	affected := 0
 	for id, price := range newPrices {
-		tag, err := tx.Exec(ctx,
-			`UPDATE products SET price = $1 WHERE id = $2 AND business_id = $3`,
-			price, id, businessID)
+		tag, err := tx.Exec(ctx, `
+			UPDATE products p SET price = $1
+			WHERE p.id = $2 AND p.business_id = $3
+			  AND EXISTS (
+			      SELECT 1 FROM categories c
+			      WHERE c.id = p.category_id AND c.menu_id = $4
+			  )`,
+			price, id, businessID, menuID)
 		if err != nil {
 			return 0, err
 		}

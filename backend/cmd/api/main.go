@@ -45,9 +45,12 @@ func main() {
 		log.Fatalf("[karecik] migration error: %v", err)
 	}
 
+	// The seed writes a working login for a REAL business, so it is handed the
+	// production flag and refuses to run when APP_ENV=production — SEED_DEMO
+	// alone is not enough to authorise it.
 	if cfg.SeedDemo {
-		if err := database.SeedDemo(ctx, pool); err != nil {
-			log.Printf("[karecik] WARNING: could not create the demo data: %v", err)
+		if err := database.SeedDemo(ctx, pool, cfg.IsProduction()); err != nil {
+			log.Printf("[karecik] WARNING: could not create the seed data: %v", err)
 		}
 	}
 
@@ -100,7 +103,7 @@ func main() {
 	log.Printf("[karecik] server listening   -> http://localhost:%s (bound to %s)", cfg.Port, cfg.Host)
 	log.Printf("[karecik] health check       -> http://localhost:%s/api/health", cfg.Port)
 	if !cfg.IsProduction() {
-		log.Printf("[karecik] demo menu          -> http://localhost:%s/api/public/menu/demo-kafe", cfg.Port)
+		log.Printf("[karecik] seeded menu        -> http://localhost:%s/api/public/menu/melly-coffee/suadiye", cfg.Port)
 	}
 
 	if err := app.Listen(addr); err != nil {

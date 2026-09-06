@@ -36,11 +36,11 @@ func scanCategory(row pgx.Row) (*models.Category, error) {
 // ListCategories returns the categories of a business ordered by position.
 // Each category also carries the number of products it holds (product_count).
 //
-// menuID == nil lists every category of the business — the bulk price and
-// reorder paths work on all of them. When a menu is given the result mirrors
-// what BuildPublicMenu shows for that menu, so the editor lists exactly what
-// the customer will see: a category that was never assigned to a menu still
-// belongs to the business and therefore stays on the default menu.
+// menuID == nil lists every category of the business — the reorder path works
+// on all of them. When a menu is given the result mirrors what BuildPublicMenu
+// shows for that menu, so the editor lists exactly what the customer will see:
+// categories.menu_id is NOT NULL since migration 005, so the match is a plain
+// equality.
 func ListCategories(ctx context.Context, db DB, businessID uuid.UUID,
 	menuID *uuid.UUID) ([]models.Category, error) {
 
@@ -55,9 +55,7 @@ func ListCategories(ctx context.Context, db DB, businessID uuid.UUID,
 
 	if menuID != nil {
 		args = append(args, *menuID)
-		query += ` AND (c.menu_id = $2
-		           OR (c.menu_id IS NULL AND EXISTS (
-		               SELECT 1 FROM menus m WHERE m.id = $2 AND m.is_default)))`
+		query += ` AND c.menu_id = $2`
 	}
 	query += `
 		GROUP BY c.id
@@ -94,8 +92,8 @@ func GetCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.
 }
 
 // CreateCategory appends a new category to the end of the list of the given
-// menu. The caller resolves the menu (the business' default one when the
-// request did not name it) and has already checked that it belongs to the
+// menu. The menu is always named by the request — there is no default menu to
+// fall back to — and the caller has already checked that it belongs to the
 // business.
 func CreateCategory(ctx context.Context, db DB, businessID, menuID uuid.UUID,
 	translations models.Translations, icon, imageURL *string, isActive bool) (*models.Category, error) {

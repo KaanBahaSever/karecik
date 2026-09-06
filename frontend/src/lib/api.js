@@ -115,8 +115,11 @@ export const api = {
   login: (payload) => request('/api/auth/login', { method: 'POST', body: payload, auth: false }),
   me: () => request('/api/auth/me'),
 
-  /* business */
+  /* business (the slim account record — every setting lives on a menu) */
   getBusiness: () => request('/api/business'),
+  // Exactly two editable fields: `name` and `slug`. The slug is the tenant
+  // subdomain, so it is globally unique and reserved-checked by the server,
+  // which answers 409 when another business already owns it.
   updateBusiness: (payload) => request('/api/business', { method: 'PUT', body: payload }),
 
   /* categories */
@@ -151,43 +154,29 @@ export const api = {
     return request('/api/uploads', { method: 'POST', body: form, isForm: true })
   },
 
-  /* menus (a business may publish several menus) */
+  /* menus — the primary entity: a menu owns its own branding and settings */
   listMenus: () => request('/api/menus'),
   createMenu: (payload) => request('/api/menus', { method: 'POST', body: payload }),
   updateMenu: (id, payload) => request(`/api/menus/${id}`, { method: 'PUT', body: payload }),
   deleteMenu: (id) => request(`/api/menus/${id}`, { method: 'DELETE' }),
 
-  /* branches */
-  listBranches: () => request('/api/branches'),
-  createBranch: (payload) => request('/api/branches', { method: 'POST', body: payload }),
-  updateBranch: (id, payload) => request(`/api/branches/${id}`, { method: 'PUT', body: payload }),
-  deleteBranch: (id) => request(`/api/branches/${id}`, { method: 'DELETE' }),
-  setBranchMenus: (id, menuIds, defaultMenuId) =>
-    request(`/api/branches/${id}/menus`, {
-      method: 'PUT',
-      body: { menu_ids: menuIds, default_menu_id: defaultMenuId },
-    }),
-
-  /* branch-specific prices and availability */
-  listBranchPrices: (id) => request(`/api/branches/${id}/prices`),
-  setBranchPrice: (id, productId, payload) =>
-    request(`/api/branches/${id}/prices/${productId}`, { method: 'PUT', body: payload }),
-  clearBranchPrice: (id, productId) =>
-    request(`/api/branches/${id}/prices/${productId}`, { method: 'DELETE' }),
-
   /* customer menu payloads */
-  // `params` may carry { branch, menu } slugs; both are optional.
+  // `params` may carry { menu }: the slug of the menu to preview, scoped to the
+  // caller's own business. Without it the backend resolves the single active
+  // menu, or answers 200 with menu_resolved: false when there is no such menu.
   previewMenu: (lang, params) =>
     request(`/api/preview/menu${qs({ lang, ...(params || {}) })}`),
-  publicMenu: (slug, lang, menuSlug) =>
-    request(`/api/public/menu/${slug}${qs({ lang, menu: menuSlug })}`, { auth: false }),
-  publicMenuByHost: (lang, menuSlug) =>
-    request(`/api/public/menu${qs({ lang, menu: menuSlug })}`, { auth: false }),
-  publicMenuByBranch: (branchSlug, menuSlug, lang) =>
-    request(
-      `/api/public/b/${branchSlug}${menuSlug ? `/${menuSlug}` : ''}${qs({ lang })}`,
-      { auth: false },
-    ),
+  // Path form. The business slug identifies the tenant and the optional menu
+  // slug picks one of its menus; menu slugs are unique only within a business,
+  // so the business segment is never optional. With no menu slug the backend
+  // resolves the only active menu or returns the directory payload.
+  publicMenu: (businessSlug, menuSlug, lang) =>
+    request(`/api/public/menu/${encodeURIComponent(businessSlug)}${menuSlug ? `/${encodeURIComponent(menuSlug)}` : ''}${qs({ lang })}`, {
+      auth: false,
+    }),
+  // Host form: the subdomain identifies the tenant, ?menu= picks the menu.
+  publicMenuByHost: (menuSlug, lang) =>
+    request(`/api/public/menu${qs({ menu: menuSlug, lang })}`, { auth: false }),
 }
 
 export default api

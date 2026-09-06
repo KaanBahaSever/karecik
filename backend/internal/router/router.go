@@ -55,19 +55,23 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
 
-	// Customer menu — no token required.
-	// The ":slug" of the path form may name a branch or a business, and both
-	// forms accept an optional "?menu=<slug>".
+	// Customer menu — no token required. The address is
+	// {business-slug}.karecik.com/{menu-slug}: the host form reads the tenant
+	// from the subdomain and the menu from an optional "?menu=", the path form
+	// reads both from the path. The menu segment is optional in both, because
+	// the bare tenant address is a directory page, not an error.
 	app.Get("/api/public/menu", h.PublicMenuByHost)
-	app.Get("/api/public/menu/:slug", h.PublicMenuBySlug)
-	app.Get("/api/public/b/:branch_slug", h.PublicMenuByBranch)
-	app.Get("/api/public/b/:branch_slug/:menu_slug", h.PublicMenuByBranch)
+	app.Get("/api/public/menu/:businessSlug", h.PublicMenuByPath)
+	app.Get("/api/public/menu/:businessSlug/:menuSlug", h.PublicMenuByPath)
 
 	// --------------------------------------------------- protected endpoints
 	api := app.Group("/api", middleware.Protected(cfg))
 
 	api.Get("/auth/me", h.Me)
 
+	// The account owns exactly two fields — its name and the subdomain slug.
+	// Every setting a customer sees lives on a menu and is written through
+	// /api/menus/:id.
 	api.Get("/business", h.GetBusiness)
 	api.Put("/business", h.UpdateBusiness)
 
@@ -87,25 +91,17 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	api.Patch("/products/:id/price", h.PatchProductPrice)
 	api.Delete("/products/:id", h.DeleteProduct)
 
-	// Menus — a business may publish several of them (kahvaltı, akşam, bar...)
+	// Menus — the primary entity: a business may publish several of them
+	// (kahvaltı, akşam, bar...) and each one owns its address and its settings.
 	api.Get("/menus", h.ListMenus)
 	api.Post("/menus", h.CreateMenu)
+	api.Get("/menus/:id", h.GetMenu)
 	api.Put("/menus/:id", h.UpdateMenu)
 	api.Delete("/menus/:id", h.DeleteMenu)
 
-	// Branches — the fixed sub-paths must come BEFORE the bare ":id" pattern
-	api.Get("/branches", h.ListBranches)
-	api.Post("/branches", h.CreateBranch)
-	api.Put("/branches/:id/menus", h.SetBranchMenus)
-	api.Get("/branches/:id/prices", h.ListBranchPrices)
-	api.Put("/branches/:id/prices/:productId", h.SetBranchPrice)
-	api.Delete("/branches/:id/prices/:productId", h.DeleteBranchPrice)
-	api.Put("/branches/:id", h.UpdateBranch)
-	api.Delete("/branches/:id", h.DeleteBranch)
-
 	api.Post("/uploads", h.Upload)
 
-	// Dashboard live preview — "?branch=<slug>" and "?menu=<slug>" are optional
+	// Dashboard live preview — "?menu=<slug>" is optional
 	api.Get("/preview/menu", h.PreviewMenu)
 
 	// ------------------------------------------------- unknown /api requests

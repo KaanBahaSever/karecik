@@ -1,6 +1,7 @@
 package models
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -58,16 +59,52 @@ type User struct {
 
 // --------------------------------------------------------------- businesses
 
+// Business is the tenant: the account and the address it answers on, nothing
+// more. Every published setting (branding, splash, contact, pricing,
+// languages) lives on the Menu, because a menu is what a customer opens.
+//
+// Slug is the subdomain of {business-slug}.karecik.com. It is GLOBALLY unique
+// and it is reserved-checked with utils.IsReservedSlug, because it is a
+// hostname label — unlike Menu.Slug, which is only a path segment.
 type Business struct {
-	ID     uuid.UUID `json:"id"`
-	UserID uuid.UUID `json:"-"`
-	Name   string    `json:"name"`
-	Slug   string    `json:"slug"`
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"-"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Computed — the tenant's root address, with no menu path. It has no
+	// column in the database.
+	HomeURL string `json:"home_url,omitempty"`
+}
+
+// ---------------------------------------------------------------- menus
+
+// Menu is one published menu of a business (kahvaltı, akşam, bar...) and the
+// primary entity of the system: it owns its categories and every setting
+// below. Slug is the PATH segment of {business-slug}.karecik.com/{menu-slug},
+// so it is unique only within its business — two tenants may both publish
+// "kahvalti" — and it is never reserved-checked.
+//
+// There is no default menu. A business may own zero menus, and deleting one
+// never promotes another.
+type Menu struct {
+	ID          uuid.UUID `json:"id"`
+	BusinessID  uuid.UUID `json:"-"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug"`
+	Description string    `json:"description"`
+	IsActive    bool      `json:"is_active"`
+	Position    int       `json:"position"`
 
 	LogoURL  *string `json:"logo_url"`
 	CoverURL *string `json:"cover_url"`
 
-	Currency string `json:"currency"`
+	// CurrencySymbol is derived from Currency by the repository layer and is
+	// read-only to the outside world — no handler and no payload may set it.
+	Currency       string `json:"currency"`
+	CurrencySymbol string `json:"currency_symbol"`
 
 	Theme        string `json:"theme"`
 	FontFamily   string `json:"font_family"`
@@ -85,12 +122,16 @@ type Business struct {
 	// larger line and SplashDuration the hold time before the exit animation.
 	// SplashExitEasing is the timing function of that exit animation and
 	// SplashDisplay picks what the screen shows — logo, text or both.
+	// SplashSlideFade only applies to the four slide-* animations: true fades
+	// the panel out while it slides, false keeps it fully opaque like a
+	// curtain.
 	SplashLogoURL       *string `json:"splash_logo_url"`
 	SplashHeadline      string  `json:"splash_headline"`
 	SplashExitAnimation string  `json:"splash_exit_animation"`
 	SplashExitDuration  int     `json:"splash_exit_duration"`
 	SplashExitEasing    string  `json:"splash_exit_easing"`
 	SplashDisplay       string  `json:"splash_display"`
+	SplashSlideFade     bool    `json:"splash_slide_fade"`
 
 	// Menu background — a flat colour or an image behind a darkening overlay.
 	// BackgroundColor nil means "inherit the theme background".
@@ -100,8 +141,22 @@ type Business struct {
 	BackgroundOverlayOpacity float64 `json:"background_overlay_opacity"`
 
 	// HeaderDisplay picks what the customer menu header shows — logo, name or
-	// both.
+	// both. LogoFadeIn brings that logo in with a short fade when the menu
+	// opens; false means it is simply there, with no animation at all.
 	HeaderDisplay string `json:"header_display"`
+	LogoFadeIn    bool   `json:"logo_fade_in"`
+
+	// TextColor tints every word on the customer menu — headings, product
+	// titles and body text all read one CSS variable, so this single #RRGGBB
+	// value drives the lot. It overrides the theme's own text tone.
+	TextColor string `json:"text_color"`
+
+	// ShowYerliUretim puts the "Yerli Üretim" badge and the VAT notice in the
+	// menu footer. YerliUretimLogoURL is the certified artwork — an uploaded
+	// '/uploads/...' path or an absolute URL; nil falls back to a plain text
+	// pill, because the official mark is never drawn by this product.
+	ShowYerliUretim    bool    `json:"show_yerli_uretim"`
+	YerliUretimLogoURL *string `json:"yerli_uretim_logo_url"`
 
 	ShowVatNote    bool      `json:"show_vat_note"`
 	VatNoteText    string    `json:"vat_note_text"`
@@ -114,79 +169,33 @@ type Business struct {
 	WifiSSID     *string `json:"wifi_ssid"`
 	WifiPassword *string `json:"wifi_password"`
 
-	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// Computed field — it has no column in the database
-	MenuURL string `json:"menu_url,omitempty"`
+	// Computed fields — they have no column in the database. MenuURL is the
+	// full https://{business-slug}.karecik.com/{menu-slug} address, which is
+	// exactly what the QR code encodes.
+	CategoryCount int    `json:"category_count"`
+	MenuURL       string `json:"menu_url,omitempty"`
 }
 
-// ------------------------------------------------------- branches and menus
-
-// Menu is one published menu of a business (kahvaltı, akşam, bar...). Every
-// category belongs to a menu; exactly one menu per business is the default.
-type Menu struct {
-	ID          uuid.UUID `json:"id"`
-	BusinessID  uuid.UUID `json:"-"`
-	Name        string    `json:"name"`
-	Slug        string    `json:"slug"`
-	Description string    `json:"description"`
-	IsDefault   bool      `json:"is_default"`
-	IsActive    bool      `json:"is_active"`
-	Position    int       `json:"position"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-
-	// Computed field — it has no column in the database
-	CategoryCount int `json:"category_count"`
-}
-
-// Branch is one physical location of a business. Its Slug is globally unique
-// because it is a subdomain: {branch}.karecik.com resolves without a business
-// qualifier, and branch slugs are looked up before business slugs.
-type Branch struct {
-	ID           uuid.UUID `json:"id"`
-	BusinessID   uuid.UUID `json:"-"`
-	Name         string    `json:"name"`
-	Slug         string    `json:"slug"`
-	Phone        *string   `json:"phone"`
-	Address      *string   `json:"address"`
-	WifiSSID     *string   `json:"wifi_ssid"`
-	WifiPassword *string   `json:"wifi_password"`
-	IsDefault    bool      `json:"is_default"`
-	IsActive     bool      `json:"is_active"`
-	Position     int       `json:"position"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-
-	// Computed fields — they have no column in the database
-	MenuIDs []uuid.UUID `json:"menu_ids"`
-	MenuURL string      `json:"menu_url,omitempty"`
-}
-
-// BranchPrice overrides a product's price at one branch.
-// A nil Price means "inherit the product's own price".
-type BranchPrice struct {
-	BranchID     uuid.UUID `json:"branch_id"`
-	ProductID    uuid.UUID `json:"product_id"`
-	Price        *float64  `json:"price"`
-	ComparePrice *float64  `json:"compare_price"`
-	IsAvailable  bool      `json:"is_available"`
-}
-
-// MenuRef is the lightweight menu descriptor the customer menu uses to render
-// a switcher when a branch serves more than one menu.
-type MenuRef struct {
-	Slug string `json:"slug"`
-	Name string `json:"name"`
+// PublicMenuRef is the lightweight menu descriptor the customer menu uses to
+// render a switcher when a business publishes more than one menu, and the
+// tenant directory page uses to list them. Description is the subtitle under
+// the name on that directory.
+type PublicMenuRef struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // --------------------------------------------------------------- categories
 
-// Category groups the products of one menu. MenuID is a pointer because the
-// column is nullable: a category that was never assigned to a menu still
-// belongs to the business and shows on its default menu.
+// Category groups the products of one menu. categories.menu_id is NOT NULL
+// since migration 005, so MenuID is always set on a row read from the
+// database; the pointer only survives so that a request body can leave it out
+// — and there is no default menu to fall back to, so the handler answers that
+// with 422 rather than guessing.
 type Category struct {
 	ID           uuid.UUID    `json:"id"`
 	BusinessID   uuid.UUID    `json:"-"`
@@ -254,24 +263,107 @@ func (b Badges) Normalize() Badges {
 	return normalized
 }
 
+// ---------------------------------------------------------- product options
+
+// ProductOptionItem is one choice inside a group, priced as a surcharge on top
+// of the product's own price. A zero price is normal ("Tek" portion).
+type ProductOptionItem struct {
+	Name  string  `json:"name"`
+	Price float64 `json:"price"`
+}
+
+// ProductOptionGroup is one question asked about a product.
+// Type is "single" (radio) or "multiple" (checkbox).
+type ProductOptionGroup struct {
+	Name     string              `json:"name"`
+	Type     string              `json:"type"`
+	Required bool                `json:"required"`
+	Items    []ProductOptionItem `json:"items"`
+}
+
+// ProductOptions is stored as a JSONB array on the product.
+type ProductOptions []ProductOptionGroup
+
+// Option types and limits. The dashboard mirrors the limits in
+// frontend/src/components/dashboard/ProductModal.jsx.
+const (
+	OptionTypeSingle   = "single"
+	OptionTypeMultiple = "multiple"
+	MaxOptionGroups    = 8
+	MaxOptionItems     = 20
+	MaxOptionNameRunes = 60
+)
+
+// Normalize trims names, drops groups without a name or without items, drops
+// items without a name, coerces an unknown Type to "single", rounds prices to
+// two decimals and caps both lists. It always returns a non-nil slice.
+//
+// Name length and the price range are validated in the handler, which owns the
+// Turkish messages; this only trims, coerces, rounds and caps — nothing here
+// ever reports an error.
+func (o ProductOptions) Normalize() ProductOptions {
+	normalized := make(ProductOptions, 0, len(o))
+
+	for _, group := range o {
+		group.Name = strings.TrimSpace(group.Name)
+		if group.Name == "" {
+			continue
+		}
+
+		group.Type = strings.ToLower(strings.TrimSpace(group.Type))
+		if group.Type != OptionTypeSingle && group.Type != OptionTypeMultiple {
+			group.Type = OptionTypeSingle
+		}
+
+		items := make([]ProductOptionItem, 0, len(group.Items))
+		for _, item := range group.Items {
+			item.Name = strings.TrimSpace(item.Name)
+			if item.Name == "" {
+				continue
+			}
+			// Prices arrive from a text input, so 25.999999 is possible.
+			item.Price = math.Round(item.Price*100) / 100
+
+			items = append(items, item)
+			if len(items) == MaxOptionItems {
+				break
+			}
+		}
+
+		// A group with no answers is a question nobody can answer.
+		if len(items) == 0 {
+			continue
+		}
+		group.Items = items
+
+		normalized = append(normalized, group)
+		if len(normalized) == MaxOptionGroups {
+			break
+		}
+	}
+
+	return normalized
+}
+
 // ----------------------------------------------------------------- products
 
 type Product struct {
-	ID           uuid.UUID    `json:"id"`
-	BusinessID   uuid.UUID    `json:"-"`
-	CategoryID   uuid.UUID    `json:"category_id"`
-	Translations Translations `json:"translations"`
-	Price        float64      `json:"price"`
-	ComparePrice *float64     `json:"compare_price"`
-	Calories     *int         `json:"calories"`
-	ImageURL     *string      `json:"image_url"`
-	Allergens    []string     `json:"allergens"`
-	Badges       Badges       `json:"badges"`
-	IsActive     bool         `json:"is_active"`
-	IsFeatured   bool         `json:"is_featured"`
-	Position     int          `json:"position"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	ID           uuid.UUID      `json:"id"`
+	BusinessID   uuid.UUID      `json:"-"`
+	CategoryID   uuid.UUID      `json:"category_id"`
+	Translations Translations   `json:"translations"`
+	Price        float64        `json:"price"`
+	ComparePrice *float64       `json:"compare_price"`
+	Calories     *int           `json:"calories"`
+	ImageURL     *string        `json:"image_url"`
+	Allergens    []string       `json:"allergens"`
+	Badges       Badges         `json:"badges"`
+	Options      ProductOptions `json:"options"`
+	IsActive     bool           `json:"is_active"`
+	IsFeatured   bool           `json:"is_featured"`
+	Position     int            `json:"position"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // ------------------------------------------------ customer-facing menu DTOs
@@ -283,11 +375,24 @@ type PublicMenu struct {
 	Categories []PublicCategory `json:"categories"`
 	Footer     PublicFooter     `json:"footer"`
 
-	// Menus lists the other menus reachable from this context. Always non-nil;
-	// empty when there is nothing to switch between.
-	Menus []MenuRef `json:"menus"`
+	// Menus lists every active menu of the same business, in position order.
+	// Always non-nil; empty when the tenant publishes nothing.
+	Menus []PublicMenuRef `json:"menus"`
+
+	// MenuResolved reports whether Categories and the settings on Business
+	// actually come from a menu. It is false when the request identified a
+	// business but no single menu — no menu slug in the path and either zero
+	// or two-plus active menus — which is what makes the frontend render the
+	// tenant directory instead of a menu.
+	MenuResolved bool `json:"menu_resolved"`
 }
 
+// PublicBusiness is the header block of the customer payload. Its settings are
+// built from a Menu, not from a Business: Name and Slug are the menu's name
+// and the menu's slug, because the menu is the venue the customer is looking
+// at. The tenant identity travels alongside them in BusinessName /
+// BusinessSlug. The field set is kept verbatim because the customer frontend
+// reads it field by field.
 type PublicBusiness struct {
 	Name           string  `json:"name"`
 	Slug           string  `json:"slug"`
@@ -313,6 +418,7 @@ type PublicBusiness struct {
 	SplashExitDuration  int     `json:"splash_exit_duration"`
 	SplashExitEasing    string  `json:"splash_exit_easing"`
 	SplashDisplay       string  `json:"splash_display"`
+	SplashSlideFade     bool    `json:"splash_slide_fade"`
 
 	BackgroundType           string  `json:"background_type"`
 	BackgroundColor          *string `json:"background_color"`
@@ -320,6 +426,14 @@ type PublicBusiness struct {
 	BackgroundOverlayOpacity float64 `json:"background_overlay_opacity"`
 
 	HeaderDisplay string `json:"header_display"`
+	LogoFadeIn    bool   `json:"logo_fade_in"`
+
+	// TextColor, ShowYerliUretim and YerliUretimLogoURL mirror the same three
+	// fields on Menu — the customer view reads them to tint its text and to
+	// build the legal footer. See the notes there.
+	TextColor          string  `json:"text_color"`
+	ShowYerliUretim    bool    `json:"show_yerli_uretim"`
+	YerliUretimLogoURL *string `json:"yerli_uretim_logo_url"`
 
 	ShowVatNote    bool      `json:"show_vat_note"`
 	VatNoteText    string    `json:"vat_note_text"`
@@ -332,11 +446,18 @@ type PublicBusiness struct {
 	WifiSSID     *string `json:"wifi_ssid"`
 	WifiPassword *string `json:"wifi_password"`
 
-	// Set when the menu is served through a branch and/or a named menu.
-	BranchName *string `json:"branch_name"`
-	BranchSlug *string `json:"branch_slug"`
-	MenuName   *string `json:"menu_name"`
-	MenuSlug   *string `json:"menu_slug"`
+	// The tenant, and the menu this payload was built from. BusinessName and
+	// BusinessSlug are always filled — even when no menu resolved, which is
+	// what lets the directory page title itself; MenuSlug is empty in that
+	// case. Together they spell the real address,
+	// {business_slug}.karecik.com/{menu_slug}, without a second request.
+	BusinessName string `json:"business_name"`
+	BusinessSlug string `json:"business_slug"`
+	MenuSlug     string `json:"menu_slug"`
+
+	// MenuName is the menu name again — Name above carries it too, and both
+	// stay because the frontend reads them field by field.
+	MenuName *string `json:"menu_name"`
 }
 
 type PublicCategory struct {
@@ -350,18 +471,19 @@ type PublicCategory struct {
 }
 
 type PublicProduct struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Ingredients  string    `json:"ingredients,omitempty"`
-	Price        float64   `json:"price"`
-	ComparePrice *float64  `json:"compare_price"`
-	Calories     *int      `json:"calories"`
-	ImageURL     *string   `json:"image_url"`
-	Allergens    []string  `json:"allergens"`
-	Badges       Badges    `json:"badges"`
-	IsFeatured   bool      `json:"is_featured"`
-	IsActive     bool      `json:"is_active"`
+	ID           uuid.UUID      `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Ingredients  string         `json:"ingredients,omitempty"`
+	Price        float64        `json:"price"`
+	ComparePrice *float64       `json:"compare_price"`
+	Calories     *int           `json:"calories"`
+	ImageURL     *string        `json:"image_url"`
+	Allergens    []string       `json:"allergens"`
+	Badges       Badges         `json:"badges"`
+	Options      ProductOptions `json:"options"`
+	IsFeatured   bool           `json:"is_featured"`
+	IsActive     bool           `json:"is_active"`
 }
 
 type PublicFooter struct {

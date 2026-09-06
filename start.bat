@@ -160,8 +160,8 @@ echo    READY
 echo  ==========================================
 echo.
 echo    Site          : http://localhost:5173
-echo    Demo sign-in  : demo@karecik.com  /  demo1234
-echo    Customer menu : http://demo-kafe.localhost:5173
+echo    Demo sign-in  : melly@karecik.com  /  melly1234
+echo    Customer menu : http://melly-coffee.localhost:5173/suadiye
 echo.
 echo    To stop it: stop.bat
 echo.

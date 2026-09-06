@@ -144,7 +144,7 @@ type SplashExitAnimation struct {
 }
 
 // SplashExitAnimations lists the exit transitions of the splash screen.
-// The ids match the businesses.splash_exit_animation CHECK constraint.
+// The ids match the menus.splash_exit_animation CHECK constraint.
 var SplashExitAnimations = []SplashExitAnimation{
 	{ID: "fade", Label: "Yumuşak geçiş"},
 	{ID: "slide-up", Label: "Yukarı kayar"},
@@ -162,7 +162,7 @@ type SplashEasing struct {
 }
 
 // SplashEasings lists the timing curves of the splash exit animation.
-// The ids match the businesses.splash_exit_easing CHECK constraint and are
+// The ids match the menus.splash_exit_easing CHECK constraint and are
 // used verbatim as CSS timing functions by the frontend.
 var SplashEasings = []SplashEasing{
 	{ID: "ease-in", Label: "Yavaş başla"},
@@ -181,7 +181,7 @@ type DisplayMode struct {
 }
 
 // SplashDisplayModes lists what the splash screen shows.
-// The ids match the businesses.splash_display CHECK constraint.
+// The ids match the menus.splash_display CHECK constraint.
 var SplashDisplayModes = []DisplayMode{
 	{ID: "both", Label: "Logo ve yazı"},
 	{ID: "logo", Label: "Sadece logo"},
@@ -189,11 +189,30 @@ var SplashDisplayModes = []DisplayMode{
 }
 
 // HeaderDisplayModes lists what the customer menu header shows.
-// The ids match the businesses.header_display CHECK constraint.
+// The ids match the menus.header_display CHECK constraint.
 var HeaderDisplayModes = []DisplayMode{
 	{ID: "both", Label: "Logo ve işletme adı"},
 	{ID: "logo", Label: "Sadece logo"},
 	{ID: "name", Label: "Sadece işletme adı"},
+}
+
+// SlideFadeMode labels one of the two slide styles of the splash exit.
+type SlideFadeMode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// SlideFadeModes lists the two slide styles of the splash exit animation.
+//
+// Unlike the other catalogues these ids are NOT stored: the column is the
+// boolean menus.splash_slide_fade, where true == "fade" (the panel fades to
+// zero opacity while it slides away, today's behaviour) and false == "solid"
+// (the panel keeps full opacity and slides away like a curtain). The catalogue
+// only labels the two choices in the dashboard, and it applies to the four
+// slide-* exit animations alone.
+var SlideFadeModes = []SlideFadeMode{
+	{ID: "fade", Label: "Kayarken soluklaşsın"},
+	{ID: "solid", Label: "Tam opak kaysın (perde gibi)"},
 }
 
 // Language is one of the supported menu languages.

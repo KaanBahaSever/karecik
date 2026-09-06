@@ -3,61 +3,17 @@ import { Loader2 } from 'lucide-react'
 
 import api from '../../lib/api'
 import { useAuth } from '../../lib/auth.jsx'
+import { useActiveMenu } from '../../lib/menuContext.jsx'
+import { cleanSlugInput, MIN_SLUG_LENGTH, slugify } from '../../lib/slugify'
+import { APP_DOMAIN } from '../../lib/subdomain'
 import Modal from '../ui/Modal.jsx'
 import { useToast } from '../ui/Toast.jsx'
 
-/* The suffix shown next to every public address (mirrors Settings.jsx) */
-const MENU_SUFFIX = '.karecik.com'
-
 /* ------------------------------------------------------- shared form parts */
 
-// cleanSlug, finalizeSlug and ToggleField are exported because BranchModal
-// needs exactly the same address rules and the same toggle. There is no shared
-// module for dashboard form pieces yet, so they live next to their first user
-// instead of being written out twice.
-
-/* ASCII equivalents of Turkish letters (mirrors pages/dashboard/Settings.jsx) */
-const TURKISH_LETTERS = {
-  ç: 'c',
-  Ç: 'c',
-  ğ: 'g',
-  Ğ: 'g',
-  ı: 'i',
-  I: 'i',
-  İ: 'i',
-  ö: 'o',
-  Ö: 'o',
-  ş: 's',
-  Ş: 's',
-  ü: 'u',
-  Ü: 'u',
-  â: 'a',
-  Â: 'a',
-  î: 'i',
-  Î: 'i',
-  û: 'u',
-  Û: 'u',
-}
-
-/**
- * Cleans a public address while the user types.
- * A trailing dash is kept so typing can continue; it is dropped on save.
- */
-export function cleanSlug(input) {
-  return String(input ?? '')
-    .replace(/[çÇğĞıIİöÖşŞüÜâÂîÎûÛ]/g, (letter) => TURKISH_LETTERS[letter] || letter)
-    .replace(/&/g, '-ve-')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+/, '')
-    .slice(0, 60)
-}
-
-/** Final address to store: leading and trailing dashes removed. */
-export function finalizeSlug(input) {
-  return cleanSlug(input).replace(/-+$/, '')
-}
+// The address rules live in lib/slugify.js, which mirrors the Go slugifier
+// character for character — the preview below must promise the address the
+// server will actually store.
 
 /**
  * Bordered on/off row — the toggle idiom the other dashboard dialogs use.
@@ -68,7 +24,7 @@ export function finalizeSlug(input) {
  * @param {string}   description  - Small caption below the label
  * @param {boolean}  disabled
  */
-export function ToggleField({ checked, onChange, label, description, disabled = false }) {
+function ToggleField({ checked, onChange, label, description, disabled = false }) {
   return (
     <label
       className={`flex items-start gap-3 rounded-lg border border-gray-200 p-3 ${
@@ -95,6 +51,11 @@ export function ToggleField({ checked, onChange, label, description, disabled = 
 /**
  * Create / edit dialog for a menu.
  *
+ * The public address is `{business-slug}.karecik.com/{menu-slug}`: the
+ * subdomain names the business, the path names the menu. Menu slugs only have
+ * to be unique inside their own business, so a taken address is not an error —
+ * the server appends a number and answers with what it actually stored.
+ *
  * @param {boolean}     open
  * @param {Function}    onClose
  * @param {object|null} menu    - null creates a new record
@@ -102,14 +63,14 @@ export function ToggleField({ checked, onChange, label, description, disabled = 
  */
 export default function MenuModal({ open, onClose, menu, onSaved }) {
   const { business } = useAuth()
+  const { createMenu } = useActiveMenu()
   const toast = useToast()
 
   const [name, setName] = useState('')
   const [slug, setSlug] = useState('')
-  const [slugTouched, setSlugTouched] = useState(false)
+  const [customSlug, setCustomSlug] = useState(false)
   const [description, setDescription] = useState('')
   const [isActive, setIsActive] = useState(true)
-  const [isDefault, setIsDefault] = useState(false)
   const [slugError, setSlugError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -120,24 +81,29 @@ export default function MenuModal({ open, onClose, menu, onSaved }) {
     setName(menu?.name || '')
     setSlug(menu?.slug || '')
     // An existing address is never rewritten from the name behind the user's
-    // back — that would silently invalidate the QR codes already in print.
-    setSlugTouched(Boolean(menu))
+    // back — that would silently invalidate the QR codes already in print, so
+    // an edit always opens with the address field visible.
+    setCustomSlug(Boolean(menu))
     setDescription(menu?.description || '')
     setIsActive(menu?.is_active !== false)
-    setIsDefault(Boolean(menu?.is_default))
     setSlugError('')
     setSaving(false)
   }, [open, menu])
 
-  /** The address follows the name until the user edits it by hand. */
-  function updateName(value) {
-    setName(value)
-    if (!slugTouched) setSlug(cleanSlug(value))
+  /** Opening the toggle seeds the field with the address shown until now. */
+  function toggleCustomSlug(next) {
+    setCustomSlug(next)
+    setSlugError('')
+    if (next && !slug) setSlug(slugify(name, ''))
   }
 
-  const alreadyDefault = Boolean(menu?.is_default)
-  const businessSlug = business?.slug || 'menu-adresiniz'
-  const displaySlug = finalizeSlug(slug) || 'menu-adresi'
+  const businessSlug = business?.slug || 'isletmeniz'
+
+  // The address follows the name until the user takes it over. A custom address
+  // left empty stays empty so the check in save() can refuse it; a derived one
+  // falls back to "menu", exactly like utils.SlugifyWithFallback on the server.
+  const requestedSlug = customSlug ? slugify(slug, '') : slugify(name, 'menu')
+  const displaySlug = requestedSlug || 'menu-adresi'
 
   async function save() {
     if (saving) return
@@ -149,8 +115,7 @@ export default function MenuModal({ open, onClose, menu, onSaved }) {
       return
     }
 
-    const finalSlug = finalizeSlug(slug)
-    if (finalSlug.length < 2) {
+    if (requestedSlug.length < MIN_SLUG_LENGTH) {
       setSlugError(
         'Menü adresi en az 2 karakter olmalı ve yalnızca harf, rakam ve tire içerebilir.',
       )
@@ -167,29 +132,27 @@ export default function MenuModal({ open, onClose, menu, onSaved }) {
     try {
       const payload = {
         name: finalName,
-        slug: finalSlug,
+        slug: requestedSlug,
         description: finalDescription,
         is_active: isActive,
       }
 
-      let saved = menu
-        ? await api.updateMenu(menu.id, payload)
-        : await api.createMenu(payload)
+      // Creating goes through the menu context, so the new menu is loaded and
+      // selected as the active one before this dialog closes.
+      const saved = menu ? await api.updateMenu(menu.id, payload) : await createMenu(payload)
 
-      // POST /api/menus does not take is_default — the first menu of a business
-      // becomes the default on its own — so promoting one is a second call. It
-      // is never sent as false: the business must keep a default menu, and the
-      // flag is moved by promoting another menu instead.
-      if (isDefault && !saved.is_default) {
-        saved = await api.updateMenu(saved.id, { is_default: true })
-      }
+      // The address was already taken in this business: the server appended a
+      // number, and the user has to be told which address was really stored.
+      const renamed = Boolean(saved?.slug) && saved.slug !== requestedSlug
+      if (renamed && !menu) toast.success(`Menü oluşturuldu. Adres: ${saved.slug}`)
+      else if (renamed) toast.success(`Menü kaydedildi. Adres: ${saved.slug}`)
+      else toast.success(menu ? 'Menü kaydedildi.' : 'Menü oluşturuldu.')
 
       onSaved?.(saved)
-      toast.success('Menü kaydedildi.')
       onClose?.()
     } catch (error) {
-      // A taken or reserved address comes back as 409 and belongs on the field
-      // itself, not in a toast that disappears before it can be acted on.
+      // A rejected address comes back as 409 and belongs on the field itself,
+      // not in a toast that disappears before it can be acted on.
       if (error.status === 409) setSlugError(error.message)
       else toast.error(error.message)
     } finally {
@@ -235,43 +198,57 @@ export default function MenuModal({ open, onClose, menu, onSaved }) {
             maxLength={60}
             placeholder="Örn. Kahvaltı Menüsü"
             autoComplete="off"
-            onChange={(event) => updateName(event.target.value)}
+            onChange={(event) => setName(event.target.value)}
           />
           <p className="help-text">2 ile 60 karakter arasında olmalıdır.</p>
         </div>
 
         {/* ------------------------------------------------------------ slug */}
         <div>
-          <label className="label" htmlFor="menu-slug">
-            Menü adresi
-          </label>
-          <input
-            id="menu-slug"
-            type="text"
-            className="input"
-            value={slug}
-            placeholder="kahvalti"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => {
-              setSlugTouched(true)
-              setSlugError('')
-              setSlug(cleanSlug(event.target.value))
-            }}
-          />
+          <span className="label">Menü adresi</span>
+
+          {/* Both segments, so the user sees the address a customer will type:
+              the subdomain is the business, the path is this menu. */}
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-xs text-gray-700">
+            {businessSlug}.{APP_DOMAIN}/<b className="text-gray-900">{displaySlug}</b>
+          </p>
+
+          <div className="mt-3">
+            <ToggleField
+              checked={customSlug}
+              onChange={toggleCustomSlug}
+              label="Adresi özelleştir"
+              description="Kapalıyken adres menü adından oluşturulur."
+            />
+          </div>
+
+          {customSlug ? (
+            <input
+              id="menu-slug"
+              type="text"
+              className="input mt-2"
+              value={slug}
+              placeholder="kahvalti"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Menü adresi"
+              onChange={(event) => {
+                setSlugError('')
+                setSlug(cleanSlugInput(event.target.value))
+              }}
+            />
+          ) : null}
 
           {slugError ? <p className="error-text">{slugError}</p> : null}
 
           <p className="help-text">
-            Menü şu adresten açılacak:{' '}
-            <b className="text-gray-700">
-              {businessSlug}
-              {MENU_SUFFIX}/{displaySlug}
-            </b>
+            Bu adres bu işletmede kullanılıyorsa sonuna otomatik olarak bir numara eklenir.
           </p>
-          <p className="help-text">
-            Adresi değiştirirseniz bu menüyü gösteren eski QR kodları çalışmaya devam ETMEZ.
-          </p>
+          {menu ? (
+            <p className="help-text">
+              Adresi değiştirirseniz bu menüyü gösteren eski QR kodları çalışmaya devam ETMEZ.
+            </p>
+          ) : null}
         </div>
 
         {/* ----------------------------------------------------- description */}
@@ -292,26 +269,12 @@ export default function MenuModal({ open, onClose, menu, onSaved }) {
         </div>
 
         {/* --------------------------------------------------------- toggles */}
-        <div className="space-y-3">
-          <ToggleField
-            checked={isActive}
-            onChange={setIsActive}
-            label="Menü yayında"
-            description="Kapatırsanız menü müşterilere gösterilmez, adresi de açılmaz."
-          />
-
-          <ToggleField
-            checked={isDefault}
-            onChange={setIsDefault}
-            disabled={alreadyDefault}
-            label="Varsayılan menü"
-            description={
-              alreadyDefault
-                ? 'Bu menü zaten varsayılan. Değiştirmek için başka bir menüyü varsayılan yapın.'
-                : 'İşletmenin yalnızca bir varsayılan menüsü olur; açarsanız varsayılan bu menüye taşınır.'
-            }
-          />
-        </div>
+        <ToggleField
+          checked={isActive}
+          onChange={setIsActive}
+          label="Menü yayında"
+          description="Kapatırsanız menü müşterilere gösterilmez, adresi de açılmaz."
+        />
       </div>
     </Modal>
   )

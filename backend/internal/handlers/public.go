@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -13,42 +14,50 @@ import (
 	"karecik/backend/internal/utils"
 )
 
-// PublicMenuBySlug — GET /api/public/menu/:slug?lang=tr&menu=<slug>
-// Path-based access, used locally and as a fallback in QR links.
-func (h *Handler) PublicMenuBySlug(c *fiber.Ctx) error {
-	return h.servePublicMenu(c,
-		strings.TrimSpace(c.Params("slug")),
-		strings.TrimSpace(c.Query("menu")))
-}
+// The customer endpoints all read one address: {business-slug}.karecik.com/
+// {menu-slug}. The subdomain (or the first path segment of the local fallback)
+// names the TENANT; the path segment after it names one menu inside that
+// tenant. A tenant that exists is never answered with a 404 — when no single
+// menu can be picked the payload comes back with menu_resolved false, which is
+// what makes the frontend render the directory or its "no active menus"
+// placeholder.
 
-// PublicMenuByHost — GET /api/public/menu?lang=tr&menu=<slug>
-// Subdomain-based access: kahve-duragi.karecik.com -> slug "kahve-duragi".
+// PublicMenuByHost — GET /api/public/menu?lang=tr&menu=<menu-slug>
+// Subdomain access: kahve-duragi.karecik.com -> business slug "kahve-duragi",
+// with the menu named by the optional ?menu parameter.
 func (h *Handler) PublicMenuByHost(c *fiber.Ctx) error {
-	slug := middleware.SubdomainOf(c, h.Cfg)
-	if slug == "" {
+	businessSlug := middleware.SubdomainOf(c, h.Cfg)
+	if businessSlug == "" {
 		return utils.NotFound(c,
-			"Menü adresi çözümlenemedi. Adres <isletme>."+h.Cfg.AppDomain+" biçiminde olmalıdır.")
+			"İşletme adresi çözümlenemedi. Adres <isletme>."+h.Cfg.AppDomain+" biçiminde olmalıdır.")
 	}
-	return h.servePublicMenu(c, slug, strings.TrimSpace(c.Query("menu")))
+	return h.servePublicMenu(c, businessSlug, strings.TrimSpace(c.Query("menu")))
 }
 
-// PublicMenuByBranch — GET /api/public/b/:branch_slug[/:menu_slug]?lang=tr
-// The explicit branch form of the address; the menu slug is optional.
-func (h *Handler) PublicMenuByBranch(c *fiber.Ctx) error {
+// PublicMenuByPath — GET /api/public/menu/:businessSlug[/:menuSlug]?lang=tr
+// Path-based access, used locally and as the fallback in QR links. The menu
+// segment is optional and absent on the tenant landing page.
+func (h *Handler) PublicMenuByPath(c *fiber.Ctx) error {
 	return h.servePublicMenu(c,
-		strings.TrimSpace(c.Params("branch_slug")),
-		strings.TrimSpace(c.Params("menu_slug")))
+		strings.TrimSpace(c.Params("businessSlug")),
+		strings.TrimSpace(c.Params("menuSlug")))
 }
 
-// servePublicMenu resolves the tenant behind a slug and renders its menu.
-// The slug may name a branch or a business — ResolveTenant tries them in that
-// order, so the addresses that existed before branches keep working.
-func (h *Handler) servePublicMenu(c *fiber.Ctx, slug, menuSlug string) error {
-	if slug == "" {
-		return utils.NotFound(c, "Menü bulunamadı.")
+// servePublicMenu is the one resolution both public forms share:
+//
+//  1. resolve the business; 404 when there is no such tenant;
+//  2. when a menu slug was supplied, resolve it INSIDE that business — 404 when
+//     it names nothing published there;
+//  3. otherwise take the only active menu when there is exactly one;
+//  4. with zero or two-plus active menus and no slug, answer 200 with
+//     menu_resolved false, an empty category list and the menu list.
+func (h *Handler) servePublicMenu(c *fiber.Ctx, businessSlug, menuSlug string) error {
+	opts := repository.PublicMenuOptions{
+		Lang:            strings.TrimSpace(c.Query("lang")),
+		IncludeInactive: false,
 	}
 
-	tenant, err := middleware.ResolveTenant(c.Context(), h.DB, slug, menuSlug)
+	business, err := middleware.ResolveBusiness(c.Context(), h.DB, businessSlug)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Böyle bir menü bulunamadı.")
@@ -56,35 +65,60 @@ func (h *Handler) servePublicMenu(c *fiber.Ctx, slug, menuSlug string) error {
 		return utils.Internal(c, err)
 	}
 
-	menu, err := repository.BuildPublicMenu(c.Context(), h.DB, tenant.Business,
-		repository.PublicMenuOptions{
-			Lang:            strings.TrimSpace(c.Query("lang")),
-			IncludeInactive: false,
-			Branch:          tenant.Branch,
-			Menu:            tenant.Menu,
-		})
+	var menu *models.Menu
+
+	if menuSlug != "" {
+		menu, err = repository.GetMenuBySlug(c.Context(), h.DB, business.ID, menuSlug)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return utils.NotFound(c, "Böyle bir menü bulunamadı.")
+			}
+			return utils.Internal(c, err)
+		}
+	} else {
+		menus, err := repository.ListActiveMenus(c.Context(), h.DB, business.ID)
+		if err != nil {
+			return utils.Internal(c, err)
+		}
+		// Exactly one menu is the common case: the customer typed the bare
+		// subdomain and there is nothing to choose between, so the frontend
+		// resolves it and rewrites the address bar to the real link.
+		if len(menus) == 1 {
+			menu = &menus[0]
+		}
+	}
+
+	// Menu content changes rarely; a short cache eases the QR traffic. The
+	// directory answer is just as public, so it is cached the same way.
+	c.Set("Cache-Control", "public, max-age=60")
+
+	if menu == nil {
+		payload, err := repository.BuildPublicDirectory(c.Context(), h.DB, business, opts)
+		if err != nil {
+			return utils.Internal(c, err)
+		}
+		return utils.OK(c, payload)
+	}
+
+	payload, err := repository.BuildPublicMenu(c.Context(), h.DB, business, menu, opts)
 	if err != nil {
 		return utils.Internal(c, err)
 	}
-
-	// Menu content changes rarely; a short cache eases the QR traffic.
-	c.Set("Cache-Control", "public, max-age=60")
-	return utils.OK(c, menu)
+	return utils.OK(c, payload)
 }
 
-// PreviewMenu — GET /api/preview/menu?lang=tr&branch=<slug>&menu=<slug>  (authenticated)
-// Backs the dashboard live preview and also returns inactive records. The
-// branch and menu slugs are scoped to the business of the token, never to the
-// globally unique public namespace.
+// PreviewMenu — GET /api/preview/menu?lang=tr&menu=<slug>  (authenticated)
+// Backs the dashboard live preview and also returns inactive records, so the
+// owner can look at a menu before publishing it. The menu slug is scoped to the
+// business of the token.
+//
+// A business with no menus at all is answered with menu_resolved false and an
+// empty category list — 200, never a 500 — which is what LivePreview renders
+// its placeholder from.
 func (h *Handler) PreviewMenu(c *fiber.Ctx) error {
-	businessID := middleware.BusinessID(c)
-
-	business, err := repository.GetBusinessByID(c.Context(), h.DB, businessID)
+	business, err := h.currentBusiness(c)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return utils.NotFound(c, "İşletme bulunamadı.")
-		}
-		return utils.Internal(c, err)
+		return h.businessError(c, err)
 	}
 
 	opts := repository.PublicMenuOptions{
@@ -92,44 +126,37 @@ func (h *Handler) PreviewMenu(c *fiber.Ctx) error {
 		IncludeInactive: true,
 	}
 
-	if slug := strings.TrimSpace(c.Query("branch")); slug != "" {
-		// The owner also previews an unpublished branch, which the public
-		// repository.GetBranchBySlug would hide, so the scoped lookup is used.
-		branch, err := findBranchBySlug(c.Context(), h.DB, businessID, slug)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return utils.NotFound(c, "Şube bulunamadı.")
-			}
-			return utils.Internal(c, err)
-		}
-		opts.Branch = branch
-	}
-
-	menu, ok, err := h.previewMenuOf(c, businessID, opts.Branch)
+	menu, ok, err := h.previewMenuOf(c, business.ID)
 	if !ok {
 		return err
 	}
-	opts.Menu = menu
 
-	payload, err := repository.BuildPublicMenu(c.Context(), h.DB, business, opts)
+	c.Set("Cache-Control", "no-store")
+
+	if menu == nil {
+		payload, err := repository.BuildPublicDirectory(c.Context(), h.DB, business, opts)
+		if err != nil {
+			return utils.Internal(c, err)
+		}
+		return utils.OK(c, payload)
+	}
+
+	payload, err := repository.BuildPublicMenu(c.Context(), h.DB, business, menu, opts)
 	if err != nil {
 		return utils.Internal(c, err)
 	}
-
-	c.Set("Cache-Control", "no-store")
 	return utils.OK(c, payload)
 }
 
-// previewMenuOf picks the menu the preview renders: the requested one, then the
-// default menu of the previewed branch, then the default menu of the business.
-// A business without menus previews every category, exactly like the customer
-// menu does, so a nil menu is a valid answer — a refused request is reported
-// through the false `ok` after the response has already been written.
-func (h *Handler) previewMenuOf(c *fiber.Ctx, businessID uuid.UUID,
-	branch *models.Branch) (*models.Menu, bool, error) {
-
+// previewMenuOf picks the menu the preview renders: the requested one, else the
+// first menu by position — the same one the dashboard selects when the stored
+// choice is gone. A nil menu with a true `ok` means the business owns none,
+// which is answered with the empty payload rather than an error. A refused
+// request is reported through the false `ok` after the response has already
+// been written.
+func (h *Handler) previewMenuOf(c *fiber.Ctx, businessID uuid.UUID) (*models.Menu, bool, error) {
 	if slug := strings.TrimSpace(c.Query("menu")); slug != "" {
-		menu, err := repository.GetMenuBySlug(c.Context(), h.DB, businessID, slug)
+		menu, err := findMenuBySlug(c.Context(), h.DB, businessID, slug)
 		if err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				return nil, false, utils.NotFound(c, "Menü bulunamadı.")
@@ -139,22 +166,32 @@ func (h *Handler) previewMenuOf(c *fiber.Ctx, businessID uuid.UUID,
 		return menu, true, nil
 	}
 
-	if branch != nil {
-		menu, err := repository.DefaultMenuOfBranch(c.Context(), h.DB, branch.ID)
-		if err == nil {
-			return menu, true, nil
-		}
-		if !errors.Is(err, repository.ErrNotFound) {
-			return nil, false, utils.Internal(c, err)
-		}
-	}
-
-	menu, err := repository.GetDefaultMenu(c.Context(), h.DB, businessID)
+	menus, err := repository.ListMenus(c.Context(), h.DB, businessID)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, true, nil
-		}
 		return nil, false, utils.Internal(c, err)
 	}
-	return menu, true, nil
+	if len(menus) == 0 {
+		return nil, true, nil
+	}
+	return &menus[0], true, nil
+}
+
+// findMenuBySlug looks a menu up inside one business, unpublished ones
+// included. repository.GetMenuBySlug is the public lookup and only sees
+// published menus, which is not what the owner's own preview needs.
+func findMenuBySlug(ctx context.Context, db repository.DB, businessID uuid.UUID,
+	slug string) (*models.Menu, error) {
+
+	slug = strings.ToLower(strings.TrimSpace(slug))
+
+	menus, err := repository.ListMenus(ctx, db, businessID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range menus {
+		if menus[i].Slug == slug {
+			return &menus[i], nil
+		}
+	}
+	return nil, repository.ErrNotFound
 }

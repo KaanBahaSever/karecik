@@ -69,7 +69,8 @@ export function AuthProvider({ children }) {
     setBusiness(null)
   }, [])
 
-  /** Persists business settings and refreshes the context (live preview reads this). */
+  /* Persists the account record — name and slug, the tenant subdomain. Every
+     other setting belongs to a menu and is saved through the menu API. */
   const saveBusiness = useCallback(async (payload) => {
     const updated = await api.updateBusiness(payload)
     setBusiness(updated)

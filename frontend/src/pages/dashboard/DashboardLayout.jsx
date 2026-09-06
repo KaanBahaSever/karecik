@@ -1,35 +1,20 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import {
-  ExternalLink,
-  LayoutList,
-  LogOut,
-  Menu,
-  Palette,
-  QrCode,
-  Settings,
-  Store,
-  X,
-} from 'lucide-react'
+import { ExternalLink, LayoutList, LogOut, Menu, QrCode, Settings, X } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
-import { useBranchMenu } from '../../lib/branchContext.jsx'
+import { useActiveMenu } from '../../lib/menuContext.jsx'
 import { menuUrl } from '../../lib/subdomain'
 import Loading from '../../components/ui/Loading.jsx'
 import Logo from '../../components/ui/Logo.jsx'
 
-/* Sidebar links */
+/* Sidebar links. Every page below edits the menu chosen in the ActiveMenuBar,
+   which each page renders for itself — the topbar carries no switcher. */
 const NAV_ITEMS = [
   { to: '/panel', label: 'Menü Yönetimi', icon: LayoutList, end: true },
-  { to: '/panel/subeler', label: 'Şubeler ve Menüler', icon: Store },
-  { to: '/panel/tasarim', label: 'Tasarım', icon: Palette },
-  { to: '/panel/qr', label: 'QR Kod', icon: QrCode },
-  { to: '/panel/ayarlar', label: 'Ayarlar', icon: Settings },
+  { to: '/panel/ayarlar', label: 'Görünüm ve Ayarlar', icon: Settings },
+  { to: '/panel/qr', label: 'QR Kodlar', icon: QrCode },
 ]
-
-/* Compact select used by the topbar switcher, in both of its layouts. */
-const SWITCHER_SELECT_CLASS =
-  'w-full min-w-0 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
 
 /** NavLink class name — the active item is highlighted in the brand colour. */
 function navLinkClass({ isActive }) {
@@ -62,124 +47,9 @@ function NavBody({ onNavigate }) {
   )
 }
 
-/**
- * Compact branch / menu picker that sits in the topbar.
- *
- * A single-venue business never sees it: one branch and one menu need no
- * switcher, and the topbar has no space to give away for chrome nobody uses.
- *
- * The topbar is a single non-wrapping row, so below `md` the two selects move
- * into a small popover behind one icon button instead of pushing the row onto
- * a second line.
- */
-function BranchMenuSwitcher() {
-  const { branches, menus, activeBranch, activeMenu, setActiveBranchId, setActiveMenuId } =
-    useBranchMenu()
-  const [open, setOpen] = useState(false)
-
-  /* The menus this branch actually serves, in the branch's own order. A branch
-     without an assignment serves everything — the same fallback branchContext
-     resolves the active menu against. */
-  const servedMenus = useMemo(() => {
-    const ids = activeBranch?.menu_ids
-    if (!Array.isArray(ids) || ids.length === 0) return menus
-    const served = ids.map((id) => menus.find((menu) => menu.id === id)).filter(Boolean)
-    return served.length > 0 ? served : menus
-  }, [menus, activeBranch])
-
-  if (branches.length <= 1 && menus.length <= 1) return null
-
-  const showBranches = branches.length > 1
-  // Kept on screen whenever the business has several menus, even if this branch
-  // serves only one: a select that appears and disappears while switching
-  // branches makes the whole topbar jump.
-  const showMenus = menus.length > 1
-
-  const branchSelect = (
-    <select
-      value={activeBranch?.id || ''}
-      onChange={(event) => setActiveBranchId(event.target.value)}
-      aria-label="Şube seç"
-      className={SWITCHER_SELECT_CLASS}
-    >
-      {branches.map((branch) => (
-        <option key={branch.id} value={branch.id}>
-          {branch.name}
-        </option>
-      ))}
-    </select>
-  )
-
-  const menuSelect = (
-    <select
-      value={activeMenu?.id || ''}
-      onChange={(event) => setActiveMenuId(event.target.value)}
-      aria-label="Menü seç"
-      className={SWITCHER_SELECT_CLASS}
-    >
-      {servedMenus.map((menu) => (
-        <option key={menu.id} value={menu.id}>
-          {menu.name}
-        </option>
-      ))}
-    </select>
-  )
-
-  return (
-    <>
-      {/* wide layout — the selects sit straight in the bar */}
-      <div className="hidden min-w-0 shrink items-center gap-2 md:flex">
-        {showBranches ? <div className="w-[9rem] shrink">{branchSelect}</div> : null}
-        {showMenus ? <div className="w-[9rem] shrink">{menuSelect}</div> : null}
-      </div>
-
-      {/* narrow layout — one button, the same two selects in a popover */}
-      <div className="relative shrink-0 md:hidden">
-        <button
-          type="button"
-          onClick={() => setOpen((previous) => !previous)}
-          className="btn-ghost btn-sm"
-          aria-label="Şube ve menü seç"
-          aria-expanded={open}
-        >
-          <Store className="h-4 w-4" aria-hidden="true" />
-        </button>
-
-        {open ? (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setOpen(false)}
-              aria-hidden="true"
-            />
-            {/* React's onChange bubbles, so one handler closes the popover
-                whichever of the two selects was used. */}
-            <div
-              onChange={() => setOpen(false)}
-              className="absolute right-0 top-full z-50 mt-2 w-56 space-y-3 rounded-lg border border-gray-200 bg-white p-3 shadow-panel"
-            >
-              {showBranches ? (
-                <div>
-                  <span className="label">Şube</span>
-                  {branchSelect}
-                </div>
-              ) : null}
-              {showMenus ? (
-                <div>
-                  <span className="label">Menü</span>
-                  {menuSelect}
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-      </div>
-    </>
-  )
-}
-
 export default function DashboardLayout() {
   const { business, logout } = useAuth()
+  const { activeMenu } = useActiveMenu()
   const navigate = useNavigate()
   const location = useLocation()
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -193,7 +63,12 @@ export default function DashboardLayout() {
     return <Loading fullScreen text="Panel hazırlanıyor..." />
   }
 
-  const publicMenuUrl = business.menu_url || menuUrl(business.slug)
+  // The public address is the tenant subdomain plus the menu path, so the button
+  // needs BOTH slugs: the business from the account, the menu from the one being
+  // edited. With no menu there is no address, and the button says so.
+  const publicMenuUrl = activeMenu
+    ? activeMenu.menu_url || menuUrl(business.slug, activeMenu.slug)
+    : ''
 
   function openPublicMenu() {
     if (!publicMenuUrl) return
@@ -261,13 +136,12 @@ export default function DashboardLayout() {
             {business.name}
           </h1>
 
-          <BranchMenuSwitcher />
-
           <button
             type="button"
             onClick={openPublicMenu}
+            disabled={!publicMenuUrl}
             className="btn-secondary btn-sm shrink-0"
-            title={publicMenuUrl}
+            title={publicMenuUrl || 'Önce bir menü oluşturun'}
           >
             <ExternalLink className="h-4 w-4" />
             <span className="hidden sm:inline">Menüyü Gör</span>
