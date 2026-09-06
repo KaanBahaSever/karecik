@@ -386,17 +386,49 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 		}
 		fields["splash_duration"] = duration
 	}
-	for _, key := range []string{"splash_text", "splash_headline", "vat_note_text"} {
-		if value, ok := raw[key]; ok {
+	// --- bounded free text
+	//
+	// Every one of these is plain prose the business writes itself, so the only
+	// thing to check is the length — and each carries its own limit and its own
+	// message, because the slogan is shorter than the other three and says so
+	// in its own words rather than through the generic one.
+	//
+	// An empty string is a VALID value throughout: clearing the field is how a
+	// splash tagline, a VAT note or a slogan is removed, so "" is stored rather
+	// than refused. The cap is measured in RUNES, not bytes, so "ş" costs one
+	// character and not two.
+	for _, field := range []struct {
+		key     string
+		limit   int
+		message string
+	}{
+		{"splash_text", 200, "Metin en fazla 200 karakter olabilir."},
+		{"splash_headline", 200, "Metin en fazla 200 karakter olabilir."},
+		{"vat_note_text", 200, "Metin en fazla 200 karakter olabilir."},
+		{"slogan", 120, "Slogan en fazla 120 karakter olabilir."},
+	} {
+		if value, ok := raw[field.key]; ok {
 			text, err := decodeString(value)
 			if err != nil {
-				return nil, false, utils.Unprocessable(c, key+" alanı metin olmalıdır.")
+				return nil, false, utils.Unprocessable(c, field.key+" alanı metin olmalıdır.")
 			}
-			if len([]rune(text)) > 200 {
-				return nil, false, utils.Unprocessable(c, "Metin en fazla 200 karakter olabilir.")
+			if len([]rune(text)) > field.limit {
+				return nil, false, utils.Unprocessable(c, field.message)
 			}
-			fields[key] = strings.TrimSpace(text)
+			fields[field.key] = strings.TrimSpace(text)
 		}
+	}
+	// The entrance is checked before the exit because that is the order the
+	// splash screen plays them in, and because the database CHECK behind it —
+	// menus_splash_entrance_check — accepts exactly utils.SplashEntrances. An
+	// id this validator lets through therefore always satisfies the constraint,
+	// so a bad value is a 422 here and never a 500 from the UPDATE.
+	if value, ok := raw["splash_entrance"]; ok {
+		entrance, err := decodeString(value)
+		if err != nil || !utils.IsValidSplashEntrance(entrance) {
+			return nil, false, utils.Unprocessable(c, "Geçersiz karşılama giriş animasyonu.")
+		}
+		fields["splash_entrance"] = entrance
 	}
 	if value, ok := raw["splash_exit_animation"]; ok {
 		animation, err := decodeString(value)

@@ -32,7 +32,7 @@ const MIN_FRAME_HEIGHT = 460
 /* Every setting whose change should replay the menu's entrance: the splash
    screen itself, plus the header logo's fade-in, which plays right after the
    splash leaves. They are joined into one string and watched as a single value,
-   so any change to any of them replays without a twelve-entry dependency array. */
+   so any change to any of them replays without a thirteen-entry dependency array. */
 const REPLAY_FIELDS = [
   'splash_enabled',
   'splash_logo_url',
@@ -40,6 +40,7 @@ const REPLAY_FIELDS = [
   'splash_text',
   'splash_bg_color',
   'splash_duration',
+  'splash_entrance',
   'splash_exit_animation',
   'splash_exit_duration',
   'splash_exit_easing',

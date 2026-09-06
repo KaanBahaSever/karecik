@@ -137,6 +137,24 @@ var BadgeIcons = []BadgeIcon{
 	{ID: "tag", Label: "Etiket"},
 }
 
+// SplashEntrance is one entrance transition of the splash screen — how its
+// logo and text arrive, before the hold and the exit.
+type SplashEntrance struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// SplashEntrances lists the entrance transitions of the splash screen.
+// The ids match the menus.splash_entrance CHECK constraint.
+//
+// There are deliberately only two: "fade" is the opacity 0 -> 1 the splash has
+// always used and is therefore the column default, so no existing menu changes
+// appearance, and "none" draws the content with no animation at all.
+var SplashEntrances = []SplashEntrance{
+	{ID: "fade", Label: "Yumuşak belirsin"},
+	{ID: "none", Label: "Direkt gelsin"},
+}
+
 // SplashExitAnimation is one exit transition of the splash screen.
 type SplashExitAnimation struct {
 	ID    string `json:"id"`
@@ -281,6 +299,17 @@ func IsValidAllergen(code string) bool {
 func IsValidBadgeIcon(id string) bool {
 	for _, icon := range BadgeIcons {
 		if icon.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidSplashEntrance reports whether a splash entrance id exists in the
+// catalogue.
+func IsValidSplashEntrance(id string) bool {
+	for _, entrance := range SplashEntrances {
+		if entrance.ID == id {
 			return true
 		}
 	}

@@ -172,6 +172,22 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
     ? business.splash_exit_easing
     : DEFAULT_SPLASH_EXIT.easing
 
+  // How the content ARRIVES, from splash_entrance (utils.SplashEntrances).
+  // Only 'none' takes the entrance away; anything else — an unknown id, or a
+  // payload from before the column existed — is 'fade', which is what this
+  // screen has always done and what the column defaults to. The timing and the
+  // scale below are the original ones and are deliberately not configurable.
+  //
+  // 'none' yields `undefined`, so the wrapper carries NO animation property at
+  // all: not a zero-length animation and not a keyframe ending at opacity 1,
+  // both of which the browser would still run and `replayKey` still restart.
+  // That is exactly how MenuContent.jsx drops the header logo's fade when
+  // `logo_fade_in` is false. The karecikSplashIn keyframes stay in the style
+  // block either way — it is shared with the exit animation, so it is never
+  // conditional the way the logo's own <style> is.
+  const entranceAnimation =
+    business?.splash_entrance === 'none' ? undefined : 'karecikSplashIn 320ms ease-out both'
+
   // 'logo' drops the text, 'text' drops the logo AND the initial-letter badge.
   const displayMode = SPLASH_DISPLAY_MODES.some((mode) => mode.id === business?.splash_display)
     ? business.splash_display
@@ -251,11 +267,13 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
       <style>{ANIMATION_STYLE}</style>
 
       {/* Keyed on replayKey so the dashboard "Replay" button re-runs the entrance
-          animation too, not just the hold/exit timers. */}
+          animation too, not just the hold/exit timers. With splash_entrance
+          'none' there is nothing to re-run — the key simply remounts a wrapper
+          that draws itself immediately. */}
       <div
         key={replayKey}
         className="karecik-splash-content flex flex-col items-center gap-4 text-center"
-        style={{ animation: 'karecikSplashIn 320ms ease-out both' }}
+        style={{ animation: entranceAnimation }}
       >
         {/* Every child below is either rendered or `null`, so the gap-4 above
             never leaves a hole where a hidden element used to be. */}

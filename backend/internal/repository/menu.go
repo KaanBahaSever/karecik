@@ -266,6 +266,7 @@ func toPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 		SplashText:          menu.SplashText,
 		SplashLogoURL:       menu.SplashLogoURL,
 		SplashHeadline:      menu.SplashHeadline,
+		SplashEntrance:      menu.SplashEntrance,
 		SplashExitAnimation: menu.SplashExitAnimation,
 		SplashExitDuration:  menu.SplashExitDuration,
 		SplashExitEasing:    menu.SplashExitEasing,
@@ -277,8 +278,12 @@ func toPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 		BackgroundImageURL:       menu.BackgroundImageURL,
 		BackgroundOverlayOpacity: menu.BackgroundOverlayOpacity,
 
+		// Slogan travels as it is stored: '' means the header prints no
+		// tagline at all, which is exactly what an owner who cleared the field
+		// asked for.
 		HeaderDisplay: menu.HeaderDisplay,
 		LogoFadeIn:    menu.LogoFadeIn,
+		Slogan:        menu.Slogan,
 
 		// The customer view tints its text with TextColor and builds the legal
 		// footer from the other two. YerliUretimLogoURL is passed through as it

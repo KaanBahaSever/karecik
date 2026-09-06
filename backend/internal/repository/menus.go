@@ -18,9 +18,14 @@ import (
 // every SELECT, INSERT ... RETURNING and UPDATE ... RETURNING below lists
 // exactly these columns and menuScanTargets returns the destinations in exactly
 // the same order. The order follows the physical column order of the menus
-// table after migration 006, which is why logo_fade_in, text_color,
+// table after migration 007, which is why logo_fade_in, text_color,
 // show_yerli_uretim and yerli_uretim_logo_url sit at the very end rather than
 // next to header_display and primary_color: 006 appended all four to the table.
+// slogan and splash_entrance follow them for the same reason — 007 appends
+// both after all four, slogan first and splash_entrance second, so they close
+// the list and the scan targets in that order. splash_entrance is therefore the
+// last column and the last scan target, NOT next to splash_exit_animation where
+// models.Menu declares it: the list follows the table, never the struct.
 //
 // NOTE: models.Menu declares its fields in a different order (Currency and
 // CurrencySymbol sit before Theme, the timestamps sit at the end), so the scan
@@ -35,7 +40,8 @@ const menuColumns = `id, business_id, name, slug, description, is_active,
 	splash_exit_duration, splash_exit_easing, splash_display, splash_slide_fade,
 	currency, currency_symbol, show_vat_note, vat_note_text, show_price_date,
 	price_updated_at, header_display, default_language, languages, logo_fade_in,
-	text_color, show_yerli_uretim, yerli_uretim_logo_url`
+	text_color, show_yerli_uretim, yerli_uretim_logo_url, slogan,
+	splash_entrance`
 
 // menuColumnsM is menuColumns qualified with the m alias, needed wherever menus
 // is joined against categories: id, business_id, position, is_active,
@@ -86,6 +92,13 @@ func menuScanTargets(menu *models.Menu) []any {
 		// nullable and therefore a pointer.
 		&menu.LogoFadeIn,
 		&menu.TextColor, &menu.ShowYerliUretim, &menu.YerliUretimLogoURL,
+
+		// Appended by migration 007, after all four of those, so they scan
+		// after them and in the order 007 adds them: slogan first, then
+		// splash_entrance. Both are NOT NULL with a default — '' and 'fade' —
+		// hence plain strings.
+		&menu.Slogan,
+		&menu.SplashEntrance,
 	}
 }
 
@@ -129,12 +142,13 @@ var menuUpdatableColumns = map[string]bool{
 
 	"splash_enabled": true, "splash_logo_url": true, "splash_headline": true,
 	"splash_text": true, "splash_bg_color": true, "splash_duration": true,
-	"splash_exit_animation": true, "splash_exit_duration": true,
-	"splash_exit_easing": true, "splash_display": true, "splash_slide_fade": true,
+	"splash_entrance": true, "splash_exit_animation": true,
+	"splash_exit_duration": true, "splash_exit_easing": true,
+	"splash_display": true, "splash_slide_fade": true,
 
 	"currency": true, "show_vat_note": true, "vat_note_text": true,
 	"show_price_date": true, "header_display": true, "logo_fade_in": true,
-	"default_language": true, "languages": true,
+	"slogan": true, "default_language": true, "languages": true,
 
 	"text_color": true, "show_yerli_uretim": true,
 	"yerli_uretim_logo_url": true,

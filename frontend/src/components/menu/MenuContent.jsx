@@ -227,7 +227,9 @@ export default function MenuContent({
   const showLogo = headerDisplay !== 'name' && Boolean(business.logo_url)
   const showInitial = headerDisplay === 'both' && !business.logo_url
   const showName = headerDisplay !== 'logo' || !showLogo
-  const nameStandsAlone = showName && !showLogo && !showInitial
+  /* The logo and the initial-letter badge are the two things that can sit at
+     the top of the stack; the text lines below key their top margin off it. */
+  const showBrandMark = showLogo || showInitial
 
   /* The two names, in the order the customer needs them. `business_name` is the
      TENANT ("Melly Coffee") and `name` is the MENU ("Suadiye"), so the tenant is
@@ -242,6 +244,21 @@ export default function MenuContent({
      twice. Compared case-insensitively because "Melly Coffee" and "melly coffee"
      are one name to the customer reading them. */
   const showMenuName = Boolean(menuName) && lower(menuName) !== lower(topLineName)
+
+  /* The owner's one line about the place. It arrives as a plain string — never
+     null and never absent — so a trimmed emptiness test is the whole check: ''
+     is how a slogan is removed and it renders nothing. `header_display` does
+     not govern it; the slogan shows in all three modes. */
+  const slogan = String(business.slogan || '').trim()
+
+  /* Vertical rhythm of the stacked header. Every line opens a gap against what
+     is ACTUALLY above it: `mt-3` clears the logo or the badge, the text lines
+     sit closer together, and whichever element comes first carries no top
+     margin at all. That is what keeps a header with no logo, no slogan and one
+     language down to two name lines with nothing dangling. */
+  const nameMargin = showBrandMark ? 'mt-3' : ''
+  const menuNameMargin = showName ? 'mt-1' : showBrandMark ? 'mt-3' : ''
+  const sloganMargin = showName || showMenuName ? 'mt-1.5' : showBrandMark ? 'mt-3' : ''
 
   /* The logo's entrance is opt-in per menu; false means no animation at all. */
   const logoFadeIn = business.logo_fade_in === true
@@ -550,76 +567,23 @@ export default function MenuContent({
         className="relative z-10 mx-auto max-w-lg px-4 py-5"
         style={{ paddingTop: SAFE_TOP_PADDING }}
       >
-        {/* ------------------------------------ header: logo in the TOP LEFT */}
-        {/* Two stacked lines: the tenant on top (logo and/or business name, per
-            `header_display`) and the menu name underneath in all three modes.
-            The `gap-3` is on the inner flex row and every child is either
-            rendered or `null`, so a hidden logo or name leaves no empty slot.
-            The language switcher stays pinned right. */}
-        <header className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-3">
-              {showLogo ? (
-                /* Wide logos are common — fit them instead of cropping a square.
-                   Standing on its own the logo may take a little more room.
-                   The entrance is attached only when the menu asked for it: with
-                   `logo_fade_in` false there is no animation property at all, so
-                   nothing to compute and nothing to replay. */
-                <>
-                  {logoFadeIn ? <style>{LOGO_ANIMATION_STYLE}</style> : null}
-                  <img
-                    src={business.logo_url}
-                    alt=""
-                    className={`karecik-menu-logo h-12 w-auto shrink-0 object-contain ${
-                      headerDisplay === 'logo' ? 'max-w-[220px]' : 'max-w-[160px]'
-                    }`}
-                    style={{
-                      borderRadius: 'calc(var(--menu-radius) * 0.6)',
-                      animation: logoFadeIn
-                        ? 'karecikLogoFadeIn 500ms ease-out both'
-                        : undefined,
-                    }}
-                  />
-                </>
-              ) : showInitial ? (
-                <div
-                  className="flex h-12 w-12 shrink-0 items-center justify-center text-lg font-semibold"
-                  style={{
-                    backgroundColor: 'var(--menu-primary)',
-                    color: onAccentText,
-                    borderRadius: 'calc(var(--menu-radius) * 0.6)',
-                  }}
-                  aria-hidden="true"
-                >
-                  {String(topLineName || '•').charAt(0).toLocaleUpperCase('tr')}
-                </div>
-              ) : null}
+        {/* --------------------------------- header: one centred, stacked block */}
+        {/* This used to be a single flex ROW — logo beside the business name,
+            language switcher pinned right — which squeezed a wide horizontal
+            logo into a 160-pixel cap to leave the text its share of the line.
+            It is a centred COLUMN now: the language switcher on a row of its
+            own, then the logo across the FULL content width, then the business
+            name, the menu name and the slogan.
 
-              {/* The venue's own name — the words on the sign outside.
-                  No address here on purpose: the customer is already inside. */}
-              {showName ? (
-                <h1
-                  className={`min-w-0 truncate font-semibold leading-tight ${
-                    nameStandsAlone ? 'text-xl' : 'text-lg'
-                  }`}
-                  style={{ color: 'var(--menu-text)' }}
-                >
-                  {topLineName}
-                </h1>
-              ) : null}
-            </div>
-
-            {/* Which of the venue's menus this is — smaller and muted, because it
-                answers a question the customer only asks second. */}
-            {showMenuName ? (
-              <p className="mt-1 truncate text-sm" style={{ color: 'var(--menu-muted)' }}>
-                {menuName}
-              </p>
-            ) : null}
-          </div>
-
+            Every absent element renders `null` rather than an empty wrapper,
+            and each line's top margin is computed above from what is really
+            above it, so no combination leaves a stray gap behind. */}
+        <header className="flex flex-col text-center">
+          {/* Lifted out of the branding block so it can no longer take width
+              away from the logo. A single language draws no row at all — not an
+              empty one — so nothing hangs over the logo. */}
           {languages.length > 1 ? (
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="mb-2 flex items-center justify-end gap-1">
               {languages.map((code) => {
                 const info = findLanguage(code)
                 const isSelected = code === language
@@ -645,6 +609,77 @@ export default function MenuContent({
                 )
               })}
             </div>
+          ) : null}
+
+          {showLogo ? (
+            /* The full content width and NO `max-w` at all — that is the whole
+               point of the stack: a wide horizontal logo finally gets the room
+               it needs, while `max-h-24` bounds a tall one and `object-contain`
+               keeps every aspect ratio intact. Never cropped, never squared off.
+               The entrance is attached only when the menu asked for it: with
+               `logo_fade_in` false there is no animation property at all, so
+               nothing to compute and nothing to replay. */
+            <>
+              {logoFadeIn ? <style>{LOGO_ANIMATION_STYLE}</style> : null}
+              <img
+                src={business.logo_url}
+                alt=""
+                className="karecik-menu-logo mx-auto h-auto w-full max-h-24 object-contain"
+                style={{
+                  borderRadius: 'calc(var(--menu-radius) * 0.6)',
+                  animation: logoFadeIn
+                    ? 'karecikLogoFadeIn 500ms ease-out both'
+                    : undefined,
+                }}
+              />
+            </>
+          ) : showInitial ? (
+            <div
+              className="mx-auto flex h-14 w-14 items-center justify-center text-lg font-semibold"
+              style={{
+                backgroundColor: 'var(--menu-primary)',
+                color: onAccentText,
+                borderRadius: 'calc(var(--menu-radius) * 0.6)',
+              }}
+              aria-hidden="true"
+            >
+              {String(topLineName || '•').charAt(0).toLocaleUpperCase('tr')}
+            </div>
+          ) : null}
+
+          {/* The venue's own name — the words on the sign outside. No address
+              here on purpose: the customer is already inside. It has a centred
+              row to itself now, so a long name WRAPS inside `max-w-sm` instead
+              of being truncated. */}
+          {showName ? (
+            <h1
+              className={`mx-auto max-w-sm text-xl font-semibold leading-tight ${nameMargin}`.trim()}
+              style={{ color: 'var(--menu-text)' }}
+            >
+              {topLineName}
+            </h1>
+          ) : null}
+
+          {/* Which of the venue's menus this is — smaller and muted, because it
+              answers a question the customer only asks second. */}
+          {showMenuName ? (
+            <p
+              className={`mx-auto max-w-sm text-sm ${menuNameMargin}`.trim()}
+              style={{ color: 'var(--menu-muted)' }}
+            >
+              {menuName}
+            </p>
+          ) : null}
+
+          {/* The owner's own line. Optional in the truest sense: an empty
+              slogan renders nothing here, not an empty paragraph. */}
+          {slogan ? (
+            <p
+              className={`mx-auto max-w-sm text-xs italic ${sloganMargin}`.trim()}
+              style={{ color: 'var(--menu-muted)' }}
+            >
+              {slogan}
+            </p>
           ) : null}
         </header>
 

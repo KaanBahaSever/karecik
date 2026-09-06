@@ -56,6 +56,7 @@ import LivePreview from '../../components/dashboard/LivePreview.jsx'
 const MENU_FIELDS = [
   /* 1. identity */
   'name',
+  'slogan',
   'slug',
   'description',
   'logo_url',
@@ -88,6 +89,7 @@ const MENU_FIELDS = [
   'splash_text',
   'splash_bg_color',
   'splash_duration',
+  'splash_entrance',
   'splash_exit_animation',
   'splash_exit_easing',
   'splash_exit_duration',
@@ -122,7 +124,13 @@ const NULLABLE_FIELDS = [
 const NUMERIC_FIELDS = ['splash_duration', 'splash_exit_duration']
 
 /* Text fields stored trimmed (the columns are NOT NULL, so never null) */
-const TRIMMED_FIELDS = ['description', 'vat_note_text', 'splash_headline', 'splash_text']
+const TRIMMED_FIELDS = [
+  'description',
+  'slogan',
+  'vat_note_text',
+  'splash_headline',
+  'splash_text',
+]
 
 const DEFAULT_VAT_NOTE = 'Fiyatlarımıza KDV dahildir.'
 /* The domain every public address sits under; lib/subdomain.js owns the value */
@@ -131,6 +139,19 @@ const DEFAULT_OVERLAY_OPACITY = 0.4
 const DEFAULT_PRIMARY_COLOR = '#1d4ed8'
 const DEFAULT_TEXT_COLOR = '#111827'
 const DEFAULT_SPLASH_BG_COLOR = '#0f172a'
+
+/**
+ * How the splash content arrives, bound to `splash_entrance`.
+ * Mirrors utils.SplashEntrances in backend/internal/utils/appearance.go — and
+ * therefore the CHECK constraint on the menus table.
+ *
+ * 'fade' is the opacity 0 -> 1 the splash has always played and is the column
+ * default; 'none' draws the logo and the text with no animation at all.
+ */
+const SPLASH_ENTRANCES = [
+  { id: 'fade', label: 'Yumuşak belirsin' },
+  { id: 'none', label: 'Direkt gelsin' },
+]
 
 /**
  * The two slide styles, bound to the boolean `splash_slide_fade`.
@@ -257,6 +278,9 @@ function buildDraft(menu) {
   return {
     /* identity */
     name: menu.name || '',
+    // NOT NULL with a '' default on the server, so '' is a real value here too:
+    // it is how the slogan is removed, and the header then prints nothing.
+    slogan: menu.slogan || '',
     slug: menu.slug || '',
     description: menu.description || '',
     logo_url: menu.logo_url || null,
@@ -291,6 +315,11 @@ function buildDraft(menu) {
     splash_text: menu.splash_text || '',
     splash_bg_color: menu.splash_bg_color || DEFAULT_SPLASH_BG_COLOR,
     splash_duration: Number(menu.splash_duration) || 1200,
+    // Unknown or missing means 'fade': the behaviour every menu had before the
+    // column existed, and the column default.
+    splash_entrance: SPLASH_ENTRANCES.some((entrance) => entrance.id === menu.splash_entrance)
+      ? menu.splash_entrance
+      : 'fade',
     splash_exit_animation: isValidSplashAnimation(menu.splash_exit_animation)
       ? menu.splash_exit_animation
       : DEFAULT_SPLASH_EXIT.animation,
@@ -542,6 +571,13 @@ export default function MenuSettings() {
       toast.error('Menü açıklaması en fazla 200 karakter olabilir.')
       return
     }
+    // The input's maxLength already makes this unreachable from the page; the
+    // check is here so the limit is stated once on each side of the wire and a
+    // pasted-in value can never come back as a 422 the user cannot explain.
+    if (draft.slogan.trim().length > 120) {
+      toast.error('Slogan en fazla 120 karakter olabilir.')
+      return
+    }
     if (draft.languages.length === 0) {
       toast.error('En az bir menü dili seçmelisiniz.')
       return
@@ -678,6 +714,28 @@ export default function MenuSettings() {
                   onChange={(event) => update('name', event.target.value)}
                 />
                 <p className="help-text">2 ile 60 karakter arasında olmalıdır.</p>
+              </div>
+
+              {/* The one line the owner writes about the place. Optional, and
+                  empty is a real value: an empty slogan simply prints nothing
+                  in the customer menu's header. */}
+              <div>
+                <label className="label" htmlFor="menu-slogan">
+                  Slogan (opsiyonel)
+                </label>
+                <input
+                  id="menu-slogan"
+                  type="text"
+                  className="input"
+                  value={draft.slogan}
+                  maxLength={120}
+                  placeholder="Kahvenin en iyi hali"
+                  onChange={(event) => update('slogan', event.target.value)}
+                />
+                <p className="help-text">
+                  Menü başlığında işletme adının altında görünür. Boş bırakırsanız gösterilmez.
+                </p>
+                <p className="help-text">{draft.slogan.length} / 120 karakter</p>
               </div>
 
               <div>
@@ -1501,6 +1559,21 @@ export default function MenuSettings() {
                     <span>5,0 sn</span>
                   </div>
                 </div>
+
+                {/* Entrance animation. It plays before the hold and therefore
+                    before everything below it, so it comes first in the form
+                    too — the controls read in the order the customer sees. */}
+                <Segmented
+                  label="Giriş animasyonu"
+                  options={SPLASH_ENTRANCES.map((entrance) => ({
+                    value: entrance.id,
+                    label: entrance.label,
+                  }))}
+                  value={draft.splash_entrance}
+                  onChange={(value) => update('splash_entrance', value)}
+                  disabled={!splashEnabled}
+                  hint="Logo ve yazı yumuşak bir geçişle mi belirsin, yoksa doğrudan mı görünsün?"
+                />
 
                 {/* Exit animation */}
                 <div>

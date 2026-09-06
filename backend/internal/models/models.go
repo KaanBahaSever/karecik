@@ -125,8 +125,15 @@ type Menu struct {
 	// SplashSlideFade only applies to the four slide-* animations: true fades
 	// the panel out while it slides, false keeps it fully opaque like a
 	// curtain.
+	//
+	// SplashEntrance is the other half of SplashExitAnimation and sits next to
+	// it: how the logo and text come IN, before the hold. "fade" brings them
+	// up from zero opacity — the behaviour every menu has always had, hence
+	// the column default — and "none" simply draws them, with no animation at
+	// all, the same off state LogoFadeIn uses in the header.
 	SplashLogoURL       *string `json:"splash_logo_url"`
 	SplashHeadline      string  `json:"splash_headline"`
+	SplashEntrance      string  `json:"splash_entrance"`
 	SplashExitAnimation string  `json:"splash_exit_animation"`
 	SplashExitDuration  int     `json:"splash_exit_duration"`
 	SplashExitEasing    string  `json:"splash_exit_easing"`
@@ -143,8 +150,16 @@ type Menu struct {
 	// HeaderDisplay picks what the customer menu header shows — logo, name or
 	// both. LogoFadeIn brings that logo in with a short fade when the menu
 	// opens; false means it is simply there, with no animation at all.
+	//
+	// Slogan is the one-line tagline printed under the business name, in the
+	// owner's own words. It is a plain string and never a pointer: the column
+	// is NOT NULL with a '' default and the header treats "no slogan" and
+	// "empty slogan" identically, so the empty string is a valid value — it is
+	// how a slogan is removed — and it renders nothing. HeaderDisplay does not
+	// govern it: the slogan shows in all three modes.
 	HeaderDisplay string `json:"header_display"`
 	LogoFadeIn    bool   `json:"logo_fade_in"`
+	Slogan        string `json:"slogan"`
 
 	// TextColor tints every word on the customer menu — headings, product
 	// titles and body text all read one CSS variable, so this single #RRGGBB
@@ -412,8 +427,12 @@ type PublicBusiness struct {
 	SplashBgColor  string `json:"splash_bg_color"`
 	SplashText     string `json:"splash_text"`
 
+	// SplashEntrance mirrors the field of the same name on Menu — the splash
+	// screen reads it to decide whether its content fades in or is simply
+	// there. See the note next to it.
 	SplashLogoURL       *string `json:"splash_logo_url"`
 	SplashHeadline      string  `json:"splash_headline"`
+	SplashEntrance      string  `json:"splash_entrance"`
 	SplashExitAnimation string  `json:"splash_exit_animation"`
 	SplashExitDuration  int     `json:"splash_exit_duration"`
 	SplashExitEasing    string  `json:"splash_exit_easing"`
@@ -425,8 +444,12 @@ type PublicBusiness struct {
 	BackgroundImageURL       *string `json:"background_image_url"`
 	BackgroundOverlayOpacity float64 `json:"background_overlay_opacity"`
 
+	// HeaderDisplay, LogoFadeIn and Slogan mirror the three header fields on
+	// Menu — the customer view reads them to lay its header out. See the notes
+	// there; an empty Slogan renders nothing.
 	HeaderDisplay string `json:"header_display"`
 	LogoFadeIn    bool   `json:"logo_fade_in"`
+	Slogan        string `json:"slogan"`
 
 	// TextColor, ShowYerliUretim and YerliUretimLogoURL mirror the same three
 	// fields on Menu — the customer view reads them to tint its text and to

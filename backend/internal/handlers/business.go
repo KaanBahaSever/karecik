@@ -20,9 +20,9 @@ var hexColorPattern = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
 // Meta — GET /api/meta (public)
 // Serves the fixed catalogues the dashboard needs from a single source:
-// currencies, themes, fonts, allergens, badge icons, splash exit animations
-// with their easings and slide styles, splash and header display modes,
-// languages and rounding modes.
+// currencies, themes, fonts, allergens, badge icons, splash entrances, splash
+// exit animations with their easings and slide styles, splash and header
+// display modes, languages and rounding modes.
 func (h *Handler) Meta(c *fiber.Ctx) error {
 	currencies := make([]utils.Currency, 0, len(utils.Currencies))
 	for _, code := range []string{"TRY", "USD", "EUR", "GBP", "AZN", "RUB", "SAR", "AED"} {
@@ -35,6 +35,7 @@ func (h *Handler) Meta(c *fiber.Ctx) error {
 		"fonts":                  utils.Fonts,
 		"allergens":              utils.Allergens,
 		"badge_icons":            utils.BadgeIcons,
+		"splash_entrances":       utils.SplashEntrances,
 		"splash_exit_animations": utils.SplashExitAnimations,
 		"splash_easings":         utils.SplashEasings,
 		"splash_display_modes":   utils.SplashDisplayModes,
