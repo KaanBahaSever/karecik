@@ -21,6 +21,7 @@ type Config struct {
 	UploadDir      string
 	MaxUploadBytes int64
 	SeedDemo       bool
+	SeedRefresh    bool // rewrite the seeded menus even if they already exist
 	ServeStatic    bool
 	StaticDir      string
 	Env            string
@@ -49,6 +50,7 @@ func Load() *Config {
 		UploadDir:      env("UPLOAD_DIR", "./uploads"),
 		MaxUploadBytes: envInt64("MAX_UPLOAD_BYTES", 5*1024*1024),
 		SeedDemo:       envBool("SEED_DEMO", true),
+		SeedRefresh:    envBool("SEED_REFRESH", false),
 		ServeStatic:    envBool("SERVE_STATIC", false),
 		StaticDir:      env("STATIC_DIR", "../frontend/dist"),
 		Env:            env("APP_ENV", "development"),

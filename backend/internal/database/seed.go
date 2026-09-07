@@ -31,6 +31,17 @@ import (
 // in production — see the guard at the top of it.
 
 const (
+	// The fictional sample venue the landing page embeds. Kept deliberately
+	// separate from the real tenant above it: a marketing page should not put a
+	// paying customer's live menu in its shop window, and a sample that gains a
+	// second menu one day must not change what /demo renders.
+	karecikSlug     = "karecik-kafe"
+	karecikName     = "Karecik Kafe"
+	karecikEmail    = "kafe@karecik.com"
+	karecikPassword = "karecik1234"
+	karecikMenuName = "Menü"
+	karecikMenuSlug = "menu"
+
 	// mellySlug is the BUSINESS slug: the subdomain the tenant answers on.
 	mellySlug     = "melly-coffee"
 	mellyName     = "Melly Coffee"
@@ -729,6 +740,137 @@ var mellyMenus = []seedMenu{
 	{name: cihangirMenuName, slug: cihangirMenuSlug, categories: cihangirMenu},
 }
 
+// ------------------------------------------------------ Karecik Kafe, the
+// sample venue behind the landing page.
+//
+// It is FICTIONAL, and that is the point: the marketing page used to embed
+// Melly Coffee, a real customer, which is both odd on a sales page and fragile
+// — the day Melly gained a second menu the iframe stopped showing a menu at all
+// and started showing the tenant's menu directory instead.
+//
+// Two consequences of it being invented rather than real:
+//
+//   - show_yerli_uretim is FALSE. The Ticaret Bakanlığı certification mark
+//     belongs to businesses that actually hold it; printing it under a cafe
+//     that does not exist would be a false claim, not a design choice.
+//   - the logo is Karecik's own /logo.svg, served by the frontend from the same
+//     origin the menu is, so the sample needs no third-party asset.
+//
+// It publishes exactly ONE menu, which is what keeps /demo rendering a menu
+// rather than a picker.
+var karecikDemoMenu = []seedCategory{
+	{
+		name: "Sıcak İçecekler", icon: "☕",
+		products: []seedProduct{
+			{name: "Türk Kahvesi", price: 90, calories: 12,
+				options: models.ProductOptions{{
+					Name: "Porsiyon", Type: models.OptionTypeSingle, Required: true,
+					Items: []models.ProductOptionItem{
+						{Name: "Tek", Price: 0},
+						{Name: "Duble", Price: 40},
+					},
+				}}},
+			{name: "Espresso", price: 85, calories: 5},
+			{name: "Latte", price: 130, calories: 180, options: karecikMilkOptions()},
+			{name: "Cappuccino", price: 130, calories: 150, options: karecikMilkOptions()},
+			{name: "Filtre Kahve", price: 95, calories: 6},
+			{name: "Çay", price: 40, calories: 2},
+		},
+	},
+	{
+		name: "Soğuk İçecekler", icon: "🥤",
+		products: []seedProduct{
+			{name: "Ice Latte", price: 140, calories: 175, options: karecikMilkOptions()},
+			{name: "Limonata", price: 110, calories: 120, desc: "Taze sıkılmış, naneli"},
+			{name: "Soğuk Çay", price: 95, calories: 90},
+		},
+	},
+	{
+		name: "Tatlılar", icon: "🍰",
+		products: []seedProduct{
+			{name: "Cheesecake", price: 160, calories: 420},
+			{name: "Brownie", price: 140, calories: 380, desc: "Sıcak servis edilir"},
+			{name: "Magnolia", price: 120, calories: 310},
+		},
+	},
+	{
+		name: "Atıştırmalıklar", icon: "🥪",
+		products: []seedProduct{
+			{name: "Kaşarlı Tost", price: 130, calories: 430},
+			{name: "Kulüp Sandviç", price: 190, calories: 520, desc: "Patates kızartması ile"},
+		},
+	},
+}
+
+// karecikMilkOptions is the one add-on group the sample menu offers. A fresh
+// copy per product, for the same aliasing reason cloneOptionGroup exists.
+func karecikMilkOptions() models.ProductOptions {
+	return models.ProductOptions{cloneOptionGroup(karecikMilkChoice)}
+}
+
+var karecikMilkChoice = models.ProductOptionGroup{
+	Name: "Süt Tercihi", Type: models.OptionTypeSingle, Required: false,
+	Items: []models.ProductOptionItem{
+		{Name: "Yulaf Sütü", Price: 30},
+		{Name: "Badem Sütü", Price: 30},
+	},
+}
+
+// seedTenant is one whole seeded account: the login, the business, the look
+// every one of its menus is published with, and the menus themselves.
+//
+// The look lives here rather than on seedMenu because a venue's menus share it
+// — Suadiye and Cihangir are the same brand — while two different venues must
+// not. Before this struct existed the branding was a wall of Melly constants
+// baked into the INSERT, which is exactly what made a second sample tenant
+// impossible to add.
+type seedTenant struct {
+	slug, name, email, password string
+
+	phone, instagram, wifiSSID, wifiPass string
+	logoURL, yerliLogoURL                string
+	showYerliUretim                      bool
+
+	theme, primaryColor, textColor  string
+	backgroundColor, splashBgColor  string
+	splashHeadline                  string
+	languages                       []string
+
+	menus []seedMenu
+}
+
+var seedTenants = []seedTenant{
+	{
+		slug: mellySlug, name: mellyName, email: mellyEmail, password: mellyPassword,
+		phone: mellyPhone, instagram: mellyInstagram,
+		wifiSSID: mellyWifiSSID, wifiPass: mellyWifiPass,
+		logoURL: mellyLogoURL, yerliLogoURL: mellyYerliUretimLogoURL,
+		showYerliUretim: true,
+		theme:           mellyTheme,
+		primaryColor:    "#C49A6C", textColor: "#1F1A17",
+		backgroundColor: "#FDFBF7", splashBgColor: "#1F1A17",
+		splashHeadline:  mellyName,
+		languages:       []string{"tr", "en"},
+		menus:           mellyMenus,
+	},
+	{
+		slug: karecikSlug, name: karecikName, email: karecikEmail, password: karecikPassword,
+		phone: "+90 212 000 00 00", instagram: "karecikapp",
+		wifiSSID: "Karecik Misafir", wifiPass: "karecik2026",
+		logoURL: "/logo.svg", yerliLogoURL: "",
+		// FICTIONAL venue: the certification mark stays off. See the note above.
+		showYerliUretim: false,
+		theme:           "modern-light",
+		primaryColor:    "#1d4ed8", textColor: "#111827",
+		backgroundColor: "#ffffff", splashBgColor: "#0f172a",
+		splashHeadline:  karecikName,
+		languages:       []string{"tr", "en"},
+		menus: []seedMenu{
+			{name: karecikMenuName, slug: karecikMenuSlug, categories: karecikDemoMenu},
+		},
+	},
+}
+
 // --------------------------------------------------------------- seeding
 
 // seedCalories turns the plain int of seedProduct into the value the NULLABLE
@@ -774,7 +916,7 @@ func seedCalories(value int) *int {
 //
 // Everything runs in ONE transaction, so a failure part-way through leaves the
 // database exactly as it was.
-func SeedDemo(ctx context.Context, pool *pgxpool.Pool, isProduction bool) error {
+func SeedDemo(ctx context.Context, pool *pgxpool.Pool, isProduction, refresh bool) error {
 	if isProduction {
 		log.Println("[karecik] seed skipped: APP_ENV=production")
 		return nil
@@ -791,13 +933,39 @@ func SeedDemo(ctx context.Context, pool *pgxpool.Pool, isProduction bool) error 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	for _, tenant := range seedTenants {
+		if err := seedOneTenant(ctx, tx, tenant, refresh); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("could not save the seed data: %w", err)
+	}
+	return nil
+}
+
+// seedOneTenant creates or tops up a single seeded account inside the caller's
+// transaction.
+//
+// `refresh` is the answer to a problem the top-up rule cannot solve on its own.
+// A menu that already exists is left completely alone, which is right for a
+// database someone has been editing — but it also means a CORRECTION to the
+// seed data can never reach a database that was seeded before it. Two products
+// merged into one portion choice here would stay two products there for ever.
+// With refresh on, the tenant's seeded menus are deleted and written again from
+// this file, so a correction lands.
+//
+// It is destructive by design and it is a development tool: it throws away
+// whatever anyone changed about those menus. Nothing enables it implicitly.
+func seedOneTenant(ctx context.Context, tx pgx.Tx, tenant seedTenant, refresh bool) error {
 	var accountExists, businessExists bool
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1)),
 		       EXISTS (SELECT 1 FROM businesses WHERE slug = $2)`,
-		mellyEmail, mellySlug).Scan(&accountExists, &businessExists)
+		tenant.email, tenant.slug).Scan(&accountExists, &businessExists)
 	if err != nil {
-		return fmt.Errorf("seed lookup failed: %w", err)
+		return fmt.Errorf("seed lookup failed (%s): %w", tenant.slug, err)
 	}
 	if accountExists != businessExists {
 		return nil
@@ -806,42 +974,67 @@ func SeedDemo(ctx context.Context, pool *pgxpool.Pool, isProduction bool) error 
 	var businessID uuid.UUID
 	if businessExists {
 		err = tx.QueryRow(ctx,
-			`SELECT id FROM businesses WHERE slug = $1`, mellySlug).Scan(&businessID)
+			`SELECT id FROM businesses WHERE slug = $1`, tenant.slug).Scan(&businessID)
 		if err != nil {
-			return fmt.Errorf("seed lookup failed: %w", err)
+			return fmt.Errorf("seed lookup failed (%s): %w", tenant.slug, err)
+		}
+
+		if refresh {
+			slugs := make([]string, 0, len(tenant.menus))
+			for _, menu := range tenant.menus {
+				slugs = append(slugs, menu.slug)
+			}
+			// The categories and products go with the menu: categories.menu_id
+			// is ON DELETE CASCADE and products hang off the category.
+			tag, err := tx.Exec(ctx,
+				`DELETE FROM menus WHERE business_id = $1 AND slug = ANY($2::text[])`,
+				businessID, slugs)
+			if err != nil {
+				return fmt.Errorf("seed refresh failed (%s): %w", tenant.slug, err)
+			}
+			if tag.RowsAffected() > 0 {
+				log.Printf("[karecik] SEED_REFRESH: %s — %d menu silindi, yeniden yazılıyor",
+					tenant.slug, tag.RowsAffected())
+			}
 		}
 	} else {
-		businessID, err = insertSeedTenant(ctx, tx)
+		businessID, err = insertSeedTenant(ctx, tx, tenant)
 		if err != nil {
 			return err
 		}
 	}
 
-	created, err := insertMissingMenus(ctx, tx, businessID)
+	created, err := insertMissingMenus(ctx, tx, businessID, tenant)
 	if err != nil {
 		return err
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("could not save the seed data: %w", err)
-	}
-
 	if len(created) == 0 {
 		return nil
 	}
-	log.Printf("[karecik] Melly Coffee ready -> %s / %s", mellyEmail, mellyPassword)
+
+	log.Printf("[karecik] %s ready -> %s / %s", tenant.name, tenant.email, tenant.password)
 	for _, slug := range created {
-		log.Printf("[karecik] menu created -> address: %s/%s", mellySlug, slug)
+		log.Printf("[karecik] menu created -> address: %s/%s", tenant.slug, slug)
 	}
 	return nil
+}
+
+// seedNullable turns an empty seed string into a NULL rather than an empty one:
+// yerli_uretim_logo_url is a nullable column and "no badge image" is NULL, not
+// "".
+func seedNullable(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // insertSeedTenant creates the account and the business, and nothing else: the
 // business is the login and the subdomain it answers on. The menus that hang
 // off it are inserted separately, which is what lets a tenant that already
 // exists be topped up with a menu it does not have yet.
-func insertSeedTenant(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
-	hash, err := utils.HashPassword(mellyPassword)
+func insertSeedTenant(ctx context.Context, tx pgx.Tx, tenant seedTenant) (uuid.UUID, error) {
+	hash, err := utils.HashPassword(tenant.password)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("could not hash the seed password: %w", err)
 	}
@@ -851,7 +1044,7 @@ func insertSeedTenant(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
 		INSERT INTO users (email, password_hash, business_name)
 		VALUES ($1, $2, $3)
 		RETURNING id`,
-		mellyEmail, hash, mellyName).Scan(&userID)
+		tenant.email, hash, tenant.name).Scan(&userID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("could not create the seed user: %w", err)
 	}
@@ -861,7 +1054,7 @@ func insertSeedTenant(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
 		INSERT INTO businesses (user_id, name, slug)
 		VALUES ($1, $2, $3)
 		RETURNING id`,
-		userID, mellyName, mellySlug).Scan(&businessID)
+		userID, tenant.name, tenant.slug).Scan(&businessID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("could not create the seed business: %w", err)
 	}
@@ -875,10 +1068,10 @@ func insertSeedTenant(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
 // The index in mellyMenus becomes menus.position, so a menu keeps the same
 // place in the directory whether it arrived on a fresh database or was added to
 // one that already had the other.
-func insertMissingMenus(ctx context.Context, tx pgx.Tx, businessID uuid.UUID) ([]string, error) {
-	created := make([]string, 0, len(mellyMenus))
+func insertMissingMenus(ctx context.Context, tx pgx.Tx, businessID uuid.UUID, tenant seedTenant) ([]string, error) {
+	created := make([]string, 0, len(tenant.menus))
 
-	for position, menu := range mellyMenus {
+	for position, menu := range tenant.menus {
 		var exists bool
 		err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
@@ -891,7 +1084,7 @@ func insertMissingMenus(ctx context.Context, tx pgx.Tx, businessID uuid.UUID) ([
 			continue
 		}
 
-		if err := insertSeedMenu(ctx, tx, businessID, menu, position); err != nil {
+		if err := insertSeedMenu(ctx, tx, businessID, tenant, menu, position); err != nil {
 			return nil, err
 		}
 		created = append(created, menu.slug)
@@ -926,7 +1119,7 @@ func insertMissingMenus(ctx context.Context, tx pgx.Tx, businessID uuid.UUID) ([
 // neither page publishes one, and slogan because the owner types their own in
 // Menü Ayarları — it keeps the empty-string default of migration 007, so the
 // header prints no tagline until they do.
-func insertSeedMenu(ctx context.Context, tx pgx.Tx, businessID uuid.UUID, menu seedMenu, position int) error {
+func insertSeedMenu(ctx context.Context, tx pgx.Tx, businessID uuid.UUID, tenant seedTenant, menu seedMenu, position int) error {
 	var menuID uuid.UUID
 	err := tx.QueryRow(ctx, `
 		INSERT INTO menus (
@@ -940,18 +1133,20 @@ func insertSeedMenu(ctx context.Context, tx pgx.Tx, businessID uuid.UUID, menu s
 			phone, instagram, wifi_ssid, wifi_password
 		) VALUES (
 			$1, $2, $3, true, $4,
-			'TRY', $5, 'inter', '#C49A6C', '#1F1A17',
-			'tr', $6, true, 1200,
-			'#1F1A17', 'Hoş geldiniz', $7, 'slide-up',
-			450, 'color', '#FDFBF7',
-			0.40, $8, true,
-			true, $9,
-			$10, $11, $12, $13
+			'TRY', $5, 'inter', $6, $7,
+			'tr', $8, true, 1200,
+			$9, 'Hoş geldiniz', $10, 'slide-up',
+			450, 'color', $11,
+			0.40, $12, true,
+			$13, $14,
+			$15, $16, $17, $18
 		)
 		RETURNING id`,
-		businessID, menu.name, menu.slug, position, mellyTheme, []string{"tr", "en"},
-		mellyName, mellyLogoURL, mellyYerliUretimLogoURL,
-		mellyPhone, mellyInstagram, mellyWifiSSID, mellyWifiPass,
+		businessID, menu.name, menu.slug, position, tenant.theme,
+		tenant.primaryColor, tenant.textColor, tenant.languages,
+		tenant.splashBgColor, tenant.splashHeadline, tenant.backgroundColor,
+		tenant.logoURL, tenant.showYerliUretim, seedNullable(tenant.yerliLogoURL),
+		tenant.phone, tenant.instagram, tenant.wifiSSID, tenant.wifiPass,
 	).Scan(&menuID)
 	if err != nil {
 		return fmt.Errorf("could not create the seed menu (%s): %w", menu.slug, err)

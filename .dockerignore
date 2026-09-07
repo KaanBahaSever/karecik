@@ -1,0 +1,38 @@
+# Everything the build does not need. Keeping this tight matters twice over:
+# the build context is uploaded to the builder on every deploy, and anything
+# that slips in here can silently end up in the image.
+
+# Secrets — the image must never carry a .env
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and build output: the image builds its own from the lockfile
+**/node_modules
+frontend/dist
+backend/karecik
+backend/karecik.exe
+*.exe
+
+# Uploaded files belong on a volume, never baked into the image
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Version control, editors, local tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+
+# Windows helper scripts and local database dumps
+start.bat
+stop.bat
+*.sql.bak
+karecik-backups
+
+# Docs and notes do not affect the binary
+docs
+README.md
+LICENSE

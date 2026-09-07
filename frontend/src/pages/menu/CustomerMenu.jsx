@@ -121,19 +121,42 @@ export default function CustomerMenu({
   }, [embedded, menuSlug, menu, businessSlug, navigate])
 
   /* --------------------------------------------- scrollbar in embedded mode */
-  // The phone frame on the landing page renders this page inside an iframe.
-  // The iframe's own document scrollbar spoils the device illusion, so it is
-  // hidden while embedded — scrolling itself keeps working.
+  /* The landing page renders this route inside an iframe, and a scrollbar down
+     the side of the "phone" breaks the illusion completely.
+
+     Hiding it with `no-scrollbar` alone was not enough. That class only asks the
+     browser not to PAINT the document's scrollbar, and whether it obeys depends
+     on the engine, on whether html or body is the scrolling element, and on the
+     platform's overlay-scrollbar setting. The bar kept coming back.
+
+     So the document is taken out of the scrolling business entirely: html and
+     body are pinned to the viewport with `overflow: hidden`, and the wrapper
+     below becomes the scroller instead. There is then no document scrollbar to
+     suppress — it cannot exist — and the inner one is hidden by a class on an
+     ordinary element, which every engine honours. Touch and wheel scrolling are
+     untouched.
+
+     Only the iframe reaches this: LivePreview hands `embedded` straight to
+     MenuContent and never renders this component. */
   useEffect(() => {
     if (!embedded) return undefined
 
     const root = document.documentElement
+    const previousRoot = root.style.cssText
+    const previousBody = document.body.style.cssText
+
     root.classList.add('no-scrollbar')
     document.body.classList.add('no-scrollbar')
+    root.style.height = '100%'
+    root.style.overflow = 'hidden'
+    document.body.style.height = '100%'
+    document.body.style.overflow = 'hidden'
 
     return () => {
       root.classList.remove('no-scrollbar')
       document.body.classList.remove('no-scrollbar')
+      root.style.cssText = previousRoot
+      document.body.style.cssText = previousBody
     }
   }, [embedded])
 
@@ -223,7 +246,7 @@ export default function CustomerMenu({
     )
   }
 
-  return (
+  const content = (
     <>
       {showSplash ? (
         <SplashScreen business={menu.business} onDone={() => setShowSplash(false)} />
@@ -241,5 +264,23 @@ export default function CustomerMenu({
         showMenuSwitcher={!menuSlug}
       />
     </>
+  )
+
+  /* Embedded, this wrapper is the scroller: the effect above pinned the
+     document so it cannot scroll, and the bar now belongs to an ordinary
+     element, where `no-scrollbar` is reliable across engines. Standalone the
+     same tree is returned unwrapped — a real menu on a real phone scrolls the
+     document, which is what it should do.
+
+     It is a plain conditional rather than a wrapper component defined here: a
+     component declared inside render is a new type on every render, so React
+     would unmount and remount the whole menu on each keystroke in the search
+     box, throwing away the selected category and the scroll position with it. */
+  if (!embedded) return content
+
+  return (
+    <div className="no-scrollbar h-screen w-full overflow-y-auto overflow-x-hidden">
+      {content}
+    </div>
   )
 }

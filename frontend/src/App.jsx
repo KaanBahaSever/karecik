@@ -60,10 +60,18 @@ export default function App() {
       <Route path="/m/:businessSlug" element={<CustomerMenu />} />
       <Route path="/m/:businessSlug/:menuSlug" element={<CustomerMenu />} />
 
-      {/* Demo tenant rendered inside the iPhone frame on the landing page. No
-          menu slug: the seed gives melly-coffee a single menu, which the backend
-          resolves on its own — and being embedded, this never navigates. */}
-      <Route path="/demo" element={<CustomerMenu businessSlug="melly-coffee" embedded />} />
+      {/* The sample venue inside the iPhone frame on the landing page.
+
+          It points at the FICTIONAL karecik-kafe, not at a real customer. It
+          used to point at melly-coffee, and the day that tenant gained its
+          second menu the iframe quietly stopped showing a menu at all: with no
+          menu slug and two menus to choose from, the backend answers
+          menu_resolved:false and the page renders the menu DIRECTORY. A picker
+          in the shop window, on a page selling menus.
+
+          karecik-kafe publishes exactly one menu, so the backend resolves it on
+          its own and the frame always shows an actual menu. */}
+      <Route path="/demo" element={<CustomerMenu businessSlug="karecik-kafe" embedded />} />
 
       <Route
         path="/panel"

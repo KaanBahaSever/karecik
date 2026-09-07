@@ -49,7 +49,7 @@ func main() {
 	// production flag and refuses to run when APP_ENV=production — SEED_DEMO
 	// alone is not enough to authorise it.
 	if cfg.SeedDemo {
-		if err := database.SeedDemo(ctx, pool, cfg.IsProduction()); err != nil {
+		if err := database.SeedDemo(ctx, pool, cfg.IsProduction(), cfg.SeedRefresh); err != nil {
 			log.Printf("[karecik] WARNING: could not create the seed data: %v", err)
 		}
 	}
