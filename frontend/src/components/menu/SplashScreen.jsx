@@ -181,10 +181,11 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
   // 'none' yields `undefined`, so the wrapper carries NO animation property at
   // all: not a zero-length animation and not a keyframe ending at opacity 1,
   // both of which the browser would still run and `replayKey` still restart.
-  // That is exactly how MenuContent.jsx drops the header logo's fade when
-  // `logo_fade_in` is false. The karecikSplashIn keyframes stay in the style
-  // block either way — it is shared with the exit animation, so it is never
-  // conditional the way the logo's own <style> is.
+  //
+  // This screen is now the ONLY place the logo animates. The menu header used to
+  // fade its own logo in as well, which meant the "entrance" replayed on every
+  // language switch and every re-render; that was removed, and an entrance now
+  // belongs to the one moment the menu actually opens.
   const entranceAnimation =
     business?.splash_entrance === 'none' ? undefined : 'karecikSplashIn 320ms ease-out both'
 
@@ -270,9 +271,17 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
           animation too, not just the hold/exit timers. With splash_entrance
           'none' there is nothing to re-run — the key simply remounts a wrapper
           that draws itself immediately. */}
+      {/* `w-full max-w-sm` is load-bearing, not decoration. This wrapper is a
+          shrink-to-fit flex column, so a percentage width on a child resolves
+          against a container whose own width comes from that same child. In
+          "logo only" mode the logo was the ONLY child, the circular reference
+          collapsed its `max-w-[70%]` to zero, and the splash rendered blank —
+          it looked fine in "both" mode purely because the headline gave the
+          column a definite width. A definite width here fixes it at the source,
+          and the logo below now bounds itself with `max-w-full`. */}
       <div
         key={replayKey}
-        className="karecik-splash-content flex flex-col items-center gap-4 text-center"
+        className="karecik-splash-content flex w-full max-w-sm flex-col items-center gap-4 text-center"
         style={{ animation: entranceAnimation }}
       >
         {/* Every child below is either rendered or `null`, so the gap-4 above
@@ -282,7 +291,7 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
           <img
             src={logoUrl}
             alt=""
-            className="h-auto max-h-24 w-auto max-w-[70%] object-contain"
+            className="h-auto max-h-32 w-auto max-w-full object-contain"
           />
         ) : null}
 

@@ -84,32 +84,6 @@ function headerMode(value) {
 }
 
 /**
- * The logo's optional entrance, from `business.logo_fade_in`.
- *
- * Injected the same way SplashScreen.jsx does it — a plain <style> beside the
- * element, no library and no global stylesheet — and namespaced so it cannot
- * collide with anything else on the page.
- *
- * Reduced motion keeps the fade but drops the movement, which is the part the
- * preference is actually about.
- */
-const LOGO_ANIMATION_STYLE = `
-@keyframes karecikLogoFadeIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes karecikLogoFadeInReduced {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .karecik-menu-logo {
-    animation-name: karecikLogoFadeInReduced !important;
-  }
-}
-`
-
-/**
  * Top padding of the content column.
  *
  * The dashboard preview draws a Dynamic Island over the first 34 px of its
@@ -259,9 +233,6 @@ export default function MenuContent({
   const nameMargin = showBrandMark ? 'mt-3' : ''
   const menuNameMargin = showName ? 'mt-1' : showBrandMark ? 'mt-3' : ''
   const sloganMargin = showName || showMenuName ? 'mt-1.5' : showBrandMark ? 'mt-3' : ''
-
-  /* The logo's entrance is opt-in per menu; false means no animation at all. */
-  const logoFadeIn = business.logo_fade_in === true
 
   const searchTerm = search.trim()
   const searching = searchTerm.length > 0
@@ -583,31 +554,49 @@ export default function MenuContent({
               away from the logo. A single language draws no row at all — not an
               empty one — so nothing hangs over the logo. */}
           {languages.length > 1 ? (
-            <div className="mb-2 flex items-center justify-end gap-1">
-              {languages.map((code) => {
-                const info = findLanguage(code)
-                const isSelected = code === language
-                return (
-                  <button
-                    key={code}
-                    type="button"
-                    onClick={() => onLanguageChange?.(code)}
-                    aria-label={info.label}
-                    title={info.label}
-                    className="rounded-full px-2 py-1 text-xs font-semibold leading-none"
-                    style={{
-                      opacity: isSelected ? 1 : 0.45,
-                      border: isSelected
-                        ? '1px solid var(--menu-border)'
-                        : '1px solid transparent',
-                    }}
-                  >
-                    {/* Short code instead of a flag emoji: Windows cannot draw
-                        flags and rendered English as "GB". */}
-                    {info.short}
-                  </button>
-                )
-              })}
+            /* A segmented pill rather than loose buttons: one bordered track in
+               the theme's surface colour, with the active language filled in the
+               accent. It reads as a single control instead of two competing
+               ones, and it inherits every theme through the --menu-* variables.
+
+               `role="group"` plus `aria-pressed` is the honest markup for a set
+               of toggles — this switches the page's language rather than
+               navigating, so these are buttons, not links or a listbox. */
+            <div className="mb-3 flex justify-end">
+              <div
+                role="group"
+                aria-label={t('language', language)}
+                className="inline-flex items-center gap-0.5 rounded-full p-0.5"
+                style={{
+                  backgroundColor: 'var(--menu-surface)',
+                  border: '1px solid var(--menu-border)',
+                }}
+              >
+                {languages.map((code) => {
+                  const info = findLanguage(code)
+                  const isSelected = code === language
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => onLanguageChange?.(code)}
+                      aria-label={info.label}
+                      aria-pressed={isSelected}
+                      title={info.label}
+                      className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase leading-none tracking-wide"
+                      style={
+                        isSelected
+                          ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
+                          : { color: 'var(--menu-muted)', backgroundColor: 'transparent' }
+                      }
+                    >
+                      {/* Short code instead of a flag emoji: Windows cannot draw
+                          flags and rendered English as "GB". */}
+                      {info.short}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           ) : null}
 
@@ -616,23 +605,18 @@ export default function MenuContent({
                point of the stack: a wide horizontal logo finally gets the room
                it needs, while `max-h-24` bounds a tall one and `object-contain`
                keeps every aspect ratio intact. Never cropped, never squared off.
-               The entrance is attached only when the menu asked for it: with
-               `logo_fade_in` false there is no animation property at all, so
-               nothing to compute and nothing to replay. */
-            <>
-              {logoFadeIn ? <style>{LOGO_ANIMATION_STYLE}</style> : null}
-              <img
-                src={business.logo_url}
-                alt=""
-                className="karecik-menu-logo mx-auto h-auto w-full max-h-24 object-contain"
-                style={{
-                  borderRadius: 'calc(var(--menu-radius) * 0.6)',
-                  animation: logoFadeIn
-                    ? 'karecikLogoFadeIn 500ms ease-out both'
-                    : undefined,
-                }}
-              />
-            </>
+
+               The logo has NO entrance animation here on purpose. An entrance
+               belongs to the splash screen, which is the moment the menu opens;
+               replaying it in the header meant the logo faded in again on every
+               language switch and every re-render. The splash owns that motion
+               through `splash_entrance`. */
+            <img
+              src={business.logo_url}
+              alt=""
+              className="mx-auto h-auto w-full max-h-24 object-contain"
+              style={{ borderRadius: 'calc(var(--menu-radius) * 0.6)' }}
+            />
           ) : showInitial ? (
             <div
               className="mx-auto flex h-14 w-14 items-center justify-center text-lg font-semibold"

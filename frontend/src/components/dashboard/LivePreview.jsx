@@ -4,6 +4,7 @@ import { AlertCircle, Eye, LayoutList, Play } from 'lucide-react'
 import api from '../../lib/api'
 import { currencySymbol } from '../../lib/format'
 import { loadFont } from '../../themes/fonts'
+import { backgroundStyles, findTheme } from '../../themes/themes'
 import { findLanguage } from '../../locales/index.js'
 import Loading from '../ui/Loading.jsx'
 import MenuContent from '../menu/MenuContent.jsx'
@@ -29,10 +30,13 @@ const CHROME_ALLOWANCE = 190
    stops being readable and a scrollbar is the better trade. */
 const MIN_FRAME_HEIGHT = 460
 
-/* Every setting whose change should replay the menu's entrance: the splash
-   screen itself, plus the header logo's fade-in, which plays right after the
-   splash leaves. They are joined into one string and watched as a single value,
-   so any change to any of them replays without a thirteen-entry dependency array. */
+/* Every splash setting whose change should replay the entrance. They are joined
+   into one string and watched as a single value, so any change to any of them
+   replays without a twelve-entry dependency array.
+
+   The header logo used to be in here too. It has no entrance of its own any
+   more — that motion belongs to the splash, which is the moment the menu opens
+   — so there is nothing left to replay for it. */
 const REPLAY_FIELDS = [
   'splash_enabled',
   'splash_logo_url',
@@ -46,7 +50,6 @@ const REPLAY_FIELDS = [
   'splash_exit_easing',
   'splash_display',
   'splash_slide_fade',
-  'logo_fade_in',
 ]
 
 /* Long enough that dragging the duration slider replays the splash once, when
@@ -200,6 +203,18 @@ export default function LivePreview({
 
   const previewMenu = menu ? { ...menu, business: previewBusiness } : null
 
+  /* The screen used to be a hardcoded `bg-white`, which is what bled as a pale
+     rim around the menu: every theme but a pure-white one paints a different
+     colour, and the viewport's own white showed through wherever the menu's
+     square content was clipped by the 2.5rem corner radius — and below the fold
+     on a short menu. Painting the screen in the previewed menu's own background
+     removes the mismatch instead of masking it. With no menu to preview the
+     placeholder is styled for light, so white stays right there. */
+  const screenBackground = previewMenu
+    ? backgroundStyles(previewBusiness.theme, previewBusiness).containerStyle?.backgroundColor ||
+      findTheme(previewBusiness.theme).colors.background
+    : '#ffffff'
+
   /* Bumping the key first means a second press replays the sequence instead of
      doing nothing while the screen is still on. */
   function playSplash() {
@@ -320,8 +335,12 @@ export default function LivePreview({
 
           {/* The viewport: exactly 390 x 844 CSS px. */}
           <div
-            className="relative overflow-hidden rounded-[2.5rem] bg-white"
-            style={{ width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }}
+            className="relative overflow-hidden rounded-[2.5rem]"
+            style={{
+              width: VIEWPORT_WIDTH,
+              height: VIEWPORT_HEIGHT,
+              backgroundColor: screenBackground,
+            }}
           >
             {/* Dynamic Island. It sits above the menu (`z-20`) and the viewport's
                 own `overflow-hidden rounded-[2.5rem]` clips it to the screen, so

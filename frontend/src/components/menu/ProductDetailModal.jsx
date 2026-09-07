@@ -44,6 +44,9 @@ const ANIMATION_STYLE = `
 }
 `
 
+/** Breathing room between the last option group and the sticky total bar. */
+const FOOTER_GAP = 20
+
 /** Drag distance, in pixels, past which letting go dismisses the sheet. */
 const DISMISS_DISTANCE = 90
 
@@ -418,9 +421,13 @@ export default function ProductDetailModal({ product, business, language = 'tr',
           </div>
         </div>
 
+        {/* The reserved space is the bar's measured height PLUS a gap, not the
+            height alone. Reserving exactly the height left the last option group
+            touching the bar with nothing between them, which read as an overlap.
+            The fallback keeps the first paint roomy while the measurement lands. */}
         <div
           className="flex flex-col gap-4 p-5"
-          style={{ paddingBottom: footerHeight ? `${footerHeight}px` : undefined }}
+          style={{ paddingBottom: `${(footerHeight || 72) + FOOTER_GAP}px` }}
         >
           {/* name + calories */}
           <div>

@@ -62,7 +62,6 @@ const MENU_FIELDS = [
   'logo_url',
   'cover_url',
   'header_display',
-  'logo_fade_in',
   /* 2. contact */
   'phone',
   'address',
@@ -286,7 +285,6 @@ function buildDraft(menu) {
     logo_url: menu.logo_url || null,
     cover_url: menu.cover_url || null,
     header_display: headerMode(menu.header_display),
-    logo_fade_in: Boolean(menu.logo_fade_in),
     /* contact */
     phone: menu.phone || '',
     address: menu.address || '',
@@ -817,17 +815,12 @@ export default function MenuSettings() {
                   hint="Müşteri menüsünün en üst satırında ne görüneceğini seçin. Logo yoksa işletme adı gösterilir; menü adı her modda hemen altında yer alır."
                 />
 
-                {/* How that logo ENTERS. Off means no animation at all, not a
-                    zero-duration one, so a menu that never asked for motion
-                    keeps rendering the logo at full opacity right away. */}
-                <div className="mt-5">
-                  <Switch
-                    checked={Boolean(draft.logo_fade_in)}
-                    onChange={(value) => update('logo_fade_in', value)}
-                    label="Logo Giriş Animasyonu (Fade-In)"
-                    description="Menü açıldığında logo yumuşak bir geçişle belirir."
-                  />
-                </div>
+                {/* The header logo has no entrance of its own any more. An
+                    entrance belongs to the splash screen — the one moment the
+                    menu actually opens — and it is configured there through
+                    "Giriş animasyonu". In the header it replayed on every
+                    language switch and every re-render, which is not an
+                    entrance at all. */}
               </div>
             </div>
           </section>
