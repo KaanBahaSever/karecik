@@ -149,6 +149,45 @@ func mellySharedOptions() models.ProductOptions {
 	}
 }
 
+// SUADIYE portion groups. The page lists each size as its own line — Espresso
+// 210 beside Double Espresso 230, Tea 110 beside Cup Tea 140 — but they are one
+// drink served two ways, so the seed asks the size in the drawer instead of
+// printing two nearly identical cards.
+//
+// The base price is always the CHEAPER size and the larger one is a surcharge.
+// That is not a stylistic choice: option prices are surcharges added to the
+// product price, and both the handler and the database refuse a negative one,
+// so pricing the larger size as the base would have no way to express the
+// smaller. The card therefore shows the starting price.
+var (
+	mellyPortionDouble20 = models.ProductOptionGroup{
+		Name: "Porsiyon", Type: models.OptionTypeSingle, Required: false,
+		Items: []models.ProductOptionItem{
+			{Name: "Tek", Price: 0},
+			{Name: "Double", Price: 20},
+		},
+	}
+
+	mellyTeaServing = models.ProductOptionGroup{
+		Name: "Servis", Type: models.OptionTypeSingle, Required: false,
+		Items: []models.ProductOptionItem{
+			{Name: "Bardak", Price: 0},
+			{Name: "Fincan", Price: 30},
+		},
+	}
+)
+
+// mellyPortionOptions puts the size question first — it is asked about the
+// drink itself rather than about what goes into it — and then the shared
+// add-ons. Every call returns fresh groups, so no two products share a backing
+// array with each other or with the package-level vars.
+func mellyPortionOptions(portion models.ProductOptionGroup) models.ProductOptions {
+	shared := mellySharedOptions()
+	options := make(models.ProductOptions, 0, 1+len(shared))
+	options = append(options, cloneOptionGroup(portion))
+	return append(options, shared...)
+}
+
 // CIHANGIR's groups. They are a SEPARATE set on purpose, not a reuse of the
 // Suadiye ones: the Cihangir page charges its own money for the same add-ons.
 //
@@ -213,6 +252,17 @@ var (
 		Items: []models.ProductOptionItem{
 			{Name: "Tek", Price: 0},
 			{Name: "Double", Price: 20},
+		},
+	}
+
+	// Filter Coffee 195 and Small Filter Coffee 150 are one coffee in two cups.
+	// The base is the small size because a surcharge can only be positive, so
+	// "Normal" carries the +45 that reproduces the printed 195.
+	cihangirFilterSize = models.ProductOptionGroup{
+		Name: "Porsiyon", Type: models.OptionTypeSingle, Required: false,
+		Items: []models.ProductOptionItem{
+			{Name: "Küçük", Price: 0},
+			{Name: "Normal", Price: 45},
 		},
 	}
 )
@@ -358,8 +408,13 @@ var suadiyeMenu = []seedCategory{
 		// site, so they are NOT folded into a portion group.
 		name: "Espresso Bar", icon: "☕",
 		products: []seedProduct{
-			{name: "Espresso", price: 210, calories: 5, options: mellySharedOptions()},
-			{name: "Double Espresso", price: 230, calories: 10, options: mellySharedOptions()},
+			/* One product with a portion question, not two cards. The page
+			   prints Espresso 210 and Double Espresso 230 as separate lines, but
+			   they are the same drink in two sizes — exactly what Türk Kahvesi
+			   below and Cihangir's own Espresso already ask in the drawer.
+			   210 + 20 reproduces the printed 230. */
+			{name: "Espresso", price: 210, calories: 5,
+				options: mellyPortionOptions(mellyPortionDouble20)},
 			{name: "Espresso Macchiato", price: 250, calories: 115, options: mellySharedOptions()},
 			{name: "Cortado", price: 270, calories: 130, options: mellySharedOptions()},
 			{name: "Americano", price: 285, calories: 8, options: mellySharedOptions()},
@@ -414,8 +469,11 @@ var suadiyeMenu = []seedCategory{
 			{name: "Chai Tea Latte", price: 330, calories: 250},
 			{name: "Dirty Chai Tea Latte", price: 350, calories: 275},
 			{name: "Salep", price: 330, calories: 290},
-			{name: "Tea", price: 110, calories: 5},
-			{name: "Cup Tea", price: 140, calories: 8},
+			/* Çay ve fincan çay: the same tea, a different glass. 110 + 30
+			   reproduces the printed 140. No add-on groups — the page prints
+			   its milk and syrup note under the coffee bars, not here. */
+			{name: "Tea", price: 110, calories: 5,
+				options: models.ProductOptions{cloneOptionGroup(mellyTeaServing)}},
 		},
 	},
 	{
@@ -557,8 +615,13 @@ var cihangirMenu = []seedCategory{
 	{
 		name: "Brew Bar", icon: "🫖",
 		products: []seedProduct{
-			{name: "Filter Coffee", price: 195, calories: 6},
-			{name: "Small Filter Coffee", price: 150, calories: 5},
+			/* One filter coffee in two cups, asked in the drawer.
+			   The base is the SMALL 150 rather than the printed 195: a surcharge
+			   can only ever be positive, so the cheaper size has to be the base
+			   and "Normal" carries the +45 that reproduces 195. The card shows
+			   150 as the starting price and the drawer shows the real total. */
+			{name: "Filter Coffee", price: 150, calories: 5,
+				options: models.ProductOptions{cloneOptionGroup(cihangirFilterSize)}},
 			{name: "Ice Filter Coffee", price: 210, calories: 7},
 			{name: "Cold Brew", price: 245, calories: 9},
 			{name: "Hario", price: 290, calories: 10},

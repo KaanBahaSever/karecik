@@ -550,56 +550,6 @@ export default function MenuContent({
             and each line's top margin is computed above from what is really
             above it, so no combination leaves a stray gap behind. */}
         <header className="flex flex-col text-center">
-          {/* Lifted out of the branding block so it can no longer take width
-              away from the logo. A single language draws no row at all — not an
-              empty one — so nothing hangs over the logo. */}
-          {languages.length > 1 ? (
-            /* A segmented pill rather than loose buttons: one bordered track in
-               the theme's surface colour, with the active language filled in the
-               accent. It reads as a single control instead of two competing
-               ones, and it inherits every theme through the --menu-* variables.
-
-               `role="group"` plus `aria-pressed` is the honest markup for a set
-               of toggles — this switches the page's language rather than
-               navigating, so these are buttons, not links or a listbox. */
-            <div className="mb-3 flex justify-end">
-              <div
-                role="group"
-                aria-label={t('language', language)}
-                className="inline-flex items-center gap-0.5 rounded-full p-0.5"
-                style={{
-                  backgroundColor: 'var(--menu-surface)',
-                  border: '1px solid var(--menu-border)',
-                }}
-              >
-                {languages.map((code) => {
-                  const info = findLanguage(code)
-                  const isSelected = code === language
-                  return (
-                    <button
-                      key={code}
-                      type="button"
-                      onClick={() => onLanguageChange?.(code)}
-                      aria-label={info.label}
-                      aria-pressed={isSelected}
-                      title={info.label}
-                      className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase leading-none tracking-wide"
-                      style={
-                        isSelected
-                          ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
-                          : { color: 'var(--menu-muted)', backgroundColor: 'transparent' }
-                      }
-                    >
-                      {/* Short code instead of a flag emoji: Windows cannot draw
-                          flags and rendered English as "GB". */}
-                      {info.short}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ) : null}
-
           {showLogo ? (
             /* The full content width and NO `max-w` at all — that is the whole
                point of the stack: a wide horizontal logo finally gets the room
@@ -664,6 +614,62 @@ export default function MenuContent({
             >
               {slogan}
             </p>
+          ) : null}
+
+          {/* Last line of the header, centred like everything above it.
+
+              It used to sit above the logo, right-aligned, where it read as an
+              orphan: a lone pill hanging off one corner of an otherwise centred
+              stack. Centring it under the identity block folds it into the same
+              composition, and putting it last matches how rarely it is used —
+              the venue's name comes first, the language control after it.
+
+              A single language draws no row at all, not an empty one. */}
+          {languages.length > 1 ? (
+            /* A segmented pill rather than loose buttons: one bordered track in
+               the theme's surface colour, with the active language filled in the
+               accent. It reads as a single control instead of two competing
+               ones, and it inherits every theme through the --menu-* variables.
+
+               `role="group"` plus `aria-pressed` is the honest markup for a set
+               of toggles — this switches the page's language rather than
+               navigating, so these are buttons, not links or a listbox. */
+            <div className="mt-4 flex justify-center">
+              <div
+                role="group"
+                aria-label={t('language', language)}
+                className="inline-flex items-center gap-0.5 rounded-full p-0.5"
+                style={{
+                  backgroundColor: 'var(--menu-surface)',
+                  border: '1px solid var(--menu-border)',
+                }}
+              >
+                {languages.map((code) => {
+                  const info = findLanguage(code)
+                  const isSelected = code === language
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => onLanguageChange?.(code)}
+                      aria-label={info.label}
+                      aria-pressed={isSelected}
+                      title={info.label}
+                      className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase leading-none tracking-wide"
+                      style={
+                        isSelected
+                          ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
+                          : { color: 'var(--menu-muted)', backgroundColor: 'transparent' }
+                      }
+                    >
+                      {/* Short code instead of a flag emoji: Windows cannot draw
+                          flags and rendered English as "GB". */}
+                      {info.short}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           ) : null}
         </header>
 
