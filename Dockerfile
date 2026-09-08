@@ -61,14 +61,20 @@ ENV VITE_API_URL=""
 
 # These two are genuinely per-deployment, so they stay overridable.
 #   VITE_APP_DOMAIN     the root domain tenant menu addresses are built from.
-#   VITE_DEMO_BUSINESS  the tenant shown in the phone frame on the landing page;
-#                       empty renders a neutral placeholder instead, which is
-#                       right until a real tenant with that slug exists.
+#   VITE_DEMO_BUSINESS  the tenant shown in the phone frame on the landing page.
+#                       It has to name a business that really exists in the
+#                       database this deployment talks to — the frame renders a
+#                       live iframe of that tenant's menu, so a slug with no row
+#                       behind it puts "menü bulunamadı" on the page that sells
+#                       the product. Set it to "" to get a static placeholder
+#                       instead, which is the safe answer for a fresh database.
+#                       NOTE: cmd/seed does NOT create karecik-kafe; it exists
+#                       only in the database it was made in.
 # VITE_ROOT_DOMAIN is deliberately absent: it is a local-development knob, and
 # baking a real domain into it would create a second, competing root domain for
 # tenant resolution.
 ARG VITE_APP_DOMAIN="karecik.com"
-ARG VITE_DEMO_BUSINESS=""
+ARG VITE_DEMO_BUSINESS="karecik-kafe"
 ENV VITE_APP_DOMAIN=$VITE_APP_DOMAIN \
     VITE_DEMO_BUSINESS=$VITE_DEMO_BUSINESS
 

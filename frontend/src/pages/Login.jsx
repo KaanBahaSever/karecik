@@ -7,13 +7,12 @@ import { useToast } from '../components/ui/Toast.jsx'
 import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
 
-/* Seeded account, handy for signing in quickly during development.
-   These are the credentials database/seed.go writes for the Melly Coffee
-   tenant. The legacy demo account this box used to advertise is DELETED by
-   that same seed, so offering it here would hand out a login that no longer
-   exists — keep these two in step with the seed. */
-const DEMO_EMAIL = 'melly@karecik.com'
-const DEMO_PASSWORD = 'melly1234'
+/* This page used to print a working e-mail and password, with a button that
+   filled the form in. That was a development convenience on a page that is now
+   deployed to the public internet, where it is simply a published credential
+   for a real tenant — anyone who opened the login screen could sign in and edit
+   that business's menu. Development logins belong in the seed output and in
+   cmd/resetpw, never in the bundle. */
 
 /** Karecik brand lockup, linking back to the landing page. */
 function BrandLogo() {
@@ -56,13 +55,6 @@ export default function Login() {
       toast.error(err.message)
       setSubmitting(false)
     }
-  }
-
-  /** Fills the form with the demo account credentials. */
-  function fillDemo() {
-    setEmail(DEMO_EMAIL)
-    setPassword(DEMO_PASSWORD)
-    setError('')
   }
 
   // Hide the form while the session is being verified, to avoid a flash.
@@ -146,22 +138,6 @@ export default function Login() {
           </p>
         </div>
 
-        <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500">
-          <div className="flex items-center justify-between gap-3">
-            <span>
-              Demo hesap: <span className="font-medium text-gray-700">{DEMO_EMAIL}</span> /{' '}
-              <span className="font-medium text-gray-700">{DEMO_PASSWORD}</span>
-            </span>
-            <button
-              type="button"
-              onClick={fillDemo}
-              className="btn-secondary btn-sm shrink-0"
-              disabled={submitting}
-            >
-              Doldur
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   )

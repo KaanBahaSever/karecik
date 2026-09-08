@@ -87,7 +87,13 @@ Ayarlanabilir kalan ikisi:
 | ARG | Varsayılan | Neden |
 |---|---|---|
 | `VITE_APP_DOMAIN` | `karecik.com` | Menü adreslerindeki kök alan adı |
-| `VITE_DEMO_BUSINESS` | *(boş)* | Landing sayfasındaki telefonda gösterilecek kiracı; boşken sabit görsel çıkar |
+| `VITE_DEMO_BUSINESS` | `karecik-kafe` | Landing sayfasındaki telefonda canlı olarak gösterilecek kiracı; boşken sabit görsel çıkar |
+
+> `VITE_DEMO_BUSINESS`, **o veritabanında gerçekten var olan** bir işletme
+> slug'ı olmalı — telefon çerçevesi o kiracının menüsünü canlı bir iframe olarak
+> açıyor. `karecik-kafe`'yi `cmd/seed` **oluşturmuyor**; yalnızca yaratıldığı
+> veritabanında duruyor. Veritabanı sıfırdan kurulursa bu değeri boşaltın, yoksa
+> ürünü satan sayfanın telefonunda "menü bulunamadı" yazar.
 
 `VITE_ROOT_DOMAIN` de bilerek ARG değil — yerel geliştirme ayarı, gerçek bir
 alan adı gömmek kiracı çözümlemesine ikinci bir kök alan adı sokardı.
