@@ -3,6 +3,8 @@ import { Link, Navigate } from 'react-router-dom'
 
 import Header from '../components/landing/Header.jsx'
 import PhoneFrame from '../components/landing/PhoneFrame.jsx'
+import Logo from '../components/ui/Logo.jsx'
+import { DEMO_BUSINESS_SLUG } from '../lib/env'
 import SignUpModal from '../components/landing/SignUpModal.jsx'
 import { useAuth } from '../lib/auth.jsx'
 import { landingText, readSavedLanguage, saveLanguage } from '../locales/landing.js'
@@ -84,11 +86,26 @@ export default function Landing() {
                 on the frame and on the iframe element, plus the same class that
                 CustomerMenu puts on the embedded document while it is embedded.
               */}
-              <iframe
-                src="/demo"
-                title={t.demoTitle}
-                className="no-scrollbar h-full w-full border-0"
-              />
+              {DEMO_BUSINESS_SLUG ? (
+                <iframe
+                  src="/demo"
+                  title={t.demoTitle}
+                  className="no-scrollbar h-full w-full border-0"
+                />
+              ) : (
+                /* No sample tenant is deployed. Rendering the iframe anyway
+                   would put "menu bulunamadı" inside the phone on the page that
+                   is selling the product, so the frame shows a neutral placeholder
+                   instead. Set VITE_DEMO_BUSINESS to a real tenant slug to turn
+                   the live preview back on. */
+                <div className="flex h-full flex-col items-center justify-center gap-3 bg-gray-50 px-8 text-center">
+                  <Logo className="h-10 w-10 text-brand-600" title="" />
+                  <p className="text-sm font-medium text-gray-700">Menünüz burada görünür</p>
+                  <p className="text-xs leading-relaxed text-gray-500">
+                    Kategoriler, ürünler, fiyatlar ve kendi logonuz — hepsi telefonda.
+                  </p>
+                </div>
+              )}
             </PhoneFrame>
           </div>
         </section>

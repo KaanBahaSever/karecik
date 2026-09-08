@@ -1,153 +1,213 @@
-# Karecik — Railway'e deploy ve CI/CD
+# Karecik — deploy ve CI/CD
 
-Bu doküman kurulumun **neden** böyle olduğunu da anlatıyor, çünkü birkaç yerde
-sessizce yanlış gidebilecek şeyler var.
+Frontend Cloudflare Pages'te, API Railway'de. Bu doküman **neden** böyle
+olduğunu da anlatıyor, çünkü ayrı origin'e geçmenin sessizce yanlış gidebilecek
+birkaç noktası var.
 
 ---
 
-## Mimari: tek servis
+## Mimari
 
 ```
-GitHub (main)  ──push──▶  GitHub Actions (test)      ← ücretsiz, deploy'u engellemez
+GitHub (main) ──push──▶ GitHub Actions (test)     ← ücretsiz, deploy'u engellemez
        │
-       └────────────────▶  Railway
-                             ├── karecik      (Docker: Go + gömülü React)
-                             └── Postgres     (Railway eklentisi)
+       ├──────────────▶ Cloudflare Pages          ← React SPA, ücretsiz
+       │                  karecik.com
+       │                  *.karecik.com
+       │
+       └──────────────▶ Railway                   ← Go API
+                          api.karecik.com
+                          └── Postgres
 ```
 
-Go binary'si `SERVE_STATIC=true` ile React bundle'ını kendisi servis ediyor, yani
-**iki değil bir servis** çalışıyor. Bunun iki kazancı var:
-
-- **Maliyet.** Railway kullanıma göre faturalandırıyor; ikinci bir web servisi
-  ikinci bir konteyner demek. Ayrı bir frontend servisi burada hiçbir şey
-  kazandırmıyor çünkü aynı Go süreci zaten statik dosya servis edebiliyor.
-- **Basitlik.** API ve menü aynı origin'den cevap veriyor, yani production'da
-  CORS ayarı gerekmiyor ve `{isletme}.karecik.com` alt alan adları tek bir
-  sertifika ve tek bir router arkasında duruyor.
-
-Frontend'i ayrıca Cloudflare Pages veya Vercel'e (ücretsiz katman) koymayı da
-düşündüm. Daha ucuz **değil** — Railway tarafında yine aynı tek konteyner
-kalıyor — ve karşılığında CORS, ayrı bir domain ve iki ayrı deploy hattı
-getiriyor. Tek servis hem daha ucuz hem daha az parça.
+Önceki kurulum tek konteynerdi: Go binary'si React bundle'ını da servis
+ediyordu. Ayırmanın karşılığı şu: statik dosyalar Cloudflare'in ücretsiz
+katmanında ve dünya genelinde CDN'de, Railway konteyneri de sadece API
+çalıştırdığı için daha küçük. Bedeli, aşağıdaki bütün bölümün konusu olan **iki
+farklı origin** ve aralarındaki oturum çerezi.
 
 ---
 
-## İlk kurulum (bir kere)
+## Kimlik doğrulama: bellek içi oturumlar
 
-### 1. Repoyu GitHub'a it
+JWT kaldırıldı. Oturum artık tarayıcıda HttpOnly bir çerez, sunucuda ise **API
+sürecinin kendi belleğinde** bir kayıt (`backend/internal/session`). Veritabanı
+oturum yolunda hiç yok.
+
+Neden JWT'den vazgeçtik — konfigürasyonun yarısı bundan geliyor:
+
+- **JWT iptal edilemiyordu.** Çıkış yapmak token'ı localStorage'dan silmekti;
+  daha önce kopyalanmış bir token süresi dolana kadar çalışmaya devam ederdi.
+  Kaydı silmek oturumu gerçekten bitiriyor — "diğer cihazlardan çıkış yap" ve
+  "şifre değişince öteki oturumları kapat" ancak böyle gerçek oluyor.
+- **localStorage'ı her script okuyabiliyordu.** HttpOnly çerezi JavaScript'ten
+  okunamıyor, yani bir XSS açığı artık oturumu çalamıyor.
+- **Ham token hiçbir yerde tutulmuyor.** Saklanan şey SHA-256 özeti; ne bir
+  veritabanı yedeği ne de bir bellek dökümü kullanılabilir kimlik bilgisi verir.
+
+### Belleğe taşımanın üç sonucu — üçü de operasyonel
+
+**1. API tek instance çalışmak zorunda.** Yük dengeleyici arkasındaki iki kopya
+bu haritayı paylaşmaz: A'da açılan oturum B için yoktur, kullanıcı isteklerinin
+kabaca yarısında giriş ekranına düşer. Railway'de servis **1 replika** kalmalı;
+ölçeklenmesi gerektiği gün oturumlar paylaşılan bir yere (Redis ya da yeniden
+veritabanı) taşınmadan replika sayısı artırılamaz.
+
+**2. Her deploy herkesi çıkış yaptırır.** Süreç yeniden başladığında harita
+boştur. `main`'e her push bir deploy tetiklediği için bu nadir bir olay değil —
+kullanıcılar "sürekli çıkış atıyor" derse sebebi genelde budur, bir hata değil.
+Tercih bilerek yapıldı; API açılışta bunu log'a da yazıyor.
+
+**3. `cmd/resetpw` artık oturum kapatamıyor.** Ayrı bir süreç, çalışan
+sunucunun belleğine uzanamaz: şifreyi değiştirir ama o hesapta açık duran
+oturumlar açık kalır. Şifre sıfırlama genelde "hesap ele geçirildi" şüphesiyle
+yapıldığı için **komuttan sonra API servisini yeniden başlatın** — açık olan
+her oturumu, saldırganınki dahil, sonlandıran şey budur. Komut bitince bunu
+kendisi de hatırlatıyor.
+
+Panel içinden yapılan şifre değişikliği (`/panel/hesap`) etkilenmedi: onu
+işleyen süreç oturumları tutan süreçle aynı, diğer oturumları anında düşürüyor.
+
+### Çerez ayarları — burası kritik
+
+| Kurulum | COOKIE_DOMAIN | COOKIE_SAMESITE | COOKIE_SECURE |
+|---|---|---|---|
+| Yerel geliştirme (Vite proxy) | boş | `Lax` | `false` |
+| **karecik.com + api.karecik.com** | `.karecik.com` | `Lax` | `true` |
+| pages.dev + up.railway.app | boş | `None` | `true` |
+
+Ortadaki satır hedeflenen production şekli. `karecik.com` ile
+`api.karecik.com` **aynı site** sayılır (aynı tescil edilebilir alan adı), o
+yüzden `Lax` yeterli — `None` sadece iki taraf gerçekten farklı sitelerdeyken
+gerekiyor.
+
+Üç tuzak:
+
+1. **`SameSite=None` + `Secure=false` kombinasyonu tarayıcı tarafından sessizce
+   atılır.** Giriş başarılı görünür, hiçbir çerez saklanmaz. Uygulama bu ikiliyi
+   açılışta reddediyor, çünkü belirtisi ("giriş çalışmıyor ama hata yok")
+   sebebinden çok uzak.
+2. **`COOKIE_DOMAIN`'i cevabı veren host'a ait olmayan bir değere ayarlamak da
+   sessizce başarısız olur.** `.karecik.com` yalnızca API gerçekten o alan adı
+   altındaysa doğru. Geçici Railway alan adında (`*.up.railway.app`) boş bırak.
+3. **`credentials: 'include'` olmadan tarayıcı çerezi ne gönderir ne saklar.**
+   Frontend'te ayarlı; API tarafında da CORS `AllowCredentials: true` gerekiyor
+   ve bu, `Access-Control-Allow-Origin: *` ile birlikte kullanılamaz — bu yüzden
+   izin verilen origin bir fonksiyonla tek tek yansıtılıyor.
+
+---
+
+## Cloudflare Pages (frontend)
+
+1. Cloudflare → **Workers & Pages** → **Create** → **Pages** → GitHub reposunu bağla.
+2. Build ayarları:
+
+   | Alan | Değer |
+   |---|---|
+   | Framework preset | None |
+   | Build command | `npm ci && npm run build` |
+   | Build output directory | `dist` |
+   | Root directory | `frontend` |
+
+3. Environment variables (Production **ve** Preview):
+
+   | Değişken | Değer |
+   |---|---|
+   | `VITE_API_URL` | `https://api.karecik.com` |
+   | `VITE_APP_DOMAIN` | `karecik.com` |
+   | `VITE_DEMO_BUSINESS` | *(opsiyonel)* landing sayfasındaki telefonda gösterilecek kiracı slug'ı |
+
+   Bunlar **build zamanında** bundle'a gömülüyor: değiştirince yeniden build
+   gerekiyor, yeniden başlatmak yetmiyor.
+
+4. Alan adları: `karecik.com` ve **`*.karecik.com`**. Wildcard şart — müşteri
+   menüleri `{isletme}.karecik.com/{menu}` adresinden açılıyor.
+
+`frontend/public/_redirects` içindeki `/* /index.html 200` kuralı SPA
+yönlendirmesini ayakta tutuyor; o olmadan ana sayfa dışındaki her adres
+Cloudflare'in 404'ünü döner.
+
+`VITE_DEMO_BUSINESS` boşsa landing sayfasındaki telefon canlı menü yerine sabit
+bir görsel gösteriyor. Otomatik seed kaldırıldığı için varsayılan bu: var
+olmayan bir kiracıya bakan iframe, ürünü satan sayfada "menü bulunamadı" yazardı.
+
+---
+
+## Railway (API + veritabanı)
+
+1. **New Project** → **Deploy from GitHub repo** → bu repo. Kökteki
+   `railway.json` ve `Dockerfile` bulunur.
+2. Aynı projede **New** → **Database** → **PostgreSQL**.
+3. **Volume**, mount yolu `/data` — bunu atlama. Konteyner dosya sistemi her
+   deploy'da sıfırlanıyor; yüklenen logolar ve görseller `UPLOAD_DIR` altında
+   duruyor ve disk olmadan ilk deploy'da kaybolur.
+4. Variables:
+
+   | Değişken | Değer |
+   |---|---|
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` — referans olarak yaz, kopyalama |
+   | `APP_DOMAIN` | `karecik.com` |
+   | `CORS_ORIGINS` | `https://karecik.com` |
+   | `COOKIE_DOMAIN` | `.karecik.com` *(kendi alan adına geçtikten sonra)* |
+   | `COOKIE_SAMESITE` | `Lax` |
+
+   Dockerfile'ın verdiği ve dokunmana gerek olmayanlar: `HOST=0.0.0.0`,
+   `PORT=8080`, `APP_ENV=production`, `COOKIE_SECURE=true`,
+   `UPLOAD_DIR=/data/uploads`.
+
+5. Custom domain: `api.karecik.com`.
+6. **Replika sayısı 1 kalmalı.** Oturumlar süreç belleğinde; ikinci bir kopya
+   birincisinin oturumlarını görmez. Trafik arttığı için ölçeklemek gerekirse
+   önce oturumları paylaşılan bir yere taşımak lazım — replikayı artırmak tek
+   başına giriş akışını bozar.
+
+Migration'lar açılışta kendiliğinden uygulanıyor; ayrı bir adım yok.
+
+---
+
+## Örnek veri ve şifreler
+
+Otomatik seed **kaldırıldı**. Eskiden bir ortam değişkeni sunucuya çalışan bir
+giriş yazdırabiliyordu; yanlış ayarlanmış tek bir değişken production'a örnek
+hesap koyabilirdi. Artık ikisi de elle çalıştırılan komutlar:
 
 ```bash
-git remote -v            # zaten bir remote var mı?
-git push -u origin main
+cd backend
+go run ./cmd/seed                 # geliştirme verisi (Melly Coffee)
+go run ./cmd/seed -refresh        # seed menülerini kaynaktan yeniden yaz (yıkıcı)
+go run ./cmd/resetpw -email sahip@ornek.com
 ```
 
-### 2. Railway'de proje ve veritabanı
+`cmd/seed` `APP_ENV=production` görürse çalışmayı reddediyor.
 
-1. Railway → **New Project** → **Deploy from GitHub repo** → bu repo.
-2. Railway kökteki `railway.json` ve `Dockerfile`'ı kendisi bulur; Nixpacks'e
-   gerek yok. (Nixpacks bu repoda zaten çalışmazdı: iki dilli bir monorepo.)
-3. Aynı projede **New** → **Database** → **Add PostgreSQL**.
+### Şifre sıfırlama neden HTTP ucu değil
 
-### 3. Kalıcı disk — bunu atlama
+"Şifremi unuttum" akışı, şifreyi değiştirmeden önce adresin sahibi olduğunuzu
+kanıtlar — ve o kanıt e-postadır. Ortada e-posta gönderimi olmadığı için
+kanıtlayacak bir şey yok: kimlik doğrulaması olmayan bir sıfırlama ucu, bir
+adresi bilen herkesin hesabı ele geçirmesi demek olurdu. Teslim edilemeyen bir
+token üreteci de aynı açığın kılık değiştirmiş hali — token ya bir yerden
+okunabilir olurdu ya da hiç kullanılamazdı.
 
-Konteyner dosya sistemi **her deploy'da sıfırlanıyor**. Yüklenen logolar ve ürün
-görselleri `UPLOAD_DIR` altında duruyor, yani disk olmadan ilk deploy'da hepsi
-kaybolur ve menülerde kırık görseller kalır.
+Bu yüzden sıfırlama, güvenin zaten bulunduğu yerde: veritabanı erişimi olan
+kişinin sunucuda çalıştırdığı bir komutta. SMTP geldiğinde e-postalı akış
+eklenir, bu komut da acil durum yolu olarak kalır.
 
-Railway → servis → **Settings → Volumes → Add Volume**, mount yolu:
-
-```
-/data
-```
-
-Dockerfile `UPLOAD_DIR=/data/uploads` ile geliyor ve o dizini konteyner
-kullanıcısına ait olacak şekilde oluşturuyor.
-
-> Uzun vadede S3/Cloudflare R2 daha doğru olur (birden fazla replika, yedek),
-> ama tek replikada disk hem yeterli hem daha ucuz.
-
-### 4. Ortam değişkenleri
-
-Railway → servis → **Variables**:
-
-| Değişken | Değer | Not |
-|---|---|---|
-| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | Referans olarak yaz, kopyalama — Railway özel ağ üzerinden bağlar |
-| `JWT_SECRET` | 32+ karakter rastgele | **Zorunlu.** `APP_ENV=production` iken yoksa uygulama açılmıyor |
-| `APP_DOMAIN` | `karecik.com` | Menü alt alan adlarının kökü |
-
-`openssl rand -base64 48` iyi bir secret üretir.
-
-Dockerfile'ın verdiği ve dokunmana gerek olmayanlar: `HOST=0.0.0.0`,
-`PORT=8080`, `APP_ENV=production`, `SERVE_STATIC=true`, `STATIC_DIR=/app/static`,
-`UPLOAD_DIR=/data/uploads`, `SEED_DEMO=false`.
-
-### 5. Alan adı
-
-Railway → **Settings → Networking → Custom Domain**:
-
-- `karecik.com` → pazarlama sayfası ve panel
-- `*.karecik.com` → **wildcard, asıl önemli olan bu.** Müşteri menüleri
-  `{isletme}.karecik.com/{menu}` adresinden açılıyor; wildcard olmadan hiçbir
-  müşteri menüsü çözülmez.
-
-DNS'te Railway'in verdiği hedefe iki CNAME:
-
-```
-@   CNAME  <railway-hedefi>
-*   CNAME  <railway-hedefi>
-```
-
-> Wildcard domain Railway'in ücretli planlarında var. Plan seçerken buna dikkat:
-> ürünün tamamı bu alt alan adı modeline dayanıyor.
+Komut şifreyi değiştirir ama **açık oturumları kapatamaz** — oturumlar API
+sürecinin belleğinde, komut ise ayrı bir süreç. Sıfırlamadan sonra API
+servisini yeniden başlatın.
 
 ---
 
-## Sonrası: her push
+## Her push'ta
 
-`main`'e her push Railway'de yeni bir build tetikliyor. Migration'lar açılışta
-kendiliğinden uygulanıyor (`database.Migrate`), yani ayrı bir migration adımı yok.
+`main`'e push → Cloudflare Pages ve Railway paralel build alır. GitHub Actions
+aynı anda `go vet`, `go test` (gerçek bir PostgreSQL servis konteyneriyle),
+`npm run build` ve API imajının derlendiğini çalıştırır.
 
-GitHub Actions (`.github/workflows/ci.yml`) aynı anda şunları çalıştırıyor:
-
-- `go vet` + `go test` (gerçek bir PostgreSQL servis konteyneriyle)
-- `npm run build`
-- Docker imajının gerçekten derlendiğini doğrulama
-
-**Bir ayrıntı:** çok kiracılı izolasyon testleri veritabanı bulamazsa kendini
-`t.Skip` ediyor — yani veritabanı olmadan CI yeşil yanar ve hiçbir şey kanıtlamaz.
-Workflow bu yüzden çıktıda `--- SKIP` görürse build'i bilerek kırıyor. Atlanmış
-bir güvenlik testi, olmayan testten daha kötüdür.
-
-### Actions deploy'u engellesin mi?
-
-Railway ve Actions varsayılan olarak **paralel** çalışıyor: testler kırmızı olsa
-bile deploy devam eder. İki seçenek:
-
-1. **Basit (önerilen başlangıç):** böyle bırak. Kırmızı bir CI'yı görürsün,
-   Railway'den tek tıkla önceki deploy'a dönersin.
-2. **Sıkı:** Railway'de otomatik deploy'u kapat ve `railway up`'ı Actions'ın
-   sonuna ekle (`RAILWAY_TOKEN` secret'ı ile). Testler geçmeden deploy olmaz,
-   karşılığında bir secret yönetmen gerekir.
-
----
-
-## Bilerek yapılmış üç seçim
-
-**`HOST=0.0.0.0` sadece konteynerde.** Lokal varsayılan `127.0.0.1` ve öyle
-kalmalı — Windows Firewall'un her yeniden derlemede izin sorması bu yüzden
-bitti. Ama konteynerde loopback'e bağlanmak uygulamayı platformun router'ından
-erişilemez yapar ve **her health check başarısız olur**. Dockerfile bunu
-override ediyor; ikisi de doğru, ikisi de kendi yerinde.
-
-**`SEED_DEMO=false` ve production'da seed'in reddi.** Seed gerçek bir işletme
-için çalışan bir giriş yazıyor (`melly@karecik.com` / `melly1234`). `SeedDemo`
-zaten `APP_ENV=production` görürse hiçbir şey yapmadan çıkıyor; Dockerfile
-ayrıca bayrağı da kapatıyor. Production'a örnek veri sızmasın diye iki kat kilit.
-
-**Migration'lar açılışta.** Ayrı bir migration servisi yok. Tek replikada bu
-doğru ve en ucuz; replika sayısını artırırsan iki konteyner aynı anda migration
-denemesin diye advisory lock gerekir.
+Çok kiracılı izolasyon testleri veritabanı bulamazsa kendini atlar — yani CI
+yeşil yanıp hiçbir şey kanıtlamayabilirdi. Workflow çıktıda `--- SKIP` görürse
+build'i bilerek kırıyor.
 
 ---
 
@@ -155,10 +215,13 @@ denemesin diye advisory lock gerekir.
 
 | Belirti | Sebep |
 |---|---|
-| Health check timeout | `HOST` `0.0.0.0` değil, ya da `PORT` override edilmiş |
-| Açılışta `JWT_SECRET is required in production` | Değişken tanımlı değil |
-| Deploy sonrası görseller kırık | `/data` volume'ü yok; yüklemeler imajda kalmış ve silinmiş |
-| `{isletme}.karecik.com` 404 | Wildcard CNAME yok, ya da `APP_DOMAIN` yanlış |
-| Menü açılıyor ama panel boş | Veritabanı boş — bu normal, kayıt olup ilk menünü oluştur |
-
-Loglar: `railway logs`, veya Railway → servis → **Deployments → View Logs**.
+| Giriş 200 dönüyor ama panele girmiyor | Çerez saklanmadı: `SameSite=None` + `Secure=false`, ya da API host'una ait olmayan bir `COOKIE_DOMAIN` |
+| Her istek 401 | Frontend `credentials:'include'` göndermiyor, ya da API'de `AllowCredentials` kapalı |
+| Her deploy'dan sonra herkes çıkış yapmış | Beklenen davranış: oturumlar bellekte, süreçle birlikte gidiyor |
+| Kullanıcılar rastgele çıkış atıyor (deploy yokken) | API birden fazla replika ile çalışıyor; oturum yalnızca onu açan kopyada var |
+| Şifre sıfırlandı ama saldırganın oturumu duruyor | `cmd/resetpw` belleğe uzanamıyor — API'yi yeniden başlatın |
+| CORS hatası: wildcard + credentials | `CORS_ORIGINS` tam origin'i içermeli; `*` bu modda geçersiz |
+| Ana sayfa dışındaki her adres 404 | `_redirects` dosyası `dist`'e kopyalanmamış (Root directory `frontend` mi?) |
+| Health check timeout | `HOST` `0.0.0.0` değil |
+| Deploy sonrası görseller kırık | `/data` volume'ü yok |
+| `{isletme}.karecik.com` 404 | Cloudflare'de wildcard alan adı yok |

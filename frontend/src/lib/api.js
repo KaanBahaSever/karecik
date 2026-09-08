@@ -1,36 +1,25 @@
 // Karecik API client.
 //
-// In development requests go through the Vite proxy to the Go backend (:8080),
-// so the default base URL is empty (same origin). To target a separate server,
-// put VITE_API_URL=https://api.karecik.com in frontend/.env.
+// BASE URL. Empty means "same origin", which is what the Vite dev proxy and a
+// single-container deployment both want. Split deployments — the SPA on
+// Cloudflare Pages, the API on its own host — set VITE_API_URL at build time:
+//
+//   VITE_API_URL=https://api.karecik.com
+//
+// Vite inlines it into the bundle, so it is a BUILD-time value: changing it
+// means rebuilding, not restarting.
+//
+// AUTHENTICATION. There is no token here any more. The session lives in an
+// HttpOnly cookie the browser attaches by itself, which is precisely why this
+// file can no longer read it: a token in localStorage was readable by any
+// script that reached the page, and that is the class of bug this removes.
+// What the client must do instead is ask for the cookie to be sent —
+// `credentials: 'include'` below — because fetch omits credentials on a
+// cross-origin request unless told otherwise.
 //
 // NOTE: error messages are Turkish on purpose — they are shown to the user.
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
-const TOKEN_KEY = 'karecik_token'
-
-/* --------------------------------------------------------------- token */
-
-export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY)
-  } catch {
-    return null
-  }
-}
-
-export function setToken(token) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* localStorage may be unavailable in private windows */
-  }
-}
-
-export function clearToken() {
-  setToken(null)
-}
 
 /* --------------------------------------------------------------- error */
 
@@ -45,13 +34,9 @@ export class ApiError extends Error {
 
 /* ------------------------------------------------------------ requests */
 
-async function request(path, { method = 'GET', body, auth = true, isForm = false } = {}) {
+async function request(path, { method = 'GET', body, isForm = false } = {}) {
   const headers = {}
 
-  if (auth) {
-    const token = getToken()
-    if (token) headers.Authorization = `Bearer ${token}`
-  }
   if (!isForm && body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
@@ -61,6 +46,11 @@ async function request(path, { method = 'GET', body, auth = true, isForm = false
     response = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
+      // Sent on EVERY request, public ones included. Same-origin requests would
+      // carry the cookie anyway, but a cross-origin one drops it silently
+      // without this — and "silently" is the problem: the request succeeds,
+      // arrives unauthenticated, and comes back 401 with nothing to point at.
+      credentials: 'include',
       body: isForm ? body : body !== undefined ? JSON.stringify(body) : undefined,
     })
   } catch {
@@ -85,8 +75,9 @@ async function request(path, { method = 'GET', body, auth = true, isForm = false
 
   if (!response.ok) {
     const message = data?.error || `Beklenmeyen bir hata oluştu (${response.status}).`
-    // Session expired: drop the token so ProtectedRoute redirects to login.
-    if (response.status === 401) clearToken()
+    // Nothing to clear on a 401 any more: the cookie is HttpOnly, and the server
+    // already expires it when it refuses the session. The auth context notices
+    // the 401 and sends the user to the login screen.
     throw new ApiError(message, response.status, data?.code)
   }
 
@@ -106,13 +97,19 @@ const qs = (params) => {
 
 export const api = {
   /* static catalogues: currencies, themes, fonts, allergens, languages */
-  meta: () => request('/api/meta', { auth: false }),
-  health: () => request('/api/health', { auth: false }),
+  meta: () => request('/api/meta'),
+  health: () => request('/api/health'),
 
   /* authentication */
   register: (payload) =>
-    request('/api/auth/register', { method: 'POST', body: payload, auth: false }),
-  login: (payload) => request('/api/auth/login', { method: 'POST', body: payload, auth: false }),
+    request('/api/auth/register', { method: 'POST', body: payload }),
+  login: (payload) => request('/api/auth/login', { method: 'POST', body: payload }),
+  logout: () => request('/api/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword, newPassword) =>
+    request('/api/auth/change-password', {
+      method: 'POST',
+      body: { current_password: currentPassword, new_password: newPassword },
+    }),
   me: () => request('/api/auth/me'),
 
   /* business (the slim account record — every setting lives on a menu) */
@@ -171,12 +168,10 @@ export const api = {
   // so the business segment is never optional. With no menu slug the backend
   // resolves the only active menu or returns the directory payload.
   publicMenu: (businessSlug, menuSlug, lang) =>
-    request(`/api/public/menu/${encodeURIComponent(businessSlug)}${menuSlug ? `/${encodeURIComponent(menuSlug)}` : ''}${qs({ lang })}`, {
-      auth: false,
-    }),
+    request(`/api/public/menu/${encodeURIComponent(businessSlug)}${menuSlug ? `/${encodeURIComponent(menuSlug)}` : ''}${qs({ lang })}`),
   // Host form: the subdomain identifies the tenant, ?menu= picks the menu.
   publicMenuByHost: (menuSlug, lang) =>
-    request(`/api/public/menu${qs({ menu: menuSlug, lang })}`, { auth: false }),
+    request(`/api/public/menu${qs({ menu: menuSlug, lang })}`),
 }
 
 export default api

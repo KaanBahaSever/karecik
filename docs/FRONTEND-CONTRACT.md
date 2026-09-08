@@ -17,16 +17,22 @@ drag and drop with **@dnd-kit**.
 ## `src/lib/api.js`
 
 ```js
-import api, { ApiError, getToken, setToken, clearToken } from '../lib/api'
+import api, { ApiError } from '../lib/api'
+
+// No token helpers: the session is an HttpOnly cookie the browser attaches by
+// itself. Every request goes out with credentials:'include' so it travels
+// cross-origin too. There is nothing to read, store or clear.
 ```
 
 | Call | Returns |
 |---|---|
 | `api.meta()` | `{ currencies, themes, fonts, allergens, languages, rounding_modes }` |
 | `api.health()` | `{ status, database, version }` |
-| `api.register({ business_name, email, password })` | `{ token, user, business }` |
-| `api.login({ email, password })` | `{ token, user, business }` |
+| `api.register({ business_name, email, password })` | `{ user, business }` + session cookie |
+| `api.login({ email, password })` | `{ user, business }` + session cookie |
 | `api.me()` | `{ user, business }` |
+| `api.logout()` | `{ success }`, cookie cleared |
+| `api.changePassword(current, next)` | `{ success, revoked_sessions }` |
 | `api.getBusiness()` | Business |
 | `api.updateBusiness(payload)` | Business |
 | `api.listCategories()` | `Category[]` |
@@ -188,7 +194,7 @@ Shadows: `shadow-card`, `shadow-panel`. Width: `max-w-content`.
 | `/giris` | `pages/Login.jsx` |
 | `/kayit` | `pages/SignUp.jsx` |
 | `/m/:slug` | `pages/menu/CustomerMenu.jsx` |
-| `/demo` | `CustomerMenu` (`slug="demo-kafe" embedded`) |
+| `/demo` | `CustomerMenu` (`businessSlug={VITE_DEMO_BUSINESS} embedded`) |
 | `/panel` | `pages/dashboard/DashboardLayout.jsx` (Outlet) |
 | `/panel` (index) | `pages/dashboard/MenuEditor.jsx` |
 | `/panel/tasarim` | `pages/dashboard/Design.jsx` |

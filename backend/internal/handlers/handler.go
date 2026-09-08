@@ -17,20 +17,27 @@ import (
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
+	"karecik/backend/internal/session"
 )
 
 // Handler carries the dependencies shared by every HTTP endpoint.
 //
+// Sessions is not in the database: it is a map in this process. It is a field
+// here rather than a package-level variable so that a test can stand up an
+// isolated app with its own sessions, the same way it already gets its own
+// scratch database.
+//
 // NOTE: the error messages returned from these handlers are shown to the end
 // user and are therefore written in Turkish on purpose.
 type Handler struct {
-	DB  *pgxpool.Pool
-	Cfg *config.Config
+	DB       *pgxpool.Pool
+	Cfg      *config.Config
+	Sessions *session.Store
 }
 
 // New builds a Handler.
-func New(db *pgxpool.Pool, cfg *config.Config) *Handler {
-	return &Handler{DB: db, Cfg: cfg}
+func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store) *Handler {
+	return &Handler{DB: db, Cfg: cfg, Sessions: sessions}
 }
 
 // Health reports the service and database status.

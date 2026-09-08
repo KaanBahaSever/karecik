@@ -57,6 +57,13 @@ type User struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// ----------------------------------------------------------------- sessions
+//
+// There is no Session model here any more. A session is not a database record:
+// it lives in the API process's memory as a session.Entry, keyed by the SHA-256
+// of the cookie. Everything in this file maps to a table, and a session no
+// longer does — see internal/session for the store and the trade-off it makes.
+
 // --------------------------------------------------------------- businesses
 
 // Business is the tenant: the account and the address it answers on, nothing

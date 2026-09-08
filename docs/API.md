@@ -14,7 +14,15 @@ Every response is JSON. Errors share one shape:
 Error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
 `CONFLICT`, `INTERNAL_ERROR`, `PAYLOAD_TOO_LARGE`.
 
-Protected endpoints require an `Authorization: Bearer <token>` header.
+Protected endpoints authenticate with the `karecik_session` cookie, which
+`register` and `login` set. It is `HttpOnly`, so no script can read it and no
+client code has to send it — the browser attaches it on its own. A cross-origin
+caller must use `credentials: 'include'`, or the browser will neither store nor
+send it.
+
+The cookie is the SHA-256 key of a session held in the API process's memory, so
+it stops working when the API restarts as well as when it expires. Both arrive
+as `401 UNAUTHORIZED`; there is no separate code for a session lost to a deploy.
 
 ---
 
@@ -80,10 +88,12 @@ Rules: `business_name` 2–100 characters, `email` valid and unique,
 The business record and its `slug` (subdomain) are generated automatically:
 `Kahve Durağı` → `kahve-duragi`. On a collision `-2`, `-3` … is appended.
 
-Response `201`:
+Response `201` — plus a `Set-Cookie: karecik_session=...` header. The body
+carries **no token**: there is nothing for the client to store, and therefore
+nothing for a script on the page to steal.
+
 ```json
 {
-  "token": "eyJhbGciOi...",
   "user": { "id": "uuid", "email": "info@kahve.com", "business_name": "Kahve Durağı" },
   "business": { "...Business object..." }
 }
@@ -94,12 +104,41 @@ Error `409`: the email is already registered.
 ### `POST /api/auth/login`
 
 Request: `{ "email": "...", "password": "..." }`
-Response `200`: the same body as register.
+Response `200`: the same body and the same `Set-Cookie` as register.
 Error `401`: `E-posta veya şifre hatalı.`
 
 ### `GET /api/auth/me` 🔒
 
 Response: `{ "user": {...}, "business": {...} }`
+
+### `POST /api/auth/logout`
+
+Not marked 🔒 on purpose: an expired or already-revoked cookie has to be able
+to clear itself, and demanding a valid session to log out would strand exactly
+the people who most need to.
+
+Drops the session and clears the cookie. Always `200`, even when the cookie
+matched nothing — a logout button that can fail is one people stop trusting.
+
+### `POST /api/auth/change-password` 🔒
+
+Request: `{ "current_password": "...", "new_password": "..." }`
+
+The current password is required even though the caller is signed in: it is
+what separates the account owner from someone who sat down at an unlocked
+laptop. `new_password` must be at least 8 characters and different from the
+current one.
+
+Response `200`: `{ "success": true, "revoked_sessions": 2 }` — every OTHER
+session of the user is destroyed, so a leaked password stops being useful. The
+caller's own session survives, so the dashboard in front of them keeps working.
+
+Error `401`: `Mevcut şifreniz hatalı.`
+
+> Forgotten passwords have no endpoint. Without e-mail there is nothing to
+> prove ownership of an address with, so the reset is a server-side command:
+> `go run ./cmd/resetpw -email owner@example.com`. It cannot sign anyone out —
+> restart the API for that. See [DEPLOY](DEPLOY.md).
 
 ---
 

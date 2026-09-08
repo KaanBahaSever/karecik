@@ -27,21 +27,10 @@ import (
 // against 200) with its own add-on prices as well. That is exactly why products
 // and prices hang off a menu rather than off the business.
 //
-// Because it is a REAL business with a WORKING login, SeedDemo refuses to run
-// in production — see the guard at the top of it.
+// Because it is a REAL business with a WORKING login, this is NEVER run on
+// boot. cmd/seed is the only caller and a human types it.
 
 const (
-	// The fictional sample venue the landing page embeds. Kept deliberately
-	// separate from the real tenant above it: a marketing page should not put a
-	// paying customer's live menu in its shop window, and a sample that gains a
-	// second menu one day must not change what /demo renders.
-	karecikSlug     = "karecik-kafe"
-	karecikName     = "Karecik Kafe"
-	karecikEmail    = "kafe@karecik.com"
-	karecikPassword = "karecik1234"
-	karecikMenuName = "Menü"
-	karecikMenuSlug = "menu"
-
 	// mellySlug is the BUSINESS slug: the subdomain the tenant answers on.
 	mellySlug     = "melly-coffee"
 	mellyName     = "Melly Coffee"
@@ -740,82 +729,6 @@ var mellyMenus = []seedMenu{
 	{name: cihangirMenuName, slug: cihangirMenuSlug, categories: cihangirMenu},
 }
 
-// ------------------------------------------------------ Karecik Kafe, the
-// sample venue behind the landing page.
-//
-// It is FICTIONAL, and that is the point: the marketing page used to embed
-// Melly Coffee, a real customer, which is both odd on a sales page and fragile
-// — the day Melly gained a second menu the iframe stopped showing a menu at all
-// and started showing the tenant's menu directory instead.
-//
-// Two consequences of it being invented rather than real:
-//
-//   - show_yerli_uretim is FALSE. The Ticaret Bakanlığı certification mark
-//     belongs to businesses that actually hold it; printing it under a cafe
-//     that does not exist would be a false claim, not a design choice.
-//   - the logo is Karecik's own /logo.svg, served by the frontend from the same
-//     origin the menu is, so the sample needs no third-party asset.
-//
-// It publishes exactly ONE menu, which is what keeps /demo rendering a menu
-// rather than a picker.
-var karecikDemoMenu = []seedCategory{
-	{
-		name: "Sıcak İçecekler", icon: "☕",
-		products: []seedProduct{
-			{name: "Türk Kahvesi", price: 90, calories: 12,
-				options: models.ProductOptions{{
-					Name: "Porsiyon", Type: models.OptionTypeSingle, Required: true,
-					Items: []models.ProductOptionItem{
-						{Name: "Tek", Price: 0},
-						{Name: "Duble", Price: 40},
-					},
-				}}},
-			{name: "Espresso", price: 85, calories: 5},
-			{name: "Latte", price: 130, calories: 180, options: karecikMilkOptions()},
-			{name: "Cappuccino", price: 130, calories: 150, options: karecikMilkOptions()},
-			{name: "Filtre Kahve", price: 95, calories: 6},
-			{name: "Çay", price: 40, calories: 2},
-		},
-	},
-	{
-		name: "Soğuk İçecekler", icon: "🥤",
-		products: []seedProduct{
-			{name: "Ice Latte", price: 140, calories: 175, options: karecikMilkOptions()},
-			{name: "Limonata", price: 110, calories: 120, desc: "Taze sıkılmış, naneli"},
-			{name: "Soğuk Çay", price: 95, calories: 90},
-		},
-	},
-	{
-		name: "Tatlılar", icon: "🍰",
-		products: []seedProduct{
-			{name: "Cheesecake", price: 160, calories: 420},
-			{name: "Brownie", price: 140, calories: 380, desc: "Sıcak servis edilir"},
-			{name: "Magnolia", price: 120, calories: 310},
-		},
-	},
-	{
-		name: "Atıştırmalıklar", icon: "🥪",
-		products: []seedProduct{
-			{name: "Kaşarlı Tost", price: 130, calories: 430},
-			{name: "Kulüp Sandviç", price: 190, calories: 520, desc: "Patates kızartması ile"},
-		},
-	},
-}
-
-// karecikMilkOptions is the one add-on group the sample menu offers. A fresh
-// copy per product, for the same aliasing reason cloneOptionGroup exists.
-func karecikMilkOptions() models.ProductOptions {
-	return models.ProductOptions{cloneOptionGroup(karecikMilkChoice)}
-}
-
-var karecikMilkChoice = models.ProductOptionGroup{
-	Name: "Süt Tercihi", Type: models.OptionTypeSingle, Required: false,
-	Items: []models.ProductOptionItem{
-		{Name: "Yulaf Sütü", Price: 30},
-		{Name: "Badem Sütü", Price: 30},
-	},
-}
-
 // seedTenant is one whole seeded account: the login, the business, the look
 // every one of its menus is published with, and the menus themselves.
 //
@@ -853,22 +766,6 @@ var seedTenants = []seedTenant{
 		languages:       []string{"tr", "en"},
 		menus:           mellyMenus,
 	},
-	{
-		slug: karecikSlug, name: karecikName, email: karecikEmail, password: karecikPassword,
-		phone: "+90 212 000 00 00", instagram: "karecikapp",
-		wifiSSID: "Karecik Misafir", wifiPass: "karecik2026",
-		logoURL: "/logo.svg", yerliLogoURL: "",
-		// FICTIONAL venue: the certification mark stays off. See the note above.
-		showYerliUretim: false,
-		theme:           "modern-light",
-		primaryColor:    "#1d4ed8", textColor: "#111827",
-		backgroundColor: "#ffffff", splashBgColor: "#0f172a",
-		splashHeadline:  karecikName,
-		languages:       []string{"tr", "en"},
-		menus: []seedMenu{
-			{name: karecikMenuName, slug: karecikMenuSlug, categories: karecikDemoMenu},
-		},
-	},
 }
 
 // --------------------------------------------------------------- seeding
@@ -886,7 +783,7 @@ func seedCalories(value int) *int {
 	return &value
 }
 
-// SeedDemo creates the Melly Coffee account and every menu it publishes.
+// SeedDevData creates the Melly Coffee account and every menu it publishes.
 //
 // isProduction comes from the caller's config: the seed writes a WORKING LOGIN
 // for a real business, so a production database must never receive it. That is
@@ -916,11 +813,7 @@ func seedCalories(value int) *int {
 //
 // Everything runs in ONE transaction, so a failure part-way through leaves the
 // database exactly as it was.
-func SeedDemo(ctx context.Context, pool *pgxpool.Pool, isProduction, refresh bool) error {
-	if isProduction {
-		log.Println("[karecik] seed skipped: APP_ENV=production")
-		return nil
-	}
+func SeedDevData(ctx context.Context, pool *pgxpool.Pool, refresh bool) error {
 
 	// The old sample tenant goes first, whether or not the new one is created.
 	if err := purgeLegacyDemo(ctx, pool); err != nil {

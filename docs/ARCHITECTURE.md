@@ -17,7 +17,7 @@ one business, and every business gets its own subdomain.
                                          ▼
                           ┌──────────────────────────────┐
                           │  Go + Fiber — :8080          │
-                          │  · JWT authentication        │
+                          │  · Cookie session auth       │
                           │  · Subdomain resolution      │
                           │  · CRUD + bulk pricing       │
                           │  · Image uploads             │
@@ -52,13 +52,14 @@ karecik/
 │   ├── cmd/api/main.go         Entry point: config → db → migrations → server
 │   ├── internal/
 │   │   ├── config/             .env parsing and defaults
-│   │   ├── database/           pgxpool connection, migration runner, demo seed
+│   │   ├── database/           pgxpool connection, migration runner, dev fixtures
 │   │   ├── models/             Data structures plus the public menu DTOs
 │   │   ├── repository/         SQL layer (handlers never write SQL)
 │   │   ├── handlers/           HTTP endpoints (one Handler struct, split by file)
-│   │   ├── middleware/         JWT guard, subdomain resolution
+│   │   ├── middleware/         Session guard, subdomain resolution
 │   │   ├── router/             Route registration, CORS, static files
-│   │   └── utils/              JWT, bcrypt, slug, currency, rounding, theme catalogue
+│   │   ├── session/            In-memory session store (no DB, no Redis)
+│   │   └── utils/              Session tokens, bcrypt, slug, currency, themes
 │   ├── migrations/             001_init.sql, 002_brand_color.sql + embed.go
 │   └── uploads/                Uploaded logos and product images
 │
@@ -85,10 +86,10 @@ karecik/
 
 **One user = one business.** `businesses.user_id` carries a `UNIQUE` constraint.
 
-The tenant scope **always** comes from the JWT:
+The tenant scope **always** comes from the session, never from the request:
 
 ```go
-businessID := middleware.BusinessID(c)   // the "bid" claim of the token
+businessID := middleware.BusinessID(c)   // recorded when the session was issued
 ```
 
 The client never sends a `business_id`. Every repository query includes
@@ -241,10 +242,32 @@ The preview is therefore not a mock-up — it is the real thing.
 ## Authentication
 
 - Passwords are hashed with `bcrypt` (default cost).
-- `POST /api/auth/register|login` → an HS256-signed JWT valid for 30 days.
-- The token lives in `localStorage` (`karecik_token`) and is sent as
-  `Authorization: Bearer`.
-- On any `401` the client clears the token and falls back to `/giris`.
+- `POST /api/auth/register|login` → a 256-bit random token from `crypto/rand`,
+  returned as an `HttpOnly` cookie. The response body carries no credential.
+- The server keeps only `sha256(token)`, as the key of a `session.Entry` in the
+  API process's own memory. Nothing readable back into a working cookie is
+  stored anywhere — not in the database, not on disk.
+- On any `401` the client falls back to `/giris`. It has nothing to clear:
+  the cookie is invisible to JavaScript, and the server clears it itself.
+
+Three properties follow from where the sessions live, and they are the reason
+the design is written down rather than assumed:
+
+| | |
+|---|---|
+| Revocation is immediate | Every request resolves the session, so removing an entry ends it at once. That is what makes logout and "revoke my other sessions" real rather than decorative — a signed JWT could not be withdrawn before it expired. |
+| A restart signs everyone out | The store is not persisted. Accepted deliberately in exchange for taking the database off the authentication path. |
+| The API must run as ONE instance | A second replica has its own map and does not recognise the first one's sessions. Scaling out requires moving sessions to shared storage first. |
+
+`session.Entry` carries the **business id** as well as the user id. Without it
+the middleware would have to ask the database which business the user owns on
+every authenticated request — reinstating exactly the round trip the in-memory
+store exists to remove. It is safe to cache because a business id never changes
+and a user owns exactly one.
+
+A `sessions` table still exists in the schema from the earlier design. Nothing
+reads or writes it; migration `008` explains why it was left rather than
+dropped.
 - The slug is generated at sign-up (`Kahve Durağı` → `kahve-duragi`); on a
   collision `-2`, `-3` … is appended. Reserved names (`www`, `api`, `panel`,
   `admin`, …) are never handed out.

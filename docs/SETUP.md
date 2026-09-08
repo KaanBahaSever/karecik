@@ -177,13 +177,14 @@ one you chose during the PostgreSQL installation:
 
 ```env
 DATABASE_URL=postgres://postgres:postgres123@localhost:5432/karecik?sslmode=disable
-JWT_SECRET=change-me-to-a-long-random-secret-2026
 PORT=8080
 APP_DOMAIN=karecik.com
 DEV_DOMAIN=localhost
 CORS_ORIGINS=http://localhost:5173
 UPLOAD_DIR=./uploads
-SEED_DEMO=true
+COOKIE_DOMAIN=
+COOKIE_SAMESITE=Lax
+COOKIE_SECURE=false
 ```
 
 **Anatomy of the connection string** (`DATABASE_URL`):
@@ -217,7 +218,6 @@ That downloads:
 |---|---|
 | `github.com/gofiber/fiber/v2` | HTTP framework (router, middleware) |
 | `github.com/jackc/pgx/v5` | PostgreSQL driver and connection pool |
-| `github.com/golang-jwt/jwt/v5` | JWT issuing and verification |
 | `golang.org/x/crypto` | Password hashing with bcrypt |
 | `github.com/joho/godotenv` | Reading the `.env` file |
 | `github.com/google/uuid` | UUID generation |
@@ -238,8 +238,8 @@ Expected output:
 [karecik] connected to the database (localhost:5432/karecik)
 [karecik] migration applied: 001_init.sql
 [karecik] migration applied: 002_brand_color.sql
-[karecik] demo menu created -> demo@karecik.com / demo1234 (slug: demo-kafe)
 [karecik] server listening   -> http://localhost:8080
+[karecik] sessions           -> in memory, single instance only
 ```
 
 Test it: open http://localhost:8080/api/health →
@@ -292,13 +292,13 @@ are three ways to reach the same thing:
 ### Option A — path based (simplest, needs no configuration)
 
 ```
-http://localhost:5173/m/demo-kafe
+http://localhost:5173/m/melly-coffee/suadiye
 ```
 
 ### Option B — a real subdomain (Chrome, Edge and Firefox support `*.localhost`)
 
 ```
-http://demo-kafe.localhost:5173
+http://melly-coffee.localhost:5173/suadiye
 ```
 
 Chrome and Edge resolve `*.localhost` subdomains to `127.0.0.1` automatically,
@@ -311,27 +311,39 @@ Windows: open Notepad **as administrator** → open
 
 ```
 127.0.0.1 karecik.local
-127.0.0.1 demo-kafe.karecik.local
+127.0.0.1 melly-coffee.karecik.local
 ```
 
 macOS: add the same lines through `sudo nano /etc/hosts`.
 
 Then put `VITE_ROOT_DOMAIN=karecik.local` in `frontend/.env` and
 `DEV_DOMAIN=karecik.local` in `backend/.env`, and open
-`http://demo-kafe.karecik.local:5173`.
+`http://melly-coffee.karecik.local:5173/suadiye`.
 
 ---
 
-## 8. Demo account
+## 8. Sample data and passwords
 
-The seeder creates a sample café menu (this is what the iPhone iframe on the
-landing page shows):
+Nothing is seeded on boot, and there is no built-in demo login. A misconfigured
+environment variable used to be enough to put a working sample account into a
+real deployment, so both are explicit commands now:
 
+```bash
+cd backend
+go run ./cmd/seed          # development fixtures (Melly Coffee, two menus)
+go run ./cmd/seed -refresh # rewrite the seeded menus from source (destructive)
 ```
-Email: demo@karecik.com
-Password: demo1234
-Menu: http://localhost:5173/m/demo-kafe
+
+`cmd/seed` refuses to run when `APP_ENV=production`. It creates the tenant but
+prints no password; set one for the account it made with:
+
+```bash
+go run ./cmd/resetpw -email owner@example.com
 ```
+
+The iPhone frame on the landing page is driven by `VITE_DEMO_BUSINESS` in
+`frontend/.env`. Leave it unset and the frame shows a static placeholder
+instead of pointing at a tenant that may not exist.
 
 ---
 
@@ -370,7 +382,16 @@ go build -o karecik.exe ./cmd/api
 - Obtain a wildcard SSL certificate (Let's Encrypt via the DNS-01 challenge for
   `*.karecik.com`).
 - `.env`: `APP_DOMAIN=karecik.com`, `SERVE_STATIC=true`,
-  `STATIC_DIR=../frontend/dist`, `sslmode=require`, a strong `JWT_SECRET`,
-  `SEED_DEMO=false`.
+  `STATIC_DIR=../frontend/dist`, `sslmode=require`, `APP_ENV=production`,
+  `COOKIE_SECURE=true`.
 - With `SERVE_STATIC=true` the backend also serves the built frontend, so a
-  single binary is enough.
+  single binary is enough. Both halves are then on one origin, so
+  `COOKIE_DOMAIN` can stay empty and `COOKIE_SAMESITE=Lax` is right.
+- Nothing is seeded automatically. Run `go run ./cmd/seed` by hand if you want
+  development fixtures; it refuses to run when `APP_ENV=production`.
+- Run **one** instance of the API. Sessions live in its memory, so a second
+  process does not recognise the first one's logins.
+
+> The split deployment (Cloudflare Pages + Railway) is a different shape and
+> has its own document: [DEPLOY](DEPLOY.md). The cookie settings above are for
+> the single-binary case only.

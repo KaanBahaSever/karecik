@@ -14,6 +14,8 @@ import DashboardLayout from './pages/dashboard/DashboardLayout.jsx'
 import MenuEditor from './pages/dashboard/MenuEditor.jsx'
 import MenuSettings from './pages/dashboard/MenuSettings.jsx'
 import QrHub from './pages/dashboard/QrHub.jsx'
+import Account from './pages/dashboard/Account.jsx'
+import { DEMO_BUSINESS_SLUG } from './lib/env'
 
 /** Guards routes that require an active session. */
 function ProtectedRoute({ children }) {
@@ -62,16 +64,17 @@ export default function App() {
 
       {/* The sample venue inside the iPhone frame on the landing page.
 
-          It points at the FICTIONAL karecik-kafe, not at a real customer. It
-          used to point at melly-coffee, and the day that tenant gained its
-          second menu the iframe quietly stopped showing a menu at all: with no
-          menu slug and two menus to choose from, the backend answers
-          menu_resolved:false and the page renders the menu DIRECTORY. A picker
-          in the shop window, on a page selling menus.
+          The tenant is NOT hardcoded any more. Automatic seeding is gone, so
+          there is no venue this route can assume exists — a hardcoded slug would
+          render "menu not found" inside the marketing page's phone on any
+          deployment that was never seeded, which is every real one.
 
-          karecik-kafe publishes exactly one menu, so the backend resolves it on
-          its own and the frame always shows an actual menu. */}
-      <Route path="/demo" element={<CustomerMenu businessSlug="karecik-kafe" embedded />} />
+          VITE_DEMO_BUSINESS names it instead, and Landing.jsx simply omits the
+          frame when it is unset. */}
+      <Route
+        path="/demo"
+        element={<CustomerMenu businessSlug={DEMO_BUSINESS_SLUG} embedded />}
+      />
 
       <Route
         path="/panel"
@@ -89,6 +92,7 @@ export default function App() {
         <Route index element={<MenuEditor />} />
         <Route path="ayarlar" element={<MenuSettings />} />
         <Route path="qr" element={<QrHub />} />
+        <Route path="hesap" element={<Account />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

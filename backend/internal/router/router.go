@@ -34,9 +34,16 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	// itself, so defining AllowOrigins as well would just make Fiber log
 	// "Both 'AllowOrigins' and 'AllowOriginsFunc' have been defined" on every
 	// start-up. Fiber falls back to "*" only when neither of the two is set.
+	// AllowCredentials is what lets the session cookie cross an origin at all:
+	// without it the browser refuses to SEND the cookie on a cross-origin fetch
+	// and refuses to STORE what comes back, however correct the Set-Cookie is.
+	// It also rules out the "*" wildcard — the spec forbids the pair — which is
+	// exactly why the origin is decided by a function that echoes one specific
+	// allowed origin back.
 	app.Use(cors.New(cors.Config{
 		AllowOriginsFunc: func(origin string) bool { return isAllowedOrigin(origin, cfg) },
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
+		AllowCredentials: true,
+		AllowHeaders:     "Origin, Content-Type, Accept, X-Requested-With",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		MaxAge:           3600,
 	}))
@@ -55,6 +62,11 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
 
+	// Logout is public on purpose: an expired or already-revoked cookie must
+	// still be able to clear itself, and requiring a valid session to log out
+	// would strand exactly the people who most need to.
+	app.Post("/api/auth/logout", h.Logout)
+
 	// Customer menu — no token required. The address is
 	// {business-slug}.karecik.com/{menu-slug}: the host form reads the tenant
 	// from the subdomain and the menu from an optional "?menu=", the path form
@@ -65,9 +77,10 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Get("/api/public/menu/:businessSlug/:menuSlug", h.PublicMenuByPath)
 
 	// --------------------------------------------------- protected endpoints
-	api := app.Group("/api", middleware.Protected(cfg))
+	api := app.Group("/api", middleware.Protected(h.Sessions, cfg))
 
 	api.Get("/auth/me", h.Me)
+	api.Post("/auth/change-password", h.ChangePassword)
 
 	// The account owns exactly two fields — its name and the subdomain slug.
 	// Every setting a customer sees lives on a menu and is written through

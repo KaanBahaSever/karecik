@@ -25,7 +25,7 @@
 - **Branding** — 6 themes, 8 typefaces, accent colour, solid or image background with an overlay, and a configurable splash screen with exit animations.
 - **Live preview** — a true 390×844 mobile viewport in the dashboard, with on-demand splash replay.
 - **QR codes** — PNG download, printing and address copying.
-- **Customer menu** — served from `branch.karecik.com` or `/b/:branch/:menu`, with search, language switching, Wi-Fi credentials and automatic legal notices.
+- **Customer menu** — served from `business.karecik.com/menu-slug` or `/m/:business/:menu`, with search, language switching, Wi-Fi credentials and automatic legal notices.
 
 > The codebase is English; the shipped product is Turkish, with menus publishable in English, German, Russian, Arabic and French.
 
@@ -33,13 +33,13 @@
 
 | Layer | Stack |
 |---|---|
-| API | Go 1.22 · Fiber v2 · pgx v5 · JWT |
+| API | Go 1.22 · Fiber v2 · pgx v5 · in-memory sessions, HttpOnly cookie |
 | Database | PostgreSQL 13+ · embedded SQL migrations, applied on boot |
 | Frontend | React 18 · Vite 5 · Tailwind 3 · @dnd-kit |
 | Tenancy | Wildcard subdomain resolution with a path-based fallback |
 
 ```text
-backend/    cmd/api · internal/{config,database,models,repository,handlers,middleware,router,utils}
+backend/    cmd/{api,seed,resetpw} · internal/{config,database,models,repository,handlers,middleware,router,session,utils}
 frontend/   src/{lib,themes,locales,components,pages}
 docs/       SETUP · API · ARCHITECTURE · FRONTEND-CONTRACT
 ```
@@ -65,21 +65,32 @@ npm run dev
 ```
 
 On Windows, `start.bat` does all of the above and `stop.bat` shuts it down.
-Demo account: `demo@karecik.com` / `demo1234` → [/m/demo-kafe](http://localhost:5173/m/demo-kafe)
+
+Nothing is seeded on boot. Sample data and passwords are explicit commands:
+
+```bash
+cd backend
+go run ./cmd/seed                              # development fixtures
+go run ./cmd/resetpw -email owner@example.com  # set a password without e-mail
+```
+
+Sessions live in the API process's memory, so a restart signs everyone out and
+the API has to run as a single instance — see [DEPLOY](docs/DEPLOY.md).
 
 **Environment** (`backend/.env`)
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `postgres://postgres@localhost:5432/karecik?sslmode=disable` | Connection string |
-| `JWT_SECRET` | — | Token signing key; required in production |
+| `COOKIE_DOMAIN` | — | `.karecik.com` in production; empty locally |
+| `COOKIE_SAMESITE` | `Lax` | `Lax`, `None` or `Strict`; `None` requires `COOKIE_SECURE` |
+| `COOKIE_SECURE` | on in production | HTTPS-only session cookie |
 | `PORT` | `8080` | API listen port |
 | `APP_DOMAIN` | `karecik.com` | Production root domain for menu subdomains |
 | `DEV_DOMAIN` | `localhost` | Local root domain for subdomain testing |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |
 | `UPLOAD_DIR` | `./uploads` | Where uploaded images are written |
 | `MAX_UPLOAD_BYTES` | `5242880` | Largest accepted upload |
-| `SEED_DEMO` | `true` | Create the demo café on first start |
 | `SERVE_STATIC` | `false` | Serve `frontend/dist` from the API |
 | `APP_ENV` | `development` | `development` or `production` |
 

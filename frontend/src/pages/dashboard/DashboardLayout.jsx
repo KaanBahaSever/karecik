@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { ExternalLink, LayoutList, LogOut, Menu, QrCode, Settings, X } from 'lucide-react'
+import {
+  ExternalLink,
+  LayoutList,
+  LogOut,
+  Menu,
+  QrCode,
+  Settings,
+  UserRound,
+  X,
+} from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
 import { useActiveMenu } from '../../lib/menuContext.jsx'
@@ -14,6 +23,7 @@ const NAV_ITEMS = [
   { to: '/panel', label: 'Menü Yönetimi', icon: LayoutList, end: true },
   { to: '/panel/ayarlar', label: 'Görünüm ve Ayarlar', icon: Settings },
   { to: '/panel/qr', label: 'QR Kodlar', icon: QrCode },
+  { to: '/panel/hesap', label: 'Hesap', icon: UserRound },
 ]
 
 /** NavLink class name — the active item is highlighted in the brand colour. */
@@ -75,8 +85,13 @@ export default function DashboardLayout() {
     window.open(publicMenuUrl, '_blank', 'noopener,noreferrer')
   }
 
-  function signOut() {
-    logout()
+  /* Logging out is a server round trip now — it deletes the session row and
+     clears the HttpOnly cookie, neither of which the browser can do alone. The
+     navigation waits for it so the login screen is never reached while the old
+     session is still live. `logout` swallows its own network errors and clears
+     the local state regardless, so this cannot strand the user on the panel. */
+  async function signOut() {
+    await logout()
     navigate('/')
   }
 

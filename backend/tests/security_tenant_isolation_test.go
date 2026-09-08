@@ -34,6 +34,7 @@ import (
 	"karecik/backend/internal/database"
 	"karecik/backend/internal/handlers"
 	"karecik/backend/internal/router"
+	"karecik/backend/internal/session"
 	"karecik/backend/internal/utils"
 )
 
@@ -148,11 +149,17 @@ func newHarness(t *testing.T) *harness {
 
 	// The configuration is built by hand rather than through config.Load():
 	// that helper walks up to backend/.env, which points at the LIVE karecik
-	// database and carries the real JWT secret. Neither belongs in a test.
-	// SeedDemo is false — the fixtures below are the only rows that exist.
+	// database. That does not belong in a test.
+	//
+	// The cookie is deliberately NOT Secure here: app.Test speaks plain HTTP, so
+	// a Secure cookie would be set by the server and then dropped by the client,
+	// and every authenticated assertion would fail for a reason that has nothing
+	// to do with tenant isolation.
 	cfg := &config.Config{
 		DatabaseURL:    "",
-		JWTSecret:      "karecik-tenant-isolation-test-secret",
+		CookieDomain:   "",
+		CookieSameSite: "Lax",
+		CookieSecure:   false,
 		Host:           "127.0.0.1",
 		Port:           "0",
 		AppDomain:      "karecik.com",
@@ -160,7 +167,6 @@ func newHarness(t *testing.T) *harness {
 		CORSOrigins:    []string{"http://localhost:5173"},
 		UploadDir:      t.TempDir(),
 		MaxUploadBytes: 5 * 1024 * 1024,
-		SeedDemo:       false,
 		ServeStatic:    false,
 		StaticDir:      "",
 		Env:            "development",
@@ -181,7 +187,17 @@ func newHarness(t *testing.T) *harness {
 			return utils.Internal(c, err)
 		},
 	})
-	router.Setup(app, handlers.New(scratchPool, cfg), cfg)
+	// Sessions are in memory now, so each harness gets its own store the same
+	// way it gets its own scratch database — two suites running in parallel
+	// must not be able to see each other's logins.
+	//
+	// No janitor: nothing in this suite outlives its expiry, and a background
+	// goroutine sweeping a store the test is asserting against would only add
+	// timing to a suite that has none.
+	sessions := session.New()
+	t.Cleanup(sessions.Stop)
+
+	router.Setup(app, handlers.New(scratchPool, cfg, sessions), cfg)
 
 	return &harness{t: t, app: app, dbName: dbName}
 }
@@ -261,7 +277,7 @@ func dropScratchDatabase(t *testing.T, admin *pgxpool.Pool, name string) {
 // do performs one request against the app under test and returns the response
 // together with its already-drained body, because every assertion here wants
 // both the status and the payload.
-func (h *harness) do(method, path, token string, body any) (*http.Response, []byte) {
+func (h *harness) do(method, path, session string, body any) (*http.Response, []byte) {
 	h.t.Helper()
 
 	var reader io.Reader
@@ -277,8 +293,11 @@ func (h *harness) do(method, path, token string, body any) (*http.Response, []by
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	// The session is a cookie now, not a bearer header. Sending it the way a
+	// browser would is the point: it exercises the same middleware path a real
+	// request takes, including the cookie name.
+	if session != "" {
+		req.AddCookie(&http.Cookie{Name: utils.SessionCookieName, Value: session})
 	}
 
 	resp, err := h.app.Test(req, requestTimeoutMS)
@@ -304,7 +323,6 @@ func decodeInto(t *testing.T, what string, payload []byte, target any) {
 // ------------------------------------------------------------- payloads
 
 type authPayload struct {
-	Token    string `json:"token"`
 	Business struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
@@ -328,10 +346,10 @@ type productPayload struct {
 	Price      float64 `json:"price"`
 }
 
-// tenant is one registered account and the token that speaks for it.
+// tenant is one registered account and the session cookie that speaks for it.
 type tenant struct {
 	label      string
-	token      string
+	session    string
 	businessID string
 }
 
@@ -363,17 +381,23 @@ func (h *harness) register(label, businessName, email string) *tenant {
 
 	var auth authPayload
 	decodeInto(h.t, "fixture register "+label, payload, &auth)
-	if auth.Token == "" || auth.Business.ID == "" {
-		h.t.Fatalf("fixture register %s: the response carried no token or business id: %s",
-			label, payload)
+	if auth.Business.ID == "" {
+		h.t.Fatalf("fixture register %s: the response carried no business id: %s", label, payload)
 	}
-	return &tenant{label: label, token: auth.Token, businessID: auth.Business.ID}
+
+	// Sign-up must hand back a session cookie; the body no longer carries a
+	// token, so a missing cookie means nothing downstream could authenticate.
+	session := sessionCookie(resp)
+	if session == "" {
+		h.t.Fatalf("fixture register %s: no %s cookie was set", label, utils.SessionCookieName)
+	}
+	return &tenant{label: label, session: session, businessID: auth.Business.ID}
 }
 
 func (h *harness) createMenu(owner *tenant, name string) menuPayload {
 	h.t.Helper()
 
-	resp, payload := h.do(http.MethodPost, "/api/menus", owner.token, map[string]any{
+	resp, payload := h.do(http.MethodPost, "/api/menus", owner.session, map[string]any{
 		"name": name,
 	})
 	h.requireSuccess(fmt.Sprintf("create menu %q for %s", name, owner.label), resp, payload)
@@ -389,7 +413,7 @@ func (h *harness) createMenu(owner *tenant, name string) menuPayload {
 func (h *harness) createCategory(owner *tenant, menuID, name string) categoryPayload {
 	h.t.Helper()
 
-	resp, payload := h.do(http.MethodPost, "/api/categories", owner.token, map[string]any{
+	resp, payload := h.do(http.MethodPost, "/api/categories", owner.session, map[string]any{
 		"menu_id":      menuID,
 		"translations": map[string]any{"tr": map[string]any{"name": name}},
 	})
@@ -406,7 +430,7 @@ func (h *harness) createCategory(owner *tenant, menuID, name string) categoryPay
 func (h *harness) createProduct(owner *tenant, categoryID, name string, price float64) productPayload {
 	h.t.Helper()
 
-	resp, payload := h.do(http.MethodPost, "/api/products", owner.token, map[string]any{
+	resp, payload := h.do(http.MethodPost, "/api/products", owner.session, map[string]any{
 		"category_id":  categoryID,
 		"translations": map[string]any{"tr": map[string]any{"name": name}},
 		"price":        price,
@@ -428,7 +452,7 @@ func (h *harness) createProduct(owner *tenant, categoryID, name string, price fl
 
 func (h *harness) readMenuAsOwner(t *testing.T, what string, owner *tenant, menuID string) menuPayload {
 	t.Helper()
-	resp, payload := h.do(http.MethodGet, "/api/menus/"+menuID, owner.token, nil)
+	resp, payload := h.do(http.MethodGet, "/api/menus/"+menuID, owner.session, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s: %s can no longer read its own menu %s (got %d: %s)",
 			what, owner.label, menuID, resp.StatusCode, payload)
@@ -440,7 +464,7 @@ func (h *harness) readMenuAsOwner(t *testing.T, what string, owner *tenant, menu
 
 func (h *harness) listCategoriesAsOwner(t *testing.T, what string, owner *tenant, menuID string) []categoryPayload {
 	t.Helper()
-	resp, payload := h.do(http.MethodGet, "/api/categories?menu_id="+menuID, owner.token, nil)
+	resp, payload := h.do(http.MethodGet, "/api/categories?menu_id="+menuID, owner.session, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s: listing %s's own categories failed (got %d: %s)",
 			what, owner.label, resp.StatusCode, payload)
@@ -452,7 +476,7 @@ func (h *harness) listCategoriesAsOwner(t *testing.T, what string, owner *tenant
 
 func (h *harness) listProductsAsOwner(t *testing.T, what string, owner *tenant, categoryID string) []productPayload {
 	t.Helper()
-	resp, payload := h.do(http.MethodGet, "/api/products?category_id="+categoryID, owner.token, nil)
+	resp, payload := h.do(http.MethodGet, "/api/products?category_id="+categoryID, owner.session, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s: listing %s's own products failed (got %d: %s)",
 			what, owner.label, resp.StatusCode, payload)
@@ -544,7 +568,7 @@ func TestTenantIsolation(t *testing.T) {
 	}
 
 	t.Run("1_read_menu", func(t *testing.T) {
-		resp, payload := h.do(http.MethodGet, "/api/menus/"+menuA.ID, tenantB.token, nil)
+		resp, payload := h.do(http.MethodGet, "/api/menus/"+menuA.ID, tenantB.session, nil)
 		assertDenied(t, "B reading A's menu", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
 
@@ -554,7 +578,7 @@ func TestTenantIsolation(t *testing.T) {
 	})
 
 	t.Run("2_update_menu", func(t *testing.T) {
-		resp, payload := h.do(http.MethodPut, "/api/menus/"+menuA.ID, tenantB.token,
+		resp, payload := h.do(http.MethodPut, "/api/menus/"+menuA.ID, tenantB.session,
 			map[string]any{"name": "Hacked"})
 		assertDenied(t, "B renaming A's menu", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
@@ -568,7 +592,7 @@ func TestTenantIsolation(t *testing.T) {
 	})
 
 	t.Run("3_delete_product", func(t *testing.T) {
-		resp, payload := h.do(http.MethodDelete, "/api/products/"+productA.ID, tenantB.token, nil)
+		resp, payload := h.do(http.MethodDelete, "/api/products/"+productA.ID, tenantB.session, nil)
 		assertDenied(t, "B deleting A's product", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
 
@@ -584,7 +608,7 @@ func TestTenantIsolation(t *testing.T) {
 		before := h.listProductsAsOwner(t, "B adding a product to A's category",
 			tenantA, categoryA.ID)
 
-		resp, payload := h.do(http.MethodPost, "/api/products", tenantB.token, map[string]any{
+		resp, payload := h.do(http.MethodPost, "/api/products", tenantB.session, map[string]any{
 			"category_id":  categoryA.ID,
 			"translations": map[string]any{"tr": map[string]any{"name": "B'nin ürünü"}},
 			"price":        99,
@@ -602,7 +626,7 @@ func TestTenantIsolation(t *testing.T) {
 	})
 
 	t.Run("5_steal_category_by_reparenting", func(t *testing.T) {
-		resp, payload := h.do(http.MethodPut, "/api/categories/"+categoryA.ID, tenantB.token,
+		resp, payload := h.do(http.MethodPut, "/api/categories/"+categoryA.ID, tenantB.session,
 			map[string]any{"menu_id": menuB.ID})
 		assertDenied(t, "B re-parenting A's category into its own menu", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
@@ -622,7 +646,7 @@ func TestTenantIsolation(t *testing.T) {
 
 	t.Run("6_list_categories_of_foreign_menu", func(t *testing.T) {
 		resp, payload := h.do(http.MethodGet, "/api/categories?menu_id="+menuA.ID,
-			tenantB.token, nil)
+			tenantB.session, nil)
 		assertDenied(t, "B listing the categories of A's menu", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
 
@@ -635,7 +659,7 @@ func TestTenantIsolation(t *testing.T) {
 	})
 
 	t.Run("7_delete_menu", func(t *testing.T) {
-		resp, payload := h.do(http.MethodDelete, "/api/menus/"+menuA.ID, tenantB.token, nil)
+		resp, payload := h.do(http.MethodDelete, "/api/menus/"+menuA.ID, tenantB.session, nil)
 		assertDenied(t, "B deleting A's menu", resp, payload,
 			http.StatusForbidden, http.StatusNotFound)
 
@@ -649,7 +673,7 @@ func TestTenantIsolation(t *testing.T) {
 	})
 
 	t.Run("8_bulk_price_on_foreign_menu", func(t *testing.T) {
-		resp, payload := h.do(http.MethodPost, "/api/products/bulk-price", tenantB.token,
+		resp, payload := h.do(http.MethodPost, "/api/products/bulk-price", tenantB.session,
 			map[string]any{
 				"menu_id":    menuA.ID,
 				"apply":      true,
@@ -673,4 +697,16 @@ func TestTenantIsolation(t *testing.T) {
 				product.Price, fixturePrice)
 		}
 	})
+}
+
+// sessionCookie pulls the session value out of a response's Set-Cookie headers.
+// It returns "" when the header is absent, which the caller treats as a fixture
+// failure rather than an isolation failure.
+func sessionCookie(resp *http.Response) string {
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == utils.SessionCookieName && cookie.Value != "" {
+			return cookie.Value
+		}
+	}
+	return ""
 }

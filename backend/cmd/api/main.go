@@ -23,6 +23,7 @@ import (
 	"karecik/backend/internal/database"
 	"karecik/backend/internal/handlers"
 	"karecik/backend/internal/router"
+	"karecik/backend/internal/session"
 	"karecik/backend/internal/utils"
 )
 
@@ -45,14 +46,28 @@ func main() {
 		log.Fatalf("[karecik] migration error: %v", err)
 	}
 
-	// The seed writes a working login for a REAL business, so it is handed the
-	// production flag and refuses to run when APP_ENV=production — SEED_DEMO
-	// alone is not enough to authorise it.
-	if cfg.SeedDemo {
-		if err := database.SeedDemo(ctx, pool, cfg.IsProduction(), cfg.SeedRefresh); err != nil {
-			log.Printf("[karecik] WARNING: could not create the seed data: %v", err)
-		}
-	}
+	// Nothing is seeded on boot any more.
+	//
+	// It used to create a working login from an environment flag, which meant a
+	// single mis-set variable could put sample accounts into a real deployment.
+	// Sample data is now an explicit, human-run command instead:
+	//
+	//	go run ./cmd/seed          (development fixtures)
+	//	go run ./cmd/resetpw       (set a password without e-mail)
+
+	// --- sessions
+	//
+	// Sessions live in this process, not in the database. Starting the store
+	// here — rather than inside the handlers — is what makes the lifetime
+	// obvious: it is created with the server and dies with it, so every browser
+	// signed in before this line ran is signed out now.
+	//
+	// The janitor is the only thing keeping the map from growing for the life
+	// of the process: an expired entry is refused by the lookup, but refusing
+	// one does not free it.
+	sessions := session.New()
+	sessions.StartJanitor(session.DefaultJanitorInterval)
+	defer sessions.Stop()
 
 	// --- upload directory
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
@@ -75,7 +90,7 @@ func main() {
 		},
 	})
 
-	router.Setup(app, handlers.New(pool, cfg), cfg)
+	router.Setup(app, handlers.New(pool, cfg, sessions), cfg)
 
 	// --- listen for shutdown signals (Ctrl+C)
 	go func() {
@@ -102,6 +117,11 @@ func main() {
 	addr := net.JoinHostPort(cfg.Host, cfg.Port)
 	log.Printf("[karecik] server listening   -> http://localhost:%s (bound to %s)", cfg.Port, cfg.Host)
 	log.Printf("[karecik] health check       -> http://localhost:%s/api/health", cfg.Port)
+	// Said out loud on every boot because the consequence is user-visible and
+	// easy to mistake for a bug: everyone who was signed in a moment ago is not
+	// any more, and will not be after the next deploy either.
+	log.Printf("[karecik] sessions           -> in memory, single instance only "+
+		"(a restart signs everyone out; janitor every %s)", session.DefaultJanitorInterval)
 	if !cfg.IsProduction() {
 		log.Printf("[karecik] seeded menu        -> http://localhost:%s/api/public/menu/melly-coffee/suadiye", cfg.Port)
 	}

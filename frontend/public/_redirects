@@ -1,0 +1,11 @@
+# Cloudflare Pages — SPA fallback.
+#
+# The app is client-routed: /panel/ayarlar, /m/melly-coffee/suadiye and every
+# customer menu address exist only in React Router, not as files on disk. Without
+# this rule Pages looks for a matching file, finds none, and serves its own 404
+# for every URL except "/" — which means every QR code and every deep link is
+# broken while the site itself looks fine.
+#
+# 200 rather than 301/302: the browser keeps the address it asked for and React
+# Router reads it. A redirect would rewrite the URL to "/" and lose the route.
+/*    /index.html   200

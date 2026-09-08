@@ -12,7 +12,12 @@ import (
 // Config holds every setting read from the .env file and the environment.
 type Config struct {
 	DatabaseURL    string
-	JWTSecret      string
+	// Session cookie. There is no signing key any more: a session is a row in
+	// the database, not a signed blob the client carries.
+	CookieDomain   string // ".karecik.com" so every subdomain sees it; "" locally
+	CookieSameSite string // "Lax" | "None" | "Strict"
+	CookieSecure   bool   // HTTPS only; SameSite=None REQUIRES it
+
 	Host           string // interface the API binds to
 	Port           string
 	AppDomain      string // production root domain, e.g. karecik.com
@@ -20,8 +25,6 @@ type Config struct {
 	CORSOrigins    []string
 	UploadDir      string
 	MaxUploadBytes int64
-	SeedDemo       bool
-	SeedRefresh    bool // rewrite the seeded menus even if they already exist
 	ServeStatic    bool
 	StaticDir      string
 	Env            string
@@ -41,7 +44,9 @@ func Load() *Config {
 
 	cfg := &Config{
 		DatabaseURL:    env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/karecik?sslmode=disable"),
-		JWTSecret:      env("JWT_SECRET", ""),
+		CookieDomain:   env("COOKIE_DOMAIN", ""),
+		CookieSameSite: env("COOKIE_SAMESITE", "Lax"),
+
 		Host:           env("HOST", "127.0.0.1"),
 		Port:           env("PORT", "8080"),
 		AppDomain:      env("APP_DOMAIN", "karecik.com"),
@@ -49,19 +54,35 @@ func Load() *Config {
 		CORSOrigins:    splitAndTrim(env("CORS_ORIGINS", "http://localhost:5173")),
 		UploadDir:      env("UPLOAD_DIR", "./uploads"),
 		MaxUploadBytes: envInt64("MAX_UPLOAD_BYTES", 5*1024*1024),
-		SeedDemo:       envBool("SEED_DEMO", true),
-		SeedRefresh:    envBool("SEED_REFRESH", false),
 		ServeStatic:    envBool("SERVE_STATIC", false),
 		StaticDir:      env("STATIC_DIR", "../frontend/dist"),
 		Env:            env("APP_ENV", "development"),
 	}
 
-	if cfg.JWTSecret == "" {
+	// Secure defaults to "on in production", which is where the cookie travels
+	// over the public internet. It stays configurable because a developer may
+	// run the API behind a local TLS proxy, and because SameSite=None is
+	// meaningless without it.
+	cfg.CookieSecure = envBool("COOKIE_SECURE", cfg.Env == "production")
+
+	switch cfg.CookieSameSite {
+	case "Lax", "None", "Strict":
+	default:
+		log.Printf("[karecik] WARNING: COOKIE_SAMESITE=%q is not one of Lax/None/Strict, using Lax",
+			cfg.CookieSameSite)
+		cfg.CookieSameSite = "Lax"
+	}
+
+	// A browser silently DROPS SameSite=None without Secure, so the combination
+	// below does not fail loudly on its own — every login would simply appear to
+	// succeed and no cookie would be stored. Refusing it here turns a baffling
+	// symptom into a startup message.
+	if cfg.CookieSameSite == "None" && !cfg.CookieSecure {
 		if cfg.Env == "production" {
-			log.Fatal("[karecik] FATAL: JWT_SECRET is required in production")
+			log.Fatal("[karecik] FATAL: COOKIE_SAMESITE=None requires COOKIE_SECURE=true")
 		}
-		cfg.JWTSecret = "karecik-development-secret-change-me-in-production"
-		log.Println("[karecik] WARNING: JWT_SECRET is unset, using the development secret")
+		log.Println("[karecik] WARNING: COOKIE_SAMESITE=None needs Secure; falling back to Lax")
+		cfg.CookieSameSite = "Lax"
 	}
 
 	return cfg
