@@ -4,9 +4,11 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
@@ -61,6 +63,49 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 
 	app.Post("/api/auth/register", h.Register)
 	app.Post("/api/auth/login", h.Login)
+
+	// Password reset. These two are the only unauthenticated endpoints that DO
+	// something on behalf of a named account, so both are limited per IP — but
+	// NOT with the same budget, because they cost entirely different things.
+	//
+	// They deliberately get separate limiter instances rather than one shared
+	// middleware. Sharing it would spend the mail budget on form submissions:
+	// somebody who asks for a link and then mistypes their new password twice
+	// would be locked out of finishing the reset they are in the middle of.
+	tooManyRequests := func(c *fiber.Ctx) error {
+		return utils.Fail(c, fiber.StatusTooManyRequests, "RATE_LIMITED",
+			"Çok fazla deneme yaptınız. Lütfen bir süre sonra tekrar deneyin.")
+	}
+	byIP := func(c *fiber.Ctx) string { return c.IP() }
+
+	// /forgot-password SENDS MAIL, and the provider's free tier allows 100
+	// messages a day. Two an hour per host is the tightest budget a real
+	// person still fits inside: ask once, notice nothing arrived, ask again.
+	// A third attempt in the same hour is not someone recovering an account.
+	//
+	// This is only the per-host half. Requests spread across many hosts walk
+	// straight past it, which is what handlers.resetCooldown is for.
+	forgotLimiter := limiter.New(limiter.Config{
+		Max:          2,
+		Expiration:   time.Hour,
+		KeyGenerator: byIP,
+		LimitReached: tooManyRequests,
+	})
+
+	// /reset-password sends nothing: it accepts a token guess and a new
+	// password. The token is 256 bits, so the limiter is defence in depth
+	// rather than the real barrier — the budget only has to be small enough to
+	// make automated probing pointless and large enough to survive a person
+	// fixing "the two passwords do not match" a few times.
+	submitLimiter := limiter.New(limiter.Config{
+		Max:          10,
+		Expiration:   15 * time.Minute,
+		KeyGenerator: byIP,
+		LimitReached: tooManyRequests,
+	})
+
+	app.Post("/api/auth/forgot-password", forgotLimiter, h.ForgotPassword)
+	app.Post("/api/auth/reset-password", submitLimiter, h.ResetPassword)
 
 	// Logout is public on purpose: an expired or already-revoked cookie must
 	// still be able to clear itself, and requiring a valid session to log out

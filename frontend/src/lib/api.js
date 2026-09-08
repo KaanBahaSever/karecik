@@ -108,6 +108,12 @@ export const api = {
     request('/api/auth/register', { method: 'POST', body: payload }),
   login: (payload) => request('/api/auth/login', { method: 'POST', body: payload }),
   logout: () => request('/api/auth/logout', { method: 'POST' }),
+  // Answers the same way whether or not the address is registered — see
+  // handlers.ForgotPassword. Do not add a branch here that assumes otherwise.
+  forgotPassword: (email) =>
+    request('/api/auth/forgot-password', { method: 'POST', body: { email } }),
+  resetPassword: (token, password) =>
+    request('/api/auth/reset-password', { method: 'POST', body: { token, password } }),
   changePassword: (currentPassword, newPassword) =>
     request('/api/auth/change-password', {
       method: 'POST',

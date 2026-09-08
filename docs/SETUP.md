@@ -333,7 +333,22 @@ fill a development database with a sample cafe; the deployed database is set up
 now, and a command that writes accounts with known passwords is a liability once
 there is a real system for it to be pointed at by mistake.
 
-Setting a password does not need e-mail:
+### Forgotten passwords
+
+The login page carries a "Şifremi unuttum" link. It e-mails a reset link that
+is valid for one hour and for one use, and a successful reset destroys **every**
+session of that account — unlike changing a password from the dashboard, which
+spares the session doing it. Someone resetting is not signed in, and the usual
+reason to reset is that somebody else might be.
+
+It needs a provider. Set `RESEND_API_KEY` and `MAIL_FROM` (see `.env.example`
+and [DEPLOY](DEPLOY.md)); leave either blank and the endpoint answers 503 rather
+than accepting the request and dropping the mail. Delivery goes over an HTTPS
+API rather than SMTP because the hosting platform blocks outbound SMTP on its
+cheaper plans.
+
+Setting a password directly needs no e-mail at all, and stays the way in when
+mail is down:
 
 ```bash
 cd backend

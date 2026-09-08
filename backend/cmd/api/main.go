@@ -22,6 +22,8 @@ import (
 	"karecik/backend/internal/config"
 	"karecik/backend/internal/database"
 	"karecik/backend/internal/handlers"
+	"karecik/backend/internal/mailer"
+	"karecik/backend/internal/repository"
 	"karecik/backend/internal/router"
 	"karecik/backend/internal/session"
 	"karecik/backend/internal/utils"
@@ -71,6 +73,33 @@ func main() {
 	sessions.StartJanitor(session.DefaultJanitorInterval)
 	defer sessions.Stop()
 
+	// --- password reset housekeeping
+	//
+	// The sessions above are swept because they live in a map that would
+	// otherwise grow forever. These live in a table, which grows just as
+	// happily: an expired token is already refused by the reset endpoint, but
+	// refusing a row does not delete it.
+	//
+	// Hourly, because the tokens only last an hour — anything more frequent
+	// deletes nothing, and anything less leaves a day of dead rows behind. The
+	// ticker stops with the process; there is no state to flush on the way out.
+	resetSweeper := time.NewTicker(time.Hour)
+	defer resetSweeper.Stop()
+	go func() {
+		for range resetSweeper.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			removed, err := repository.SweepPasswordResets(ctx, pool)
+			cancel()
+			if err != nil {
+				log.Printf("[karecik] password reset sweep failed: %v", err)
+				continue
+			}
+			if removed > 0 {
+				log.Printf("[karecik] password reset sweep: %d expired token(s) removed", removed)
+			}
+		}
+	}()
+
 	// --- upload directory
 	// The hint is not padding. In a container this path is a mounted volume, and
 	// platforms mount volumes as root while this image runs as an unprivileged
@@ -99,7 +128,12 @@ func main() {
 		},
 	})
 
-	router.Setup(app, handlers.New(pool, cfg, sessions), cfg)
+	// Disabled when RESEND_API_KEY / MAIL_FROM are unset, which makes the reset
+	// endpoint refuse cleanly instead of accepting requests and dropping the
+	// mail. config.Load has already said so on stderr.
+	mail := mailer.New(cfg.ResendAPIKey, cfg.MailFrom)
+
+	router.Setup(app, handlers.New(pool, cfg, sessions, mail), cfg)
 
 	// --- listen for shutdown signals (Ctrl+C)
 	go func() {

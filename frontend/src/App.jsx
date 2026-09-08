@@ -8,6 +8,8 @@ import Loading from './components/ui/Loading.jsx'
 import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
 import SignUp from './pages/SignUp.jsx'
+import ForgotPassword from './pages/ForgotPassword.jsx'
+import ResetPassword from './pages/ResetPassword.jsx'
 import CustomerMenu from './pages/menu/CustomerMenu.jsx'
 
 import DashboardLayout from './pages/dashboard/DashboardLayout.jsx'
@@ -56,6 +58,13 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/giris" element={<Login />} />
       <Route path="/kayit" element={<SignUp />} />
+
+      {/* Password reset. Both are public: someone who cannot log in is exactly
+          who needs them. The reset page reads its token from ?token= rather
+          than from the path, so the address stays the same whether or not the
+          link carries one and the page can explain a missing token itself. */}
+      <Route path="/sifremi-unuttum" element={<ForgotPassword />} />
+      <Route path="/sifre-sifirla" element={<ResetPassword />} />
 
       {/* Path-based menu access — needs no hosts file entry. Both segments are
           required to name a menu; the first one alone is the tenant address. */}

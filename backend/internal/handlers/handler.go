@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"karecik/backend/internal/config"
+	"karecik/backend/internal/mailer"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
@@ -35,11 +36,20 @@ type Handler struct {
 	DB       *pgxpool.Pool
 	Cfg      *config.Config
 	Sessions *session.Store
+
+	// Mail is an interface so that a test can assert an e-mail WOULD have been
+	// sent without a network call, and so that a deployment with no provider
+	// configured gets mailer.Disabled — which refuses loudly instead of
+	// pretending to deliver.
+	Mail mailer.Mailer
 }
 
 // New builds a Handler.
-func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store) *Handler {
-	return &Handler{DB: db, Cfg: cfg, Sessions: sessions}
+func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store, mail mailer.Mailer) *Handler {
+	if mail == nil {
+		mail = mailer.Disabled{}
+	}
+	return &Handler{DB: db, Cfg: cfg, Sessions: sessions, Mail: mail}
 }
 
 // Health reports the service and database status.

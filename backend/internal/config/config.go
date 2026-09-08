@@ -29,6 +29,18 @@ type Config struct {
 	ServeStatic    bool
 	StaticDir      string
 	Env            string
+
+	// Transactional e-mail. Only the password reset flow uses it; leaving both
+	// blank disables that flow rather than half-running it — see
+	// internal/mailer and handlers.ForgotPassword.
+	ResendAPIKey string
+	MailFrom     string // "Karecik <noreply@karecik.com>", on a VERIFIED domain
+
+	// PublicURL is the origin the reset link is built from. It has to be the
+	// address a person's browser can actually open, which is not derivable
+	// from Host/Port: those describe the interface the process binds to,
+	// behind whatever proxy terminates TLS.
+	PublicURL string
 }
 
 // Load reads the .env file and fills in the Config.
@@ -58,7 +70,21 @@ func Load() *Config {
 		ServeStatic:    envBool("SERVE_STATIC", false),
 		StaticDir:      env("STATIC_DIR", "../frontend/dist"),
 		Env:            env("APP_ENV", "development"),
+
+		ResendAPIKey: env("RESEND_API_KEY", ""),
+		MailFrom:     env("MAIL_FROM", ""),
 	}
+
+	// The default follows the deployment shape rather than being a fixed
+	// string: in production the panel and the API share one origin on the app
+	// domain, and in development the browser is on the Vite dev server, which
+	// is a different port from this process.
+	if cfg.Env == "production" {
+		cfg.PublicURL = env("PUBLIC_URL", "https://"+cfg.AppDomain)
+	} else {
+		cfg.PublicURL = env("PUBLIC_URL", "http://localhost:5173")
+	}
+	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 
 	// Secure defaults to "on in production", which is where the cookie travels
 	// over the public internet. It stays configurable because a developer may
@@ -84,6 +110,19 @@ func Load() *Config {
 		}
 		log.Println("[karecik] WARNING: COOKIE_SAMESITE=None needs Secure; falling back to Lax")
 		cfg.CookieSameSite = "Lax"
+	}
+
+	// Said at startup rather than discovered by the first locked-out owner.
+	// The reset endpoint refuses cleanly when this is unset (mailer.Disabled),
+	// so nothing here is fatal — but a deployment where "şifremi unuttum" is
+	// visible in the interface and cannot work is worth one loud line.
+	if cfg.ResendAPIKey == "" || cfg.MailFrom == "" {
+		level := "WARNING"
+		if !cfg.IsProduction() {
+			level = "note"
+		}
+		log.Printf("[karecik] %s: RESEND_API_KEY / MAIL_FROM are not both set — "+
+			"password reset e-mails are disabled (cmd/resetpw still works)", level)
 	}
 
 	// CORS_ORIGINS defaults to the local Vite server, which is right for

@@ -207,6 +207,75 @@ Belleğe taşımanın üç sonucu — üçü de operasyonel:
 
 ---
 
+## Şifre sıfırlama e-postası (Resend)
+
+"Şifremi unuttum" akışı e-posta gönderimi gerektiriyor. **SMTP kullanılmıyor:**
+Railway ücretsiz ve Hobby planlarında giden SMTP'yi kapatıyor — 587 portu
+oralarda hiç açılmıyor. Bunun yerine Resend'in HTTPS API'si çağrılıyor, ki bu
+kısıtlamadan etkilenmiyor.
+
+| Değişken | Nereden |
+|---|---|
+| `RESEND_API_KEY` | resend.com → API Keys. `re_` ile başlar |
+| `MAIL_FROM` | `Karecik <noreply@karecik.com>` — alan adı Resend'de **doğrulanmış** olmalı |
+| `PUBLIC_URL` | Sıfırlama bağlantısının kurulduğu adres. Production'da `https://$APP_DOMAIN` varsayılıyor, yani genelde boş bırakılır |
+
+Kurulum sırası:
+
+1. Resend'de `karecik.com` alan adını ekleyin; verdiği DNS kayıtlarını
+   (SPF/DKIM için TXT, çoğunlukla bir de MX) Cloudflare'da **proxy kapalı**
+   olarak girin.
+2. Doğrulama yeşile döndükten sonra bir API anahtarı üretin.
+3. `RESEND_API_KEY` ve `MAIL_FROM`'u Railway'de servis değişkeni olarak ekleyin
+   ve yeniden dağıtın. Bunlar **çalışma zamanı** değişkenleri — `VITE_*` gibi
+   build sırasında gömülmüyorlar, dolayısıyla ARG tanımlamaya gerek yok.
+
+İkisi birden dolu değilse akış **kapalı** olur: uç nokta `503` döner, arayüz
+bunu kullanıcıya söyler ve açılışta log'a bir uyarı düşer. Sessizce yutulmaz —
+gönderilemeyen bir sıfırlama, gelmeyecek bir postayı bekleyen bir kullanıcı
+demektir ve bunun görünmez olması en kötü sonuçtur.
+
+Doğrulanmamış bir gönderici alan adı açılışta **kabul edilir**, gönderim
+sırasında reddedilir. Belirtisi "posta hiç gelmiyor" olur; sunucu log'unda
+sağlayıcının kendi hata mesajı yazar.
+
+### Kota koruması
+
+Ücretsiz plan **günde 100**, ayda 3.000 e-posta veriyor. Gönderimin önünde üç
+ayrı sınır var; her biri diğerinin kapatamadığını kapatıyor:
+
+| Sınır | Kapsam | Kural |
+|---|---|---|
+| Route limiter | IP başına | Saatte 2 istek |
+| `resetCooldown` | Hesap başına | 30 dakika içinde ikinci e-posta yok |
+| `maxActiveResets` | Hesap başına | Aynı anda en fazla 3 geçerli bağlantı |
+
+IP limiti, farklı sunuculardan gelen isteklere hiçbir şey yapmıyor — kotayı
+tüketmenin ya da birinin gelen kutusunu doldurmanın yolu tam olarak budur.
+Cooldown o boşluğu kapatıyor. Cooldown penceresi içindeki bir istek **token
+üretmiyor ve posta göndermiyor**, dolayısıyla kutudaki mevcut bağlantı bir
+saatlik ömrünü tamamlıyor.
+
+Pratik tavan: hesap başına saatte 2 mesaj, yani günde ~48 — günlük kotanın
+yarısı, tek bir hesap üzerinden bile.
+
+`/api/auth/reset-password` **ayrı** bir limite bağlı (15 dakikada 10). O uç
+posta göndermiyor; aynı bütçeyi paylaşsalardı, yeni şifresini birkaç kez yanlış
+yazan kullanıcı başlattığı sıfırlamayı bitiremezdi.
+
+Süresi dolmuş token'ları saatte bir çalışan bir süpürücü siliyor; tablo
+sınırsız büyümüyor.
+
+Sıfırlama bağlantısı 1 saat geçerli ve tek kullanımlık. Başarılı bir sıfırlama
+o kullanıcının **tüm** oturumlarını kapatıyor — panelden şifre değiştirmenin
+aksine, çağıranın kendi oturumu da dahil. Sebebi basit: sıfırlayan kişi zaten
+giriş yapmış değil, ve sıfırlamanın olağan sebebi başka birinin giriş yapmış
+olması.
+
+Posta çalışmadığında kırılacak cam hâlâ yerinde: `go run ./cmd/resetpw`.
+
+---
+
 ## Örnek veri ve şifreler
 
 Örnek veri **yok**. Seed mekanizmasının tamamı kaldırıldı: önce boot sırasında

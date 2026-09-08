@@ -39,7 +39,7 @@
 | Tenancy | Wildcard subdomain resolution with a path-based fallback |
 
 ```text
-backend/    cmd/{api,resetpw} · internal/{config,database,models,repository,handlers,middleware,router,session,utils}
+backend/    cmd/{api,resetpw} · internal/{config,database,mailer,models,repository,handlers,middleware,router,session,utils}
 frontend/   src/{lib,themes,locales,components,pages}
 docs/       SETUP · API · ARCHITECTURE · FRONTEND-CONTRACT
 ```
@@ -67,7 +67,12 @@ npm run dev
 On Windows, `start.bat` does all of the above and `stop.bat` shuts it down.
 
 There are no fixtures and no demo login. The database starts empty, and an
-account is created by signing up. A password can be set without e-mail:
+account is created by signing up.
+
+Forgotten passwords are recovered from the login page, which e-mails a
+one-hour, single-use link. That needs `RESEND_API_KEY` and `MAIL_FROM`; without
+them the flow reports itself as unavailable rather than silently swallowing the
+request. The break-glass path needs no e-mail at all:
 
 ```bash
 cd backend

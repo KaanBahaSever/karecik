@@ -153,10 +153,76 @@ caller's own session survives, so the dashboard in front of them keeps working.
 
 Error `401`: `Mevcut şifreniz hatalı.`
 
-> Forgotten passwords have no endpoint. Without e-mail there is nothing to
-> prove ownership of an address with, so the reset is a server-side command:
-> `go run ./cmd/resetpw -email owner@example.com`. It cannot sign anyone out —
-> restart the API for that. See [DEPLOY](DEPLOY.md).
+### `POST /api/auth/forgot-password`
+
+Request: `{ "email": "..." }`
+
+Response `200`: **the same body whatever happened.**
+
+```json
+{ "success": true, "message": "Bu adres kayıtlıysa, şifre sıfırlama bağlantısı gönderildi. ..." }
+```
+
+That is the design, not an oversight. Answering "no such account" would turn
+this into a membership oracle: anyone could learn which addresses are
+registered by asking. **Every** outcome below returns it — an unknown address, a
+link already sent inside the cooldown, an account holding the maximum of 3 live
+tokens, and the provider refusing the message. The mail is dispatched from a
+goroutine so that a registered address is not measurably slower to answer than
+an unregistered one; the identical bodies would be pointless if the response
+time gave it away.
+
+**Quota guards.** The provider's free tier allows 100 messages a day and 3,000
+a month, so three limits sit in front of the send, each covering what the
+others cannot:
+
+| Guard | Scope | Rule |
+|---|---|---|
+| Route limiter | per IP | 2 requests per hour |
+| `resetCooldown` | per account | no second e-mail within 30 minutes |
+| `maxActiveResets` | per account | at most 3 unexpired links at once |
+
+The per-IP limiter does nothing about requests arriving from many hosts, which
+is exactly the shape of an attempt to drain the quota or bury one owner's
+inbox — that is what the cooldown is for. A request inside the cooldown creates
+**no token and sends no mail**, so the link already in the inbox stays valid for
+its full hour.
+
+Two failures *are* reported, because both are true regardless of which address
+was submitted:
+
+| Status | When |
+|---|---|
+| `503 MAIL_NOT_CONFIGURED` | `RESEND_API_KEY` / `MAIL_FROM` are unset on this deployment |
+| `429 RATE_LIMITED` | more than 2 requests from one IP in an hour |
+
+The `429` fires on the host before the address is looked at, so it cannot be
+read as "this account exists".
+
+### `POST /api/auth/reset-password`
+
+Request: `{ "token": "...", "password": "..." }` — the token comes from the
+e-mailed link (`/sifre-sifirla?token=...`). It is valid for **1 hour** and for
+**one use**: the row is deleted in the same statement that reads it, so two
+simultaneous clicks cannot both succeed.
+
+Rate limited separately from `/forgot-password` — 10 requests per 15 minutes
+per IP — and deliberately so. This endpoint sends no mail, and sharing the
+stricter mail budget would lock someone out of finishing the reset they are in
+the middle of after a couple of mistyped passwords.
+
+Response `200`: `{ "success": true, "revoked_sessions": 3 }` — **every** session
+of that user is destroyed, with no exception kept. This is the opposite of
+`change-password`, which spares the caller's own session: someone resetting is
+not signed in, and the usual reason to reset is that somebody else might be.
+
+Error `410 RESET_TOKEN_INVALID`: expired, already used, or never existed. The
+three are deliberately indistinguishable — telling them apart would confirm
+that a token was real.
+
+> `go run ./cmd/resetpw -email owner@example.com` remains the break-glass path
+> for when mail is down or not configured. It cannot sign anyone out — restart
+> the API for that. See [DEPLOY](DEPLOY.md).
 
 ---
 

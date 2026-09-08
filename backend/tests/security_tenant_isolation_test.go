@@ -33,6 +33,7 @@ import (
 	"karecik/backend/internal/config"
 	"karecik/backend/internal/database"
 	"karecik/backend/internal/handlers"
+	"karecik/backend/internal/mailer"
 	"karecik/backend/internal/router"
 	"karecik/backend/internal/session"
 	"karecik/backend/internal/utils"
@@ -67,6 +68,9 @@ type harness struct {
 	t      *testing.T
 	app    *fiber.App
 	dbName string
+	// pool is the scratch database, exposed so a suite can assert on rows the
+	// API is not supposed to expose over HTTP — password reset tokens, for one.
+	pool *pgxpool.Pool
 }
 
 // newHarness brings up an isolated copy of the whole backend.
@@ -81,6 +85,15 @@ type harness struct {
 // (one that may connect but not CREATE DATABASE) does not paint the whole
 // repository red. The skip message says exactly what went wrong.
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	// mailer.Disabled refuses rather than pretending to deliver, so a suite that
+	// wanders into the reset flow fails loudly instead of quietly passing.
+	return newHarnessWith(t, mailer.Disabled{})
+}
+
+// newHarnessWith is newHarness with the e-mail transport chosen by the caller.
+// The reset suite passes a recorder; everything else wants Disabled.
+func newHarnessWith(t *testing.T, mail mailer.Mailer) *harness {
 	t.Helper()
 
 	adminURL := strings.TrimSpace(os.Getenv(adminURLEnv))
@@ -197,9 +210,9 @@ func newHarness(t *testing.T) *harness {
 	sessions := session.New()
 	t.Cleanup(sessions.Stop)
 
-	router.Setup(app, handlers.New(scratchPool, cfg, sessions), cfg)
+	router.Setup(app, handlers.New(scratchPool, cfg, sessions, mail), cfg)
 
-	return &harness{t: t, app: app, dbName: dbName}
+	return &harness{t: t, app: app, dbName: dbName, pool: scratchPool}
 }
 
 // poolConfig parses a connection string and optionally re-points it at another

@@ -96,9 +96,19 @@ export default function Login() {
             </div>
 
             <div>
-              <label htmlFor="login-password" className="label">
-                Şifre
-              </label>
+              {/* The recovery link sits beside the field it rescues, which is
+                  where someone looks the moment their password fails. */}
+              <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor="login-password" className="label">
+                  Şifre
+                </label>
+                <Link
+                  to="/sifremi-unuttum"
+                  className="mb-1.5 text-xs font-medium text-brand-600 hover:text-brand-700"
+                >
+                  Şifremi unuttum
+                </Link>
+              </div>
               <div className="relative">
                 <input
                   id="login-password"
