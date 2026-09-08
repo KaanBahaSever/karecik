@@ -91,9 +91,12 @@ Ayarlanabilir kalan ikisi:
 
 > `VITE_DEMO_BUSINESS`, **o veritabanında gerçekten var olan** bir işletme
 > slug'ı olmalı — telefon çerçevesi o kiracının menüsünü canlı bir iframe olarak
-> açıyor. `karecik-kafe`'yi `cmd/seed` **oluşturmuyor**; yalnızca yaratıldığı
-> veritabanında duruyor. Veritabanı sıfırdan kurulursa bu değeri boşaltın, yoksa
+> açıyor. Bu kiracıyı oluşturan bir komut **yok**; kayıt olunarak yaratılmış
+> gerçek bir işletmedir. Veritabanı sıfırdan kurulursa bu değeri boşaltın, yoksa
 > ürünü satan sayfanın telefonunda "menü bulunamadı" yazar.
+>
+> Not: bu yalnızca masaüstünü etkiliyor. 1024px altında telefon çerçevesinde
+> canlı iframe yerine `frontend/public/demo-onizleme.png` gösteriliyor.
 
 `VITE_ROOT_DOMAIN` de bilerek ARG değil — yerel geliştirme ayarı, gerçek bir
 alan adı gömmek kiracı çözümlemesine ikinci bir kök alan adı sokardı.
@@ -206,18 +209,20 @@ Belleğe taşımanın üç sonucu — üçü de operasyonel:
 
 ## Örnek veri ve şifreler
 
-Otomatik seed **kaldırıldı**. Eskiden bir ortam değişkeni sunucuya çalışan bir
-giriş yazdırabiliyordu; yanlış ayarlanmış tek bir değişken production'a örnek
-hesap koyabilirdi. Artık ikisi de elle çalıştırılan komutlar:
+Örnek veri **yok**. Seed mekanizmasının tamamı kaldırıldı: önce boot sırasında
+çalışan otomatik seed, ardından elle çalıştırılan `cmd/seed` komutu. Boş bir
+veritabanı boş kalıyor; ilk işletme arayüzden kayıt olunarak yaratılıyor.
+
+Kaldırılmasının nedeni, dağıtılmış veritabanının artık kurulu olması. Bilinen
+şifreyle hesap yazan bir komutun, yanlışlıkla gerçek bir veritabanına
+yöneltilebildiği sürece taşıdığı riskin karşılığı kalmadı.
+
+Şifre atamak için e-postaya gerek yok:
 
 ```bash
 cd backend
-go run ./cmd/seed                 # geliştirme verisi (Melly Coffee)
-go run ./cmd/seed -refresh        # seed menülerini kaynaktan yeniden yaz (yıkıcı)
 go run ./cmd/resetpw -email sahip@ornek.com
 ```
-
-`cmd/seed` `APP_ENV=production` görürse çalışmayı reddediyor.
 
 ### Şifre sıfırlama neden HTTP ucu değil
 

@@ -46,14 +46,16 @@ func main() {
 		log.Fatalf("[karecik] migration error: %v", err)
 	}
 
-	// Nothing is seeded on boot any more.
+	// Nothing is seeded, here or anywhere else.
 	//
-	// It used to create a working login from an environment flag, which meant a
-	// single mis-set variable could put sample accounts into a real deployment.
-	// Sample data is now an explicit, human-run command instead:
+	// Boot-time seeding went first: it created a working login from an
+	// environment flag, so one mis-set variable could put sample accounts into a
+	// real deployment. The hand-run cmd/seed that replaced it is gone too, now
+	// that the deployed database is set up and a command which writes known
+	// passwords has a live system it could be aimed at by mistake.
 	//
-	//	go run ./cmd/seed          (development fixtures)
-	//	go run ./cmd/resetpw       (set a password without e-mail)
+	// A fresh database is empty until someone signs up. To set a password
+	// without e-mail:  go run ./cmd/resetpw
 
 	// --- sessions
 	//
@@ -129,10 +131,6 @@ func main() {
 	// any more, and will not be after the next deploy either.
 	log.Printf("[karecik] sessions           -> in memory, single instance only "+
 		"(a restart signs everyone out; janitor every %s)", session.DefaultJanitorInterval)
-	if !cfg.IsProduction() {
-		log.Printf("[karecik] seeded menu        -> http://localhost:%s/api/public/menu/melly-coffee/suadiye", cfg.Port)
-	}
-
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("[karecik] could not start the server: %v", err)
 	}

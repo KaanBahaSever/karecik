@@ -68,8 +68,8 @@ ENV VITE_API_URL=""
 #                       behind it puts "menü bulunamadı" on the page that sells
 #                       the product. Set it to "" to get a static placeholder
 #                       instead, which is the safe answer for a fresh database.
-#                       NOTE: cmd/seed does NOT create karecik-kafe; it exists
-#                       only in the database it was made in.
+#                       NOTE: no command creates this tenant — there is no seed
+#                       any more. It is a real business, made by signing up.
 # VITE_ROOT_DOMAIN is deliberately absent: it is a local-development knob, and
 # baking a real domain into it would create a second, competing root domain for
 # tenant resolution.

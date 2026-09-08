@@ -39,7 +39,7 @@
 | Tenancy | Wildcard subdomain resolution with a path-based fallback |
 
 ```text
-backend/    cmd/{api,seed,resetpw} · internal/{config,database,models,repository,handlers,middleware,router,session,utils}
+backend/    cmd/{api,resetpw} · internal/{config,database,models,repository,handlers,middleware,router,session,utils}
 frontend/   src/{lib,themes,locales,components,pages}
 docs/       SETUP · API · ARCHITECTURE · FRONTEND-CONTRACT
 ```
@@ -66,12 +66,12 @@ npm run dev
 
 On Windows, `start.bat` does all of the above and `stop.bat` shuts it down.
 
-Nothing is seeded on boot. Sample data and passwords are explicit commands:
+There are no fixtures and no demo login. The database starts empty, and an
+account is created by signing up. A password can be set without e-mail:
 
 ```bash
 cd backend
-go run ./cmd/seed                              # development fixtures
-go run ./cmd/resetpw -email owner@example.com  # set a password without e-mail
+go run ./cmd/resetpw -email owner@example.com
 ```
 
 Sessions live in the API process's memory, so a restart signs everyone out and

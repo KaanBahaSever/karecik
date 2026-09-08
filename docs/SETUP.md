@@ -322,22 +322,21 @@ Then put `VITE_ROOT_DOMAIN=karecik.local` in `frontend/.env` and
 
 ---
 
-## 8. Sample data and passwords
+## 8. Accounts and passwords
 
-Nothing is seeded on boot, and there is no built-in demo login. A misconfigured
-environment variable used to be enough to put a working sample account into a
-real deployment, so both are explicit commands now:
+There are no fixtures and no built-in demo login. A fresh database is empty:
+create the first tenant by signing up through the interface, then build its menu
+in the dashboard.
+
+The seed command that used to live in `cmd/seed` has been removed. It existed to
+fill a development database with a sample cafe; the deployed database is set up
+now, and a command that writes accounts with known passwords is a liability once
+there is a real system for it to be pointed at by mistake.
+
+Setting a password does not need e-mail:
 
 ```bash
 cd backend
-go run ./cmd/seed          # development fixtures (Melly Coffee, two menus)
-go run ./cmd/seed -refresh # rewrite the seeded menus from source (destructive)
-```
-
-`cmd/seed` refuses to run when `APP_ENV=production`. It creates the tenant but
-prints no password; set one for the account it made with:
-
-```bash
 go run ./cmd/resetpw -email owner@example.com
 ```
 
@@ -388,8 +387,7 @@ go build -o karecik.exe ./cmd/api
 - With `SERVE_STATIC=true` the backend also serves the built frontend, so a
   single binary is enough. Both halves are then on one origin, so
   `COOKIE_DOMAIN` stays empty and `COOKIE_SAMESITE=Lax` is right.
-- Nothing is seeded automatically. Run `go run ./cmd/seed` by hand if you want
-  development fixtures; it refuses to run when `APP_ENV=production`.
+- Nothing is seeded, ever. A new database stays empty until someone signs up.
 - Run **one** instance of the API. Sessions live in its memory, so a second
   process does not recognise the first one's logins.
 
