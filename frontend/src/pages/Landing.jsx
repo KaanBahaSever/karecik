@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 
 import Header from '../components/landing/Header.jsx'
@@ -16,10 +16,38 @@ import { landingText, readSavedLanguage, saveLanguage } from '../locales/landing
  * No animation library is used, and the transition-*, animate-*, duration-* and
  * hover:scale-* classes are avoided. Only instant hover colour changes are used.
  */
+/* Where the phone mockup stops being a live iframe and becomes a picture.
+   1024px is the same breakpoint the hero uses to go two-column, so the desktop
+   layout and the live demo arrive together. */
+const LIVE_PREVIEW_QUERY = '(min-width: 1024px)'
+
+/**
+ * True on screens wide enough to be worth loading the live demo into.
+ *
+ * The point is NOT to hide the iframe on phones — a `hidden` iframe still
+ * downloads the whole app a second time, which is exactly the cost being
+ * avoided. This decides whether the element is rendered at all.
+ */
+function useLivePreview() {
+  const [live, setLive] = useState(() => window.matchMedia(LIVE_PREVIEW_QUERY).matches)
+
+  useEffect(() => {
+    const query = window.matchMedia(LIVE_PREVIEW_QUERY)
+    const onChange = (event) => setLive(event.matches)
+    query.addEventListener('change', onChange)
+    // Re-read once on mount: the first render may have raced a resize.
+    setLive(query.matches)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  return live
+}
+
 export default function Landing() {
   const { isAuthenticated } = useAuth()
   const [signUpOpen, setSignUpOpen] = useState(false)
   const [language, setLanguage] = useState(readSavedLanguage)
+  const livePreview = useLivePreview()
 
   const t = landingText(language)
 
@@ -86,7 +114,27 @@ export default function Landing() {
                 on the frame and on the iframe element, plus the same class that
                 CustomerMenu puts on the embedded document while it is embedded.
               */}
-              {DEMO_BUSINESS_SLUG ? (
+              {!livePreview ? (
+                /* Phones and tablets get a picture of the same menu.
+                   The iframe boots a second copy of the whole app — another
+                   ~470 kB of JavaScript plus an API round trip — to show
+                   something the visitor mostly just looks at. This is 67 kB and
+                   paints immediately.
+
+                   The dimensions are the frame's own content box at 2x, so the
+                   image is pixel-crisp on a phone and object-cover has almost
+                   nothing to crop. Stating them keeps the layout from jumping
+                   while it loads. */
+                <img
+                  src="/demo-onizleme.png"
+                  alt={t.demoTitle}
+                  width={632}
+                  height={1336}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover object-top"
+                />
+              ) : DEMO_BUSINESS_SLUG ? (
                 <iframe
                   src="/demo"
                   title={t.demoTitle}

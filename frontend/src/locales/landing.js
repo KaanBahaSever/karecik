@@ -18,6 +18,8 @@ const STRINGS = {
     selectLanguage: 'Dil seçin',
     signIn: 'Giriş Yap',
     startFree: 'Hemen Ücretsiz Başla',
+    // Short form for the phone navbar, where the full label does not fit.
+    startFreeShort: 'Ücretsiz Başla',
 
     heading: 'İşletmeniz için QR menü servisi',
     description: 'QR menü hizmetimizle satışlarınızı kolay ve pratik bir şekilde dijitalleştirin.',
@@ -39,6 +41,7 @@ const STRINGS = {
     selectLanguage: 'Select language',
     signIn: 'Sign In',
     startFree: 'Start Free Now',
+    startFreeShort: 'Start Free',
 
     heading: 'A QR menu service for your business',
     description: 'Digitise your sales easily and practically with our QR menu service.',
@@ -60,6 +63,7 @@ const STRINGS = {
     selectLanguage: 'Sprache wählen',
     signIn: 'Anmelden',
     startFree: 'Jetzt kostenlos starten',
+    startFreeShort: 'Loslegen',
 
     heading: 'QR-Menü-Service für Ihr Unternehmen',
     description: 'Digitalisieren Sie Ihren Verkauf einfach und praktisch mit unserem QR-Menü-Service.',
