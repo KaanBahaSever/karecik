@@ -93,16 +93,18 @@ func SessionHash(c *fiber.Ctx) string {
 // in localStorage it replaced, no script on the page can read this value, so an
 // XSS bug can no longer walk off with a login.
 //
-// Domain, SameSite and Secure come from the configuration because the right
-// answer depends on where the two halves are deployed:
+// Domain, SameSite and Secure come from the configuration, but the deployed
+// shape is a single container: one binary serves both the SPA and the API, so
+// the page and the endpoint it calls always share an origin.
 //
-//	same origin (dev proxy, or SERVE_STATIC)   Domain "" · Lax · Secure off
-//	karecik.com + api.karecik.com              Domain ".karecik.com" · Lax · Secure on
-//	pages.dev + up.railway.app (cross-SITE)    Domain "" · None · Secure on
+//	local (Vite proxy)   Domain "" · Lax · Secure off
+//	production           Domain "" · Lax · Secure on
 //
-// The middle case is the intended production shape: those two hosts share a
-// registrable domain, so they are same-site and Lax is enough — None is only
-// needed when the two halves sit on genuinely different sites.
+// Domain stays EMPTY, which makes the cookie host-only. Widening it to
+// ".karecik.com" would also hand the session to every tenant's
+// {slug}.karecik.com, and nothing there wants it — customer menus are entirely
+// unauthenticated. SameSite=None is still supported by the configuration for a
+// genuinely cross-site deployment, but nothing needs it in this topology.
 func SetSessionCookie(c *fiber.Ctx, cfg *config.Config, token string, expiresAt time.Time) {
 	c.Cookie(&fiber.Cookie{
 		Name:     utils.SessionCookieName,

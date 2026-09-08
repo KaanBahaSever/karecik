@@ -70,8 +70,15 @@ func main() {
 	defer sessions.Stop()
 
 	// --- upload directory
+	// The hint is not padding. In a container this path is a mounted volume, and
+	// platforms mount volumes as root while this image runs as an unprivileged
+	// user — so the first boot after someone attaches a disk fails here, over and
+	// over, with a bare "permission denied" and a deploy that never goes live.
+	// Railway's answer is RAILWAY_RUN_UID=0 on the service.
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
-		log.Fatalf("[karecik] could not create the upload directory (%s): %v", cfg.UploadDir, err)
+		log.Fatalf("[karecik] could not create the upload directory (%s): %v\n"+
+			"[karecik] if this is a mounted volume, the container user probably cannot write to it "+
+			"(on Railway set RAILWAY_RUN_UID=0 on the service)", cfg.UploadDir, err)
 	}
 
 	// --- HTTP server

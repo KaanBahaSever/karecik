@@ -82,7 +82,7 @@ the API has to run as a single instance — see [DEPLOY](docs/DEPLOY.md).
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `postgres://postgres@localhost:5432/karecik?sslmode=disable` | Connection string |
-| `COOKIE_DOMAIN` | — | `.karecik.com` in production; empty locally |
+| `COOKIE_DOMAIN` | *(empty)* | Leave empty — the session cookie is host-only. See [DEPLOY](docs/DEPLOY.md) |
 | `COOKIE_SAMESITE` | `Lax` | `Lax`, `None` or `Strict`; `None` requires `COOKIE_SECURE` |
 | `COOKIE_SECURE` | on in production | HTTPS-only session cookie |
 | `PORT` | `8080` | API listen port |

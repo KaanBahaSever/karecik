@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -41,12 +43,37 @@ func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store) *Handler
 }
 
 // Health reports the service and database status.
+//
+// It also asserts that the frontend bundle is actually reachable when this
+// process is supposed to be serving it, and returns 503 when it is not.
+//
+// That check earns its place: the deploy where the image shipped without a
+// bundle reported HEALTHY the whole time, because this endpoint is an /api
+// route and knows nothing about static files. The platform saw a green tick
+// while every page on the site answered with a JSON error. A health check that
+// cannot see the thing that is broken is worse than none, because it is
+// believed.
 func (h *Handler) Health(c *fiber.Ctx) error {
 	dbStatus := "up"
 	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
 	defer cancel()
 	if err := h.DB.Ping(ctx); err != nil {
 		dbStatus = "down"
+	}
+
+	if h.Cfg.ServeStatic {
+		index := filepath.Join(h.Cfg.StaticDir, "index.html")
+		if _, err := os.Stat(index); err != nil {
+			// The resolved path is in the body on purpose. The failure is almost
+			// always STATIC_DIR pointing somewhere the bundle is not, and the
+			// answer is unreadable without knowing where it looked.
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status":   "degraded",
+				"database": dbStatus,
+				"error":    "frontend bundle is missing: " + index,
+				"version":  "1.0.0",
+			})
+		}
 	}
 
 	return c.JSON(fiber.Map{

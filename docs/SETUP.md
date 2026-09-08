@@ -381,17 +381,19 @@ go build -o karecik.exe ./cmd/api
 - Add a wildcard A record in DNS: `*.karecik.com` → the server IP.
 - Obtain a wildcard SSL certificate (Let's Encrypt via the DNS-01 challenge for
   `*.karecik.com`).
-- `.env`: `APP_DOMAIN=karecik.com`, `SERVE_STATIC=true`,
-  `STATIC_DIR=../frontend/dist`, `sslmode=require`, `APP_ENV=production`,
-  `COOKIE_SECURE=true`.
+- `.env`: `APP_DOMAIN=karecik.com`, `SERVE_STATIC=true`, `STATIC_DIR` pointing at
+  the built `frontend/dist` **as resolved from wherever you launch the binary**
+  (the `../frontend/dist` default assumes you run it from `backend/`),
+  `sslmode=require`, `APP_ENV=production`, `COOKIE_SECURE=true`.
 - With `SERVE_STATIC=true` the backend also serves the built frontend, so a
   single binary is enough. Both halves are then on one origin, so
-  `COOKIE_DOMAIN` can stay empty and `COOKIE_SAMESITE=Lax` is right.
+  `COOKIE_DOMAIN` stays empty and `COOKIE_SAMESITE=Lax` is right.
 - Nothing is seeded automatically. Run `go run ./cmd/seed` by hand if you want
   development fixtures; it refuses to run when `APP_ENV=production`.
 - Run **one** instance of the API. Sessions live in its memory, so a second
   process does not recognise the first one's logins.
 
-> The split deployment (Cloudflare Pages + Railway) is a different shape and
-> has its own document: [DEPLOY](DEPLOY.md). The cookie settings above are for
-> the single-binary case only.
+> This section is about running the binary on a server yourself. The
+> containerised deploy on Railway is the same shape — one process serving both
+> halves — but the paths and variables come from the Dockerfile rather than
+> `.env`: see [DEPLOY](DEPLOY.md).

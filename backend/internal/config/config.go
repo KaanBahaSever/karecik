@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -11,10 +12,10 @@ import (
 
 // Config holds every setting read from the .env file and the environment.
 type Config struct {
-	DatabaseURL    string
-	// Session cookie. There is no signing key any more: a session is a row in
-	// the database, not a signed blob the client carries.
-	CookieDomain   string // ".karecik.com" so every subdomain sees it; "" locally
+	DatabaseURL string
+	// Session cookie. There is no signing key any more: a session is an entry in
+	// this process's memory, not a signed blob the client carries.
+	CookieDomain   string // EMPTY (host-only) — see middleware.SetSessionCookie
 	CookieSameSite string // "Lax" | "None" | "Strict"
 	CookieSecure   bool   // HTTPS only; SameSite=None REQUIRES it
 
@@ -85,7 +86,40 @@ func Load() *Config {
 		cfg.CookieSameSite = "Lax"
 	}
 
+	// CORS_ORIGINS defaults to the local Vite server, which is right for
+	// development and dangerous in production: the CORS middleware runs with
+	// AllowCredentials, so an allowed origin may read authenticated responses.
+	// A deployment that simply never sets the variable would ship a standing
+	// credentialed grant to whatever is running on the visitor's own machine.
+	//
+	// Dropping the entry rather than refusing to boot is deliberate: a loopback
+	// origin is never a legitimate production caller, so there is nothing to
+	// preserve and nothing to weigh up.
+	if cfg.IsProduction() {
+		cfg.CORSOrigins = withoutLoopback(cfg.CORSOrigins)
+	}
+
 	return cfg
+}
+
+// withoutLoopback drops localhost and 127.0.0.1 origins, naming each one it
+// removes — a silently narrowed allow-list is its own kind of confusing.
+func withoutLoopback(origins []string) []string {
+	kept := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		host := origin
+		if parsed, err := url.Parse(origin); err == nil && parsed.Hostname() != "" {
+			host = parsed.Hostname()
+		}
+		switch strings.ToLower(host) {
+		case "localhost", "127.0.0.1", "::1", "[::1]":
+			log.Printf("[karecik] WARNING: dropped the loopback CORS origin %q — "+
+				"it cannot be a real caller in production", origin)
+		default:
+			kept = append(kept, origin)
+		}
+	}
+	return kept
 }
 
 // IsProduction reports whether the app runs in production mode.

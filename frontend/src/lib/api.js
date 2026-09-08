@@ -1,10 +1,13 @@
 // Karecik API client.
 //
-// BASE URL. Empty means "same origin", which is what the Vite dev proxy and a
-// single-container deployment both want. Split deployments — the SPA on
-// Cloudflare Pages, the API on its own host — set VITE_API_URL at build time:
+// BASE URL. Empty means "same origin", and it should stay empty everywhere: the
+// Vite dev proxy forwards /api to the Go server locally, and in production that
+// same Go server is what served this page.
 //
-//   VITE_API_URL=https://api.karecik.com
+// VITE_API_URL exists for a deployment that puts the API on its own host, and
+// pointing it at one here breaks two things at once — the session cookie is not
+// sent cross-origin, so the panel 401s on everything, and customer menus stop
+// resolving, because the tenant is read from the request's Host header.
 //
 // Vite inlines it into the bundle, so it is a BUILD-time value: changing it
 // means rebuilding, not restarting.

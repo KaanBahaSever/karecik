@@ -14,7 +14,24 @@ const SessionTTL = 30 * 24 * time.Hour
 
 // SessionCookieName is the cookie the browser carries. It is HttpOnly, so no
 // script on the page — ours or anyone else's — can read it.
-const SessionCookieName = "karecik_session"
+//
+// It was "karecik_session" until the deployment went back to a single container.
+// The rename is not cosmetic: COOKIE_DOMAIN went from ".karecik.com" to empty at
+// the same time, and a cookie is keyed by (name, domain, path). Reusing the name
+// would leave browsers holding TWO cookies called the same thing — the old wide
+// one and the new host-only one — and both would be sent. RFC 6265 orders equal
+// paths by creation time, so the STALE one arrives first, which is the one the
+// server reads; and ClearSessionCookie writes with the new empty Domain, so it
+// cannot delete the wide one. The result is an owner who can never log in again
+// without clearing cookies by hand. A new name cannot collide: the old cookie
+// simply goes inert and expires on its own.
+//
+// Worth knowing for later: "__Host-karecik_sid" would additionally make the
+// browser refuse any Set-Cookie for this name that carries a Domain attribute,
+// which closes off a sibling subdomain shadowing it. The prefix requires the
+// Secure attribute, though, and development runs over plain HTTP with
+// COOKIE_SECURE=false, so it is not free.
+const SessionCookieName = "karecik_sid"
 
 // sessionTokenBytes is the entropy behind one session. 32 bytes is 256 bits:
 // far beyond guessing, and it is the size the cookie carries rather than

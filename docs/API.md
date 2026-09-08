@@ -14,7 +14,7 @@ Every response is JSON. Errors share one shape:
 Error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
 `CONFLICT`, `INTERNAL_ERROR`, `PAYLOAD_TOO_LARGE`.
 
-Protected endpoints authenticate with the `karecik_session` cookie, which
+Protected endpoints authenticate with the `karecik_sid` cookie, which
 `register` and `login` set. It is `HttpOnly`, so no script can read it and no
 client code has to send it — the browser attaches it on its own. A cross-origin
 caller must use `credentials: 'include'`, or the browser will neither store nor
@@ -71,6 +71,24 @@ Default: `TRY`.
 { "status": "ok", "database": "up", "version": "1.0.0" }
 ```
 
+When the server is configured to serve the frontend (`SERVE_STATIC`) and the
+bundle is not where `STATIC_DIR` points, it answers **`503`** instead and names
+the path it looked in:
+
+```json
+{ "status": "degraded", "database": "up",
+  "error": "frontend bundle is missing: /app/frontend/dist/index.html",
+  "version": "1.0.0" }
+```
+
+That case is the reason the check exists in this shape: a deploy once shipped
+without the bundle and reported healthy the whole time, because this is an
+`/api` route and knew nothing about static files.
+
+A failed database ping is reported as `"database": "down"` inside a `200` — it
+is deliberately not fatal, so a brief database blip does not restart the
+container.
+
 ---
 
 ## 2. Authentication
@@ -88,7 +106,7 @@ Rules: `business_name` 2–100 characters, `email` valid and unique,
 The business record and its `slug` (subdomain) are generated automatically:
 `Kahve Durağı` → `kahve-duragi`. On a collision `-2`, `-3` … is appended.
 
-Response `201` — plus a `Set-Cookie: karecik_session=...` header. The body
+Response `201` — plus a `Set-Cookie: karecik_sid=...` header. The body
 carries **no token**: there is nothing for the client to store, and therefore
 nothing for a script on the page to steal.
 

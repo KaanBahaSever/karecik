@@ -5,6 +5,12 @@
 Karecik is a multi-tenant QR menu platform. Every user account corresponds to
 one business, and every business gets its own subdomain.
 
+The diagram below is the **development** layout — two processes, Vite on :5173
+proxying to Go on :8080. In production there is only one: the Go binary serves
+the built React bundle from `STATIC_DIR` as well as `/api`, so the page and the
+endpoint it calls always share an origin. See [Production topology](#production-topology)
+below and [DEPLOY](DEPLOY.md).
+
 ```
                           ┌──────────────────────────────┐
  Business owner           │  React (Vite) — :5173        │
@@ -35,6 +41,39 @@ one business, and every business gets its own subdomain.
 > **Language convention:** the code (identifiers, comments, documentation) is
 > English. The product copy — interface strings, legal notices, demo data — is
 > Turkish, because Karecik serves Turkish businesses.
+
+---
+
+## Production topology
+
+One container, one process, one origin per host.
+
+```
+{tenant}.karecik.com  ┐
+karecik.com           ┴──▶  Go binary  ──┬──▶  /api/*        handlers
+                                         ├──▶  /uploads/*    mounted volume
+                                         └──▶  everything else, from STATIC_DIR
+                                                (the built React bundle;
+                                                 unknown paths -> index.html)
+                              │
+                              └──▶ PostgreSQL (managed)
+```
+
+What follows from it, and why several decisions elsewhere look the way they do:
+
+- **No cross-origin requests exist.** The panel, every customer menu and the
+  landing page's demo iframe are all served by the same process that answers
+  their `/api` calls. That is why the CORS allow-list no longer includes
+  `*.karecik.com`, and why the session cookie needs neither `SameSite=None` nor
+  a `Domain` attribute.
+- **The bundle is baked into the image**, so frontend and API can never be at
+  different versions, and any `VITE_*` value is fixed at build time.
+- **Sessions are in the process's memory**, so a deploy signs everyone out and
+  the service must run as a single instance.
+- **Uploads are the only mutable state on disk** and live on a volume, because
+  the container filesystem is replaced on every deploy.
+
+[DEPLOY](DEPLOY.md) has the variables and the traps.
 
 ---
 
