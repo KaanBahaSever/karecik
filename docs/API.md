@@ -11,8 +11,9 @@ Every response is JSON. Errors share one shape:
 > The `error` text is written in **Turkish**, because it is displayed directly
 > to the end user. The `code` is a stable machine-readable identifier.
 
-Error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
-`CONFLICT`, `INTERNAL_ERROR`, `PAYLOAD_TOO_LARGE`.
+Error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `SESSION_EXPIRED`, `FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `INTERNAL_ERROR`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`,
+`MAIL_NOT_CONFIGURED`, `RESET_TOKEN_INVALID`.
 
 Protected endpoints authenticate with the `karecik_sid` cookie, which
 `register` and `login` set. It is `HttpOnly`, so no script can read it and no
@@ -21,8 +22,20 @@ caller must use `credentials: 'include'`, or the browser will neither store nor
 send it.
 
 The cookie is the SHA-256 key of a session held in the API process's memory, so
-it stops working when the API restarts as well as when it expires. Both arrive
-as `401 UNAUTHORIZED`; there is no separate code for a session lost to a deploy.
+it stops working when the API restarts as well as when it expires.
+
+### Two kinds of 401
+
+They share a status and must not share a response, so they have different codes:
+
+| Code | Meaning | What a client should do |
+|---|---|---|
+| `UNAUTHORIZED` | the **credentials in this request** were wrong — a mistyped password on `login`, or the wrong `current_password` on `change-password` | show the message on the form; the session is untouched |
+| `SESSION_EXPIRED` | there is **no usable session** — it expired, was revoked by a password change, or the API restarted | discard any locally remembered account and send the user to the login page |
+
+Keying on the status alone conflates them, and the failure is not subtle: a
+user who mistypes their own password while changing it gets thrown out of the
+panel instead of being told to try again.
 
 ---
 
@@ -128,6 +141,15 @@ Error `401`: `E-posta veya şifre hatalı.`
 ### `GET /api/auth/me` 🔒
 
 Response: `{ "user": {...}, "business": {...} }`
+
+> **The browser client does not call this.** It used to run on every page load
+> to answer "am I signed in?", which put an authenticated round trip in front
+> of the landing page and of every customer menu — pages opened by strangers
+> with no session. The panel now remembers the account in `localStorage`
+> (`krc_user`) and is corrected by the first `SESSION_EXPIRED` it receives.
+>
+> The endpoint stays because it is the one honest "is this session live?"
+> probe, and the backend test suite uses it as exactly that.
 
 ### `POST /api/auth/logout`
 

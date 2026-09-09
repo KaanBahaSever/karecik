@@ -5,7 +5,6 @@ import { Eye, EyeOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth.jsx'
 import { useToast } from '../components/ui/Toast.jsx'
-import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
 
 /** Matches minPasswordLength in the backend; the server rejects shorter ones. */
@@ -22,7 +21,7 @@ const MIN_PASSWORD_LENGTH = 8
  * submit is both the check and the change.
  */
 export default function ResetPassword() {
-  const { isAuthenticated, loading: sessionLoading } = useAuth()
+  const { isAuthenticated } = useAuth()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const toast = useToast()
@@ -60,7 +59,6 @@ export default function ResetPassword() {
     }
   }
 
-  if (sessionLoading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   if (isAuthenticated) return <Navigate to="/panel" replace />
 
   return (

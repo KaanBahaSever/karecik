@@ -25,9 +25,26 @@ func BadRequest(c *fiber.Ctx, message string) error {
 	return Fail(c, fiber.StatusBadRequest, "VALIDATION_ERROR", message)
 }
 
-// Unauthorized — 401: missing or invalid token.
+// Unauthorized — 401: the CREDENTIALS in this request were wrong.
+//
+// A wrong password on the login form, or the wrong current password when
+// changing it. The caller is asking a question and the answer is no; their
+// session, if they have one, is untouched.
 func Unauthorized(c *fiber.Ctx, message string) error {
 	return Fail(c, fiber.StatusUnauthorized, "UNAUTHORIZED", message)
+}
+
+// SessionExpired — 401: there is no usable SESSION behind this request.
+//
+// Same status as Unauthorized, deliberately different code, and the difference
+// matters to the client. Both are 401, so a browser that only looks at the
+// status cannot tell "you typed the wrong password" from "you are no longer
+// signed in" — and it has to, because the correct response to the first is to
+// show the error on the form and to the second is to clear the local session
+// and go to the login page. Redirecting on the first would throw a user out of
+// the panel for mistyping their own password.
+func SessionExpired(c *fiber.Ctx, message string) error {
+	return Fail(c, fiber.StatusUnauthorized, "SESSION_EXPIRED", message)
 }
 
 // Forbidden — 403: the record belongs to another business.

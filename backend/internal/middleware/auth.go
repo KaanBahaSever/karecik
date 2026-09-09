@@ -40,7 +40,7 @@ func Protected(store *session.Store, cfg *config.Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		raw := c.Cookies(utils.SessionCookieName)
 		if raw == "" {
-			return utils.Unauthorized(c, "Bu işlem için oturum açmanız gerekiyor.")
+			return utils.SessionExpired(c, "Bu işlem için oturum açmanız gerekiyor.")
 		}
 
 		// Hashed once and kept: ChangePassword needs this exact value to spare
@@ -53,7 +53,7 @@ func Protected(store *session.Store, cfg *config.Config) fiber.Handler {
 			// The cookie is cleared so the browser stops sending a value that
 			// can never work again.
 			ClearSessionCookie(c, cfg)
-			return utils.Unauthorized(c, "Oturumunuz sona ermiş, lütfen tekrar giriş yapın.")
+			return utils.SessionExpired(c, "Oturumunuz sona ermiş, lütfen tekrar giriş yapın.")
 		}
 
 		c.Locals(ctxUserID, entry.UserID)

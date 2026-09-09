@@ -3,7 +3,6 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './lib/auth.jsx'
 import { MenuProvider } from './lib/menuContext.jsx'
 import { getSubdomain } from './lib/subdomain'
-import Loading from './components/ui/Loading.jsx'
 
 import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
@@ -21,9 +20,14 @@ import { DEMO_BUSINESS_SLUG } from './lib/env'
 
 /** Guards routes that require an active session. */
 function ProtectedRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth()
-
-  if (loading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
+  // No loading gate. The account is read synchronously from localStorage, so
+  // there is no window in which the answer is unknown — the spinner that used
+  // to sit here was waiting on GET /api/auth/me, which no longer runs.
+  //
+  // A forged localStorage entry gets somebody the panel SHELL and nothing in
+  // it: every request inside 401s and the interceptor puts them back on the
+  // login page. This guard is a routing convenience, never the access check.
+  const { isAuthenticated } = useAuth()
   if (!isAuthenticated) return <Navigate to="/giris" replace />
   return children
 }

@@ -22,6 +22,8 @@
 //
 // NOTE: error messages are Turkish on purpose — they are shown to the user.
 
+import { clearStoredSession } from './session'
+
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
 /* --------------------------------------------------------------- error */
@@ -32,6 +34,68 @@ export class ApiError extends Error {
     this.name = 'ApiError'
     this.status = status
     this.code = code
+  }
+}
+
+/* ------------------------------------------------- expired-session hook */
+
+/*
+  WHY THIS KEYS ON A CODE AND NOT ON THE STATUS.
+
+  Two completely different things answer 401, and confusing them is a bug the
+  user feels immediately:
+
+    UNAUTHORIZED     the credentials in THIS request were wrong — a mistyped
+                     password on the login form, or the wrong current password
+                     when changing it. The form shows the message and the user
+                     tries again. Redirecting here would throw somebody out of
+                     the panel for a typo.
+
+    SESSION_EXPIRED  there is no usable session any more — it timed out, was
+                     revoked by a password change, or the server restarted
+                     (sessions live in its memory). Nothing the user types on
+                     the current screen can help; they have to sign in again.
+
+  The server distinguishes them, so this does too. Guessing from the request
+  path instead would break the moment a new endpoint returns either one.
+*/
+
+// Not "/login": this application's login route is Turkish, like every other
+// user-facing address in it. A redirect to /login would 404.
+const LOGIN_PATH = '/giris'
+
+let expiredHandler = null
+
+/**
+ * Registers what happens when a request finds the session gone.
+ *
+ * A single handler, not a list: there is exactly one right response and having
+ * two of them race to navigate would be worse than having none. Returns an
+ * unsubscribe so a remount replaces the handler instead of stacking on it.
+ */
+export function onSessionExpired(handler) {
+  expiredHandler = handler
+  return () => {
+    if (expiredHandler === handler) expiredHandler = null
+  }
+}
+
+function handleExpiredSession() {
+  // Cleared FIRST and unconditionally. Whatever happens to the navigation, the
+  // remembered account must not survive a request that proved it is stale —
+  // otherwise the next load draws a panel for somebody who is signed out.
+  clearStoredSession()
+
+  if (expiredHandler) {
+    expiredHandler()
+    return
+  }
+
+  // No React on the other end (an early call, or a teardown in progress).
+  // A hard navigation is the honest fallback: it throws away every piece of
+  // in-memory state belonging to the session that just ended.
+  if (typeof window !== 'undefined' && window.location.pathname !== LOGIN_PATH) {
+    window.location.assign(LOGIN_PATH)
   }
 }
 
@@ -78,9 +142,15 @@ async function request(path, { method = 'GET', body, isForm = false } = {}) {
 
   if (!response.ok) {
     const message = data?.error || `Beklenmeyen bir hata oluştu (${response.status}).`
-    // Nothing to clear on a 401 any more: the cookie is HttpOnly, and the server
-    // already expires it when it refuses the session. The auth context notices
-    // the 401 and sends the user to the login screen.
+
+    // One place, so every caller gets it: no endpoint has to remember to check,
+    // and a new one cannot forget to. The error is still thrown afterwards —
+    // the caller may want to stop a spinner or leave a message on screen, and
+    // swallowing it here would strand them mid-operation.
+    if (response.status === 401 && data?.code === 'SESSION_EXPIRED') {
+      handleExpiredSession()
+    }
+
     throw new ApiError(message, response.status, data?.code)
   }
 
@@ -119,7 +189,22 @@ export const api = {
       method: 'POST',
       body: { current_password: currentPassword, new_password: newPassword },
     }),
-  me: () => request('/api/auth/me'),
+
+  // There is deliberately no me() here.
+  //
+  // It used to run on every page load to answer "am I signed in?", which put an
+  // authenticated round trip in front of the landing page and, worse, in front
+  // of every customer menu — pages opened by strangers who have no session and
+  // never will. Measured before this change: the landing page's ONLY API call
+  // was /api/auth/me, and a QR menu made one alongside the menu fetch.
+  //
+  // The panel now remembers the account locally (lib/session.js) and finds out
+  // it is wrong the same way it would have anyway: the first protected request
+  // comes back 401 with SESSION_EXPIRED and the interceptor above acts on it.
+  //
+  // The server still serves GET /api/auth/me — it is a useful "is this session
+  // live?" probe and the backend suite uses it as one. Nothing in the browser
+  // should call it.
 
   /* business (the slim account record — every setting lives on a menu) */
   getBusiness: () => request('/api/business'),

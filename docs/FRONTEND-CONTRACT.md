@@ -91,7 +91,7 @@ PublicMenu = {
 ```js
 import { useAuth } from '../lib/auth.jsx'
 
-const { user, business, loading, isAuthenticated,
+const { user, business, isAuthenticated,
         login, register, logout, saveBusiness, refreshBusiness } = useAuth()
 ```
 
@@ -100,6 +100,28 @@ const { user, business, loading, isAuthenticated,
 - `saveBusiness(payload)` calls `api.updateBusiness` **and refreshes the
   context**. Anything that changes business settings must use it, because the
   live preview reads from there.
+
+### There is no `loading`
+
+The account is read synchronously from `localStorage` (`krc_user`) during the
+first render, so there is no window in which the answer is unknown and nothing
+to put a spinner over. `loading` was removed rather than left permanently
+false — a flag that is always one value is a trap for the next reader.
+
+### It is optimistic, not verified
+
+`isAuthenticated` means "this browser remembers signing in", not "the server
+agrees". Nothing here is an access check: the session is an HttpOnly cookie
+only the server can read, and it decides every request on its own.
+
+A forged `krc_user` therefore buys somebody the panel **shell** in their own
+browser and nothing inside it — every request 401s with `SESSION_EXPIRED`, the
+interceptor in `lib/api.js` clears the key, and they land on `/giris`.
+
+**Public pages must never trigger an auth call.** The landing page, `/demo` and
+every customer menu route make zero requests to `/api/auth/*`; a QR menu opened
+by a stranger makes exactly one call, for the menu. If you add a hook that
+verifies the session, put it inside the panel, not above the router.
 
 ---
 

@@ -4,7 +4,6 @@ import { MailCheck } from 'lucide-react'
 
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth.jsx'
-import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
 
 /**
@@ -18,7 +17,7 @@ import { BrandLockup } from '../components/ui/Logo.jsx'
  * very thing the server is careful not to.
  */
 export default function ForgotPassword() {
-  const { isAuthenticated, loading: sessionLoading } = useAuth()
+  const { isAuthenticated } = useAuth()
 
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -49,7 +48,6 @@ export default function ForgotPassword() {
     }
   }
 
-  if (sessionLoading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   // Already signed in: there is nothing to recover.
   if (isAuthenticated) return <Navigate to="/panel" replace />
 

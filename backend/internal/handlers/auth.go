@@ -179,7 +179,7 @@ func (h *Handler) Me(c *fiber.Ctx) error {
 	user, err := repository.GetUserByID(c.Context(), h.DB, middleware.UserID(c))
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return utils.Unauthorized(c, "Oturum bulunamadı, lütfen tekrar giriş yapın.")
+			return utils.SessionExpired(c, "Oturum bulunamadı, lütfen tekrar giriş yapın.")
 		}
 		return utils.Internal(c, err)
 	}
@@ -245,7 +245,7 @@ func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 	user, err := repository.GetUserByID(c.Context(), h.DB, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return utils.Unauthorized(c, "Oturum bulunamadı, lütfen tekrar giriş yapın.")
+			return utils.SessionExpired(c, "Oturum bulunamadı, lütfen tekrar giriş yapın.")
 		}
 		return utils.Internal(c, err)
 	}

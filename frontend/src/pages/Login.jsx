@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 
 import { useAuth } from '../lib/auth.jsx'
 import { useToast } from '../components/ui/Toast.jsx'
-import Loading from '../components/ui/Loading.jsx'
 import { BrandLockup } from '../components/ui/Logo.jsx'
 
 /* This page used to print a working e-mail and password, with a button that
@@ -24,8 +23,14 @@ function BrandLogo() {
 }
 
 export default function Login() {
-  const { isAuthenticated, loading: sessionLoading, login } = useAuth()
+  const { isAuthenticated, login } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  // Set by the expired-session interceptor in lib/auth.jsx. Without it the
+  // panel simply vanishes mid-click and reappears as a login form, which
+  // reads as a crash rather than as a session ending.
+  const expired = Boolean(location.state?.expired)
   const toast = useToast()
 
   const [email, setEmail] = useState('')
@@ -57,8 +62,6 @@ export default function Login() {
     }
   }
 
-  // Hide the form while the session is being verified, to avoid a flash.
-  if (sessionLoading) return <Loading fullScreen text="Oturum kontrol ediliyor..." />
   if (isAuthenticated) return <Navigate to="/panel" replace />
 
   return (
@@ -71,6 +74,12 @@ export default function Login() {
         <div className="rounded-2xl border border-gray-200 p-6 sm:p-8">
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">Tekrar hoş geldiniz</h1>
           <p className="mt-1.5 text-sm text-gray-500">Menünüzü yönetmek için giriş yapın.</p>
+
+          {expired && !error ? (
+            <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Oturumunuz sona erdi. Lütfen tekrar giriş yapın.
+            </div>
+          ) : null}
 
           {error ? (
             <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
