@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
+	"karecik/backend/internal/clientip"
 	"karecik/backend/internal/config"
 	"karecik/backend/internal/handlers"
 	"karecik/backend/internal/middleware"
@@ -27,9 +28,32 @@ import (
 //  3. static files and the SPA fallback (last)
 func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Use(recover.New())
+
+	// Resolve the visitor's address ONCE, before anything reads it.
+	//
+	// Registered ahead of the logger and the limiter on purpose: all three
+	// used to reach for c.IP(), which returns the TCP peer, and behind
+	// Railway's edge that peer is an internal proxy address identical for
+	// every visitor. The log recorded it, the limiter keyed on it, and the
+	// login handler stored it on the session — three different lies about
+	// the same request.
+	resolver := clientip.Resolver{
+		SecretHeader:   cfg.EdgeSecretHeader,
+		Secret:         cfg.EdgeSecret,
+		PortHeader:     cfg.ClientPortHeader,
+		TrustForwarded: cfg.TrustForwardedFor,
+	}
+	app.Use(middleware.ClientAddr(resolver))
 	app.Use(logger.New(logger.Config{
-		Format:     "[karecik] ${time} ${status} ${method} ${path} (${latency})\n",
+		// One line per request, carrying the address, the source port and — the
+		// part that stops the line being taken on faith — HOW the address was
+		// established. A second log.Printf middleware would double the volume
+		// in the platform's log viewer and split one event across two entries;
+		// middleware.LogClientAddr exists for anyone who wants that instead.
+		Format: "[karecik] ${time} ${status} ${method} ${path} " +
+			"ip=${clientIP} port=${clientPort} src=${clientSource} (${latency})\n",
 		TimeFormat: "15:04:05",
+		CustomTags: middleware.LoggerTags(),
 	}))
 
 	// Only AllowOriginsFunc is passed: isAllowedOrigin checks cfg.CORSOrigins
@@ -76,7 +100,10 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 		return utils.Fail(c, fiber.StatusTooManyRequests, "RATE_LIMITED",
 			"Çok fazla deneme yaptınız. Lütfen bir süre sonra tekrar deneyin.")
 	}
-	byIP := func(c *fiber.Ctx) string { return c.IP() }
+	// NOT c.IP(). See middleware.ClientIPKey: the peer is the same for every
+	// visitor here, so keying on it turns a per-client limit into one global
+	// bucket — two password-reset requests an hour would lock out the world.
+	byIP := middleware.ClientIPKey
 
 	// /forgot-password SENDS MAIL, and the provider's free tier allows 100
 	// messages a day. Two an hour per host is the tightest budget a real

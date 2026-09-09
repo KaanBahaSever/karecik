@@ -207,6 +207,56 @@ Belleğe taşımanın üç sonucu — üçü de operasyonel:
 
 ---
 
+## Ziyaretçi IP'si ve kaynak portu (denetim log'u)
+
+Her istek tek satır log basıyor:
+
+```
+[karecik] 20:27:25 200 GET /api/health ip=203.0.113.9 port=44321 src=cloudflare (1.2ms)
+```
+
+`src` alanı satırın **ne kadar kanıt olduğunu** söylüyor ve bu yüzden var:
+
+| `src` | Anlamı | Port var mı |
+|---|---|---|
+| `cloudflare` | `EDGE_SECRET` eşleşti, istek gerçekten Cloudflare'dan geldi | ✅ |
+| `cloudflare-unverified` | `CF-Connecting-IP` var ama kanıt yok — origin'e doğrudan ulaşan biri de bu başlığı yazabilir | ❌ |
+| `edge` | Railway'in `X-Real-IP` başlığı. Turuncu bulut arkasındaki bir isimde bu **Cloudflare'ın adresi**, ziyaretçinin değil | ❌ |
+| `peer` / `unknown` | TCP karşı ucu ya da hiçbir şey. Railway arkasında bu, herkes için aynı iç adres | — |
+
+### Şu anki kurulumunuz karışık
+
+Ölçtüm:
+
+| Ad | Durum | Sonuç |
+|---|---|---|
+| `karecik.com` | **Gri bulut** — doğrudan Railway | CF başlığı yok, port **imkânsız** |
+| `www.karecik.com` | Turuncu bulut | CF başlıkları var |
+| `{kiracı}.karecik.com` | Turuncu bulut | CF başlıkları var |
+
+Panel ve giriş apex'te olduğu için, **kimliği doğrulanmış trafiğin tamamı** şu an port bilgisi olmadan loglanıyor. CGNAT altında atıf istiyorsanız apex'i de turuncu buluta almanız gerekiyor.
+
+### Portu görünür yapmak
+
+Ne Railway ne de Cloudflare kaynak portu varsayılan olarak iletiyor. Cloudflare'da **Rules → Transform Rules → Modify Request Header**, tüm istekler için iki satır:
+
+| Başlık | Tip | Değer |
+|---|---|---|
+| `X-Client-Port` | Expression | `to_string(cf.edge.client_port)` |
+| `X-Edge-Secret` | Static | uzun rastgele bir değer |
+
+`to_string(...)` şart — alan tamsayı, başlık değeri string olmalı. Aynı gizli değeri Railway'de `EDGE_SECRET` olarak girin.
+
+`EDGE_SECRET` yalnızca portu açmıyor; **kanıt katmanı** o. Railway'de origin doğrudan erişilebilir (`*.up.railway.app`), yani onsuz `CF-Connecting-IP` taklit edilebilir. Cloudflare IP aralığı kontrolü burada işe yaramıyor (TCP karşı ucu hep Railway'in proxy'si) ve Authenticated Origin Pulls de yaramıyor (TLS'i Railway sonlandırıyor). Geriye paylaşılan gizli başlık kalıyor.
+
+### Yanında düzeltilen hata
+
+Limiter ve oturum audit alanı Fiber'ın `c.IP()`'sini kullanıyordu. `ProxyHeader` ayarlı olmadığı için o fonksiyon **TCP karşı ucunu** döndürüyor — Railway arkasında her ziyaretçi için aynı iç adres. Yani "IP başına saatte 2 istek" aslında "dünyada saatte 2 istek" demekti: şifre sıfırlama formunu ilk kullanan iki kişi diğer herkesi kilitliyordu.
+
+Artık limiter `X-Real-IP`'ye anahtarlanıyor (`EDGE_SECRET` varsa doğrulanmış ziyaretçi adresine). Log'a yazılan adres ile limiter anahtarı **ayrı alanlar**: log en iyi tahmini gösteriyor, limiter yalnızca çağıranın seçemediği bir değeri kullanıyor.
+
+---
+
 ## Şifre sıfırlama e-postası (Resend)
 
 "Şifremi unuttum" akışı e-posta gönderimi gerektiriyor. **SMTP kullanılmıyor:**

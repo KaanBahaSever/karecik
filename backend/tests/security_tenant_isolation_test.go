@@ -292,6 +292,15 @@ func dropScratchDatabase(t *testing.T, admin *pgxpool.Pool, name string) {
 // both the status and the payload.
 func (h *harness) do(method, path, session string, body any) (*http.Response, []byte) {
 	h.t.Helper()
+	return h.doWith(method, path, session, body, nil)
+}
+
+// doWith is do with extra request headers — for suites that need to arrive as a
+// particular client (see client_ip_test.go), rather than as the one fake peer
+// app.Test gives every request.
+func (h *harness) doWith(method, path, session string, body any,
+	extra map[string]string) (*http.Response, []byte) {
+	h.t.Helper()
 
 	var reader io.Reader
 	if body != nil {
@@ -311,6 +320,9 @@ func (h *harness) do(method, path, session string, body any) (*http.Response, []
 	// request takes, including the cookie name.
 	if session != "" {
 		req.AddCookie(&http.Cookie{Name: utils.SessionCookieName, Value: session})
+	}
+	for key, value := range extra {
+		req.Header.Set(key, value)
 	}
 
 	resp, err := h.app.Test(req, requestTimeoutMS)

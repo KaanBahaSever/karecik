@@ -64,8 +64,12 @@ func (h *Handler) startSession(c *fiber.Ctx, userID, businessID uuid.UUID) error
 		BusinessID: businessID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
-		IPAddress:  c.IP(),
-		UserAgent:  c.Get("User-Agent"),
+		// NOT c.IP(): behind the platform edge that is an internal proxy
+		// address, the same one for every visitor, which would make this
+		// field record where the request was relayed from rather than where
+		// it came from — an audit column that is identical on every row.
+		IPAddress: middleware.ClientAddrOf(c).IP,
+		UserAgent: c.Get("User-Agent"),
 	})
 
 	middleware.SetSessionCookie(c, h.Cfg, token, expiresAt)
