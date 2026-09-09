@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import api from '../../lib/api'
@@ -8,6 +8,112 @@ import Loading from '../../components/ui/Loading.jsx'
 import MenuContent from '../../components/menu/MenuContent.jsx'
 import MenuDirectory from '../../components/menu/MenuDirectory.jsx'
 import SplashScreen from '../../components/menu/SplashScreen.jsx'
+
+/**
+ * How long the splash may wait for the menu's hero images before giving up.
+ *
+ * There has to be a cap. A logo hosted on someone else's slow server — this
+ * menu's is — would otherwise hold the curtain shut indefinitely, turning a
+ * polish feature into a broken site. Two seconds is past the point where
+ * waiting still feels like loading and starts to feel like nothing happened.
+ */
+const HERO_IMAGE_CAP_MS = 2000
+
+/**
+ * sessionStorage key for "this visitor has already seen this menu's splash".
+ *
+ * BOTH segments are in the key. Menu slugs are unique only within a business,
+ * so keying on the menu slug alone would let one tenant's visit suppress
+ * another tenant's splash screen.
+ */
+function splashKey(business, businessSlug, menuSlug) {
+  const tenant = business?.business_slug || businessSlug
+  return `karecik_splash_${tenant}_${business?.menu_slug || menuSlug}`
+}
+
+/**
+ * Whether the splash should open, answered SYNCHRONOUSLY from the menu payload.
+ *
+ * Everything it needs is already in hand the moment the fetch resolves, which
+ * is what lets the caller decide during render instead of in an effect. It only
+ * reads storage; the matching write lives in an effect, because a render must
+ * not have side effects.
+ */
+function shouldOpenSplash(menu, embedded, businessSlug, menuSlug) {
+  // The dashboard's live preview drives SplashScreen itself, with its own
+  // replay button; a second one opening here would fight it.
+  if (embedded) return false
+  if (!menu?.business?.splash_enabled) return false
+  // The directory is a list of menus, not a menu. Nothing to introduce.
+  if (menu.menu_resolved === false) return false
+
+  try {
+    return !sessionStorage.getItem(splashKey(menu.business, businessSlug, menuSlug))
+  } catch {
+    // Private windows can refuse storage entirely. Showing the splash once per
+    // load is the better failure than never showing it at all.
+    return true
+  }
+}
+
+/**
+ * True once every listed image has settled — loaded OR failed — or the cap ran
+ * out. Never blocks on the outcome, only on the wait being over.
+ *
+ * A failed image counts as ready on purpose: a broken URL is a permanent state,
+ * and holding the splash for something that is never going to arrive would
+ * punish the visitor for the owner's bad link.
+ *
+ * The effect keys on the joined URL string rather than the array, because a new
+ * array identity on every render would restart the loads forever.
+ */
+function useImagesReady(urls, capMs) {
+  const key = urls.join('|')
+  const [readyFor, setReadyFor] = useState(null)
+
+  useEffect(() => {
+    if (!key) {
+      setReadyFor(key)
+      return undefined
+    }
+
+    let live = true
+    let pending = urls.length
+    const finish = () => {
+      if (live) {
+        live = false
+        setReadyFor(key)
+      }
+    }
+
+    const timer = setTimeout(finish, capMs)
+    const loaders = urls.map((src) => {
+      const image = new Image()
+      const settle = () => {
+        pending -= 1
+        if (pending <= 0) finish()
+      }
+      image.onload = settle
+      image.onerror = settle
+      image.src = src
+      return image
+    })
+
+    return () => {
+      live = false
+      clearTimeout(timer)
+      // Drop the handlers rather than the requests: the browser keeps the
+      // downloads warm in its cache, which is the point of preloading them.
+      loaders.forEach((image) => {
+        image.onload = null
+        image.onerror = null
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` IS `urls`
+  }, [key, capMs])
+
+  return readyFor === key
+}
 
 /**
  * The customer menu opened by scanning a QR code.
@@ -55,12 +161,59 @@ export default function CustomerMenu({
   const [menu, setMenu] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [showSplash, setShowSplash] = useState(false)
 
-  // Keeps the splash screen from replaying when the language changes.
-  const splashShown = useRef(false)
+  /* ---------------------------------------------------------- splash state */
+  /*
+    DECIDED DURING RENDER, NEVER IN AN EFFECT. This is the whole fix for the
+    opening flash, so it is worth being precise about why.
+
+    An effect runs AFTER React has committed the DOM, and the browser is free to
+    paint in between. Turning the splash on from an effect therefore produced
+    this sequence: the fetch resolves -> the menu renders -> the browser paints
+    the bare menu -> the effect finally runs -> the splash slams down on top.
+
+    On a fast desktop React usually flushes the effect before the paint, so the
+    bug is invisible there — which is exactly why it survived. It is a RACE, and
+    a phone loses it. Measured on this menu with the CPU throttled:
+
+        4x   menu painted at 302ms, splash at 431ms    ->  129ms bare
+        10x  menu painted at 657ms, splash at 1063ms   ->  406ms bare
+        20x  menu painted at 1315ms, splash at 2530ms  -> 1215ms bare
+
+    Adjusting state during render is React's own answer to "derive state from
+    something you just received": React discards the in-progress render and
+    re-runs the component immediately with the new state, before anything
+    reaches the screen. There is no frame in between to leak the menu.
+
+    `decided` is what stops the splash replaying. The menu object is refetched
+    whenever the visitor switches language, and a new object identity must not
+    reopen a screen they have already dismissed.
+  */
+  const [splash, setSplash] = useState({ decided: false, open: false })
+
+  if (menu && !splash.decided) {
+    setSplash({ decided: true, open: shouldOpenSplash(menu, embedded, businessSlug, menuSlug) })
+  }
 
   const activeLanguage = selectedLanguage || menu?.business?.default_language || 'tr'
+
+  /* The images the splash is covering for. Waiting on these is what makes the
+     handover a reveal rather than a second flash — see useImagesReady. Product
+     photographs are deliberately absent: they are below the fold and lazy, and
+     blocking on them would hold the curtain for a screenful nobody has scrolled
+     to yet. */
+  const heroImages = useMemo(() => {
+    const business = menu?.business
+    if (!business) return []
+    return [
+      business.splash_logo_url,
+      business.logo_url,
+      business.cover_url,
+      business.background_image_url,
+    ].filter(Boolean)
+  }, [menu])
+
+  const heroReady = useImagesReady(heroImages, HERO_IMAGE_CAP_MS)
 
   /* ------------------------------------------------------------ load menu */
   useEffect(() => {
@@ -160,29 +313,18 @@ export default function CustomerMenu({
     }
   }, [embedded])
 
-  /* ---------------------------------------------------------- splash screen */
+  /* ------------------------------------------- remember the splash was shown */
+  /* The decision above only READS sessionStorage, which a render may do — it is
+     external state, like a media query. The WRITE belongs here: a render must
+     not have side effects, and React may run one and throw it away. */
   useEffect(() => {
-    if (embedded || !menu?.business?.splash_enabled) return
-    if (splashShown.current) return
-
-    // Both segments are in the key: menu slugs repeat across businesses, so a
-    // menu slug on its own would let one tenant suppress another tenant's
-    // splash screen.
-    const tenantKey = menu.business.business_slug || businessSlug
-    const key = `karecik_splash_${tenantKey}_${menu.business.menu_slug || menuSlug}`
+    if (!splash.open) return
     try {
-      if (sessionStorage.getItem(key)) {
-        splashShown.current = true
-        return
-      }
-      sessionStorage.setItem(key, '1')
+      sessionStorage.setItem(splashKey(menu?.business, businessSlug, menuSlug), '1')
     } catch {
-      /* sessionStorage may be disabled in private windows — show it once anyway */
+      /* private windows can refuse storage; the splash simply shows again */
     }
-
-    splashShown.current = true
-    setShowSplash(true)
-  }, [menu, embedded, businessSlug, menuSlug])
+  }, [splash.open, menu, businessSlug, menuSlug])
 
   /* -------------------------------------------------------------- tab title */
   useEffect(() => {
@@ -248,8 +390,17 @@ export default function CustomerMenu({
 
   const content = (
     <>
-      {showSplash ? (
-        <SplashScreen business={menu.business} onDone={() => setShowSplash(false)} />
+      {/* MenuContent is rendered UNDERNEATH this, not instead of it, and that is
+          deliberate: the menu lays out and its images decode while the splash
+          holds, so lifting the curtain reveals a finished screen instead of
+          starting the work. `ready` is what closes the loop — the exit waits
+          for those images, capped, so a slow logo cannot strand the visitor. */}
+      {splash.open ? (
+        <SplashScreen
+          business={menu.business}
+          ready={heroReady}
+          onDone={() => setSplash({ decided: true, open: false })}
+        />
       ) : null}
 
       {/* A URL that names a menu is a request for that one menu, so the in-menu

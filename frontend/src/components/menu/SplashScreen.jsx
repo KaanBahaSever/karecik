@@ -13,13 +13,20 @@ import { DEFAULT_SPLASH_EXIT, SPLASH_DISPLAY_MODES, isValidSplashEasing } from '
  * Two components render it:
  *   1. pages/menu/CustomerMenu.jsx            — the real menu behind a QR code
  *   2. components/dashboard/LivePreview.jsx   — the dashboard "Replay" button
- * The prop signature is therefore FIXED; do not change it.
+ * The prop signature is therefore fixed for both callers: existing props may not
+ * change meaning, and anything added has to default to the old behaviour so the
+ * caller that does not pass it is unaffected. `ready` is such an addition —
+ * LivePreview omits it, gets `true`, and behaves exactly as before.
  *
  * @param {object}   business  - PublicMenu.business (logo_url, name, splash_*)
  * @param {function} onDone    - Called once the exit animation has finished
  * @param {number}   replayKey - Changing it while mounted restarts the sequence
  * @param {boolean}  contained - Position inside the nearest positioned ancestor
  *                               (the dashboard phone frame) instead of the viewport
+ * @param {boolean}  ready     - Whether what is BEHIND the splash is ready to be
+ *                               revealed. The exit waits for it, but never
+ *                               starts earlier than splash_duration and never
+ *                               later than the caller's own cap. Default true.
  */
 
 /* A very short, one-off opening animation — no library involved. */
@@ -141,7 +148,13 @@ function readableTextColor(background) {
   return luminance > 0.6 ? '#111827' : '#ffffff'
 }
 
-export default function SplashScreen({ business, onDone, replayKey = 0, contained = false }) {
+export default function SplashScreen({
+  business,
+  onDone,
+  replayKey = 0,
+  contained = false,
+  ready = true,
+}) {
   const background = business?.splash_bg_color || '#0f172a'
   const textColor = readableTextColor(background)
   const isDarkText = textColor === '#111827'
@@ -212,6 +225,17 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
   // The splash logo is optional; without it the regular business logo is used.
   const logoUrl = business?.splash_logo_url || business?.logo_url || ''
 
+  // The sequence is two gates rather than one timer, so that the screen can
+  // wait for something without ever waiting forever:
+  //
+  //   held    the minimum hold (splash_duration) has elapsed
+  //   ready   the caller says what is behind the curtain is worth revealing
+  //
+  // The exit begins at max(hold, ready) — the hold is a floor, not a ceiling.
+  // Timing the exit from readiness instead would add the full hold on top of a
+  // slow load, which is the opposite of what waiting is for.
+  const [held, setHeld] = useState(false)
+
   // false while the screen holds, true once the exit animation is running.
   const [exiting, setExiting] = useState(false)
 
@@ -224,18 +248,25 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
   // The dashboard "Replay" button bumps replayKey while the screen is mounted;
   // that rewinds the sequence back to the hold phase.
   useEffect(() => {
+    setHeld(false)
     setExiting(false)
   }, [replayKey])
 
-  // 1) hold, then start the exit animation
+  // 1) serve the minimum hold
   useEffect(() => {
     if (exiting) return undefined
 
-    const timer = setTimeout(() => setExiting(true), duration)
+    const timer = setTimeout(() => setHeld(true), duration)
     return () => clearTimeout(timer)
   }, [exiting, duration, replayKey])
 
-  // 2) let the exit animation finish before handing the menu over
+  // 2) leave once BOTH gates are open
+  useEffect(() => {
+    if (exiting || !held || !ready) return
+    setExiting(true)
+  }, [exiting, held, ready])
+
+  // 3) let the exit animation finish before handing the menu over
   useEffect(() => {
     if (!exiting) return undefined
 
@@ -243,6 +274,9 @@ export default function SplashScreen({ business, onDone, replayKey = 0, containe
     return () => clearTimeout(timer)
   }, [exiting, exitDuration])
 
+  // A tap goes straight to the exit, past BOTH gates. Someone who has tapped
+  // the screen has told us they are done looking at it; making them wait for a
+  // logo to finish downloading would be answering a different question.
   function skip() {
     setExiting(true)
   }
