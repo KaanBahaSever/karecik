@@ -88,7 +88,9 @@ PublicMenu = {
 > **A category's icon and image are optional.** Either may be `null`, empty or
 > unusable — a legacy icon code such as `"coffee"`, a whitespace-only string, an
 > image URL that no longer loads. The customer menu draws the first one that
-> works, in this order: **image → emoji → 🍽️**. `src/lib/category.js` decides
+> works, in this order: **image → emoji → nothing**. A category with neither is
+> a name-only card: there is no placeholder glyph, because an owner who chose
+> no picture asked for none. `src/lib/category.js` decides
 > what counts as usable (`categoryImageUrl`, `categoryEmoji`), and
 > `normalizeCategories` hands the menu one shape it can render without guards.
 >

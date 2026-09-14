@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, Copy, Eye, EyeOff, Search, Star, Wifi } from 'lucide-react'
 
 import { normalizeCategories } from '../../lib/category'
@@ -168,8 +168,9 @@ function productKey(product, index) {
  * not render: the record's name as plain text on the card surface.
  *
  * The name arrives already extracted as a string, so nothing in here can throw
- * a second time — a boundary cannot catch an error in its own fallback. With no
- * name at all nothing is drawn rather than an empty box; the error itself is in
+ * a second time — a boundary cannot catch an error in its own fallback. A record
+ * with no usable name is handed a neutral "cannot be shown" line by its caller,
+ * so a failure never leaves a silent gap in the list; the error itself is in
  * the console.
  */
 function RecordFallback({ text, centered = false }) {
@@ -187,6 +188,70 @@ function RecordFallback({ text, centered = false }) {
       }}
     >
       {text}
+    </div>
+  )
+}
+
+/**
+ * The row of category chips above a product listing.
+ *
+ * It lives at module level for the same reason CategoryThumb does, and here the
+ * cost of getting that wrong was measurable: declared inside MenuContent's
+ * render it was a new component type on every render, so tapping a chip
+ * remounted the whole row, its scroll position went back to the start, and the
+ * chip just tapped slid out of view.
+ *
+ * The selected chip is also brought into view when it starts off-screen, which
+ * is what opening a category from the far end of the grid needs. Only the
+ * strip's own scrollLeft moves: scrollIntoView would scroll the page too, and in
+ * the dashboard preview the dashboard window along with it.
+ */
+function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
+  const stripRef = useRef(null)
+  const selectedRef = useRef(null)
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current
+    const chip = selectedRef.current
+    if (!strip || !chip) return
+
+    const stripBox = strip.getBoundingClientRect()
+    const chipBox = chip.getBoundingClientRect()
+    if (chipBox.left >= stripBox.left && chipBox.right <= stripBox.right) return
+
+    // The boxes are in screen pixels and scrollLeft is in CSS pixels. They
+    // differ inside the dashboard preview, which scales the phone down.
+    const scale = strip.offsetWidth > 0 ? stripBox.width / strip.offsetWidth : 1
+    const offset = chipBox.left + chipBox.width / 2 - (stripBox.left + stripBox.width / 2)
+    strip.scrollLeft += offset / (scale || 1)
+  }, [selected])
+
+  return (
+    <div ref={stripRef} className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
+      {categories.map((category) => {
+        const isSelected = category === selected
+        return (
+          <button
+            key={category.key}
+            ref={isSelected ? selectedRef : undefined}
+            type="button"
+            onClick={() => onSelect(category)}
+            className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm"
+            style={
+              isSelected
+                ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
+                : {
+                    backgroundColor: 'var(--menu-surface)',
+                    color: 'var(--menu-text)',
+                    border: '1px solid var(--menu-border)',
+                  }
+            }
+          >
+            {category.emoji ? `${category.emoji} ` : ''}
+            {category.name}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -605,7 +670,9 @@ export default function MenuContent({
       <ErrorBoundary
         key={key}
         resetKeys={[product]}
-        fallback={<RecordFallback text={plainText(product.name)} />}
+        fallback={
+          <RecordFallback text={plainText(product.name) || t('itemUnavailable', language)} />
+        }
       >
         <ProductRow
           product={product}
@@ -616,36 +683,6 @@ export default function MenuContent({
           onSelect={setSelectedProduct}
         />
       </ErrorBoundary>
-    )
-  }
-
-  function CategoryStrip() {
-    return (
-      <div className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
-        {categories.map((category) => {
-          const isSelected = category === selectedCategory
-          return (
-            <button
-              key={category.key}
-              type="button"
-              onClick={() => openCategory(category)}
-              className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm"
-              style={
-                isSelected
-                  ? { backgroundColor: 'var(--menu-primary)', color: onAccentText }
-                  : {
-                      backgroundColor: 'var(--menu-surface)',
-                      color: 'var(--menu-text)',
-                      border: '1px solid var(--menu-border)',
-                    }
-              }
-            >
-              {category.emoji ? `${category.emoji} ` : ''}
-              {category.name}
-            </button>
-          )
-        })}
-      </div>
     )
   }
 
@@ -987,7 +1024,12 @@ export default function MenuContent({
                 </h2>
               </div>
 
-              <CategoryStrip />
+              <CategoryStrip
+                categories={categories}
+                selected={selectedCategory}
+                onSelect={openCategory}
+                onAccentText={onAccentText}
+              />
 
               {selectedCategory.description ? (
                 <p className="mb-3 text-xs" style={{ color: 'var(--menu-muted)' }}>
@@ -1023,7 +1065,7 @@ export default function MenuContent({
                   <button
                     type="button"
                     onClick={() => openCategory(category)}
-                    className="flex flex-col overflow-hidden text-center"
+                    className="flex min-h-[4rem] flex-col overflow-hidden text-center"
                     style={{
                       backgroundColor: 'var(--menu-surface)',
                       border: '1px solid var(--menu-border)',
@@ -1032,22 +1074,31 @@ export default function MenuContent({
                       opacity: category.is_active === false ? 0.5 : 1,
                     }}
                   >
-                    {/* Image, then emoji, then 🍽️ — chosen inside, where the
-                        image's load failure is tracked. */}
+                    {/* Image, else emoji, else nothing at all: a category may
+                        have no visual, and then the card is simply its name.
+                        CategoryThumb makes the choice, because that is where
+                        an image's load failure is tracked. */}
                     <CategoryThumb
                       imageUrl={category.imageUrl}
                       emoji={category.emoji}
                       className={embedded ? 'h-20' : 'h-24'}
                     />
 
-                    {/* The name alone, centred under the visual; there is no
-                        product count any more. It may take two lines, and a
-                        long word breaks inside the card instead of pushing out
-                        of it: `overflow-wrap: anywhere` where the engine knows
-                        that value, `break-words` where it does not. */}
-                    <div className="px-3 py-2.5">
+                    {/* The name, centred; there is no product count any more.
+                        It may take two lines, and a long word breaks inside the
+                        card instead of pushing out of it: `overflow-wrap:
+                        anywhere` where the engine knows that value,
+                        `break-words` where it does not.
+
+                        The block grows to fill the card and centres the name
+                        vertically too. The grid stretches every card in a row
+                        to the tallest one, so a name-only card beside a card
+                        with a picture keeps its name in the middle instead of
+                        pinned to the top, and min-h keeps a row of name-only
+                        cards from collapsing into thin strips. */}
+                    <div className="flex flex-1 items-center justify-center px-3 py-2.5">
                       <p
-                        className="break-words text-sm font-medium"
+                        className="w-full min-w-0 break-words text-sm font-medium"
                         style={{
                           ...TWO_LINES,
                           overflowWrap: 'anywhere',

@@ -369,7 +369,7 @@ export default function BulkPriceModal({
         <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
           <p className="text-sm leading-snug text-blue-800">
-            Fiyat güncellemesinden sonra menünüzdeki “Fiyatlarımız … tarihinden itibaren
+            En az bir fiyat değişirse menünüzdeki “Fiyatlarımız … tarihinden itibaren
             geçerlidir” ibaresi otomatik olarak bugüne güncellenir.
           </p>
         </div>

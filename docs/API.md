@@ -526,6 +526,14 @@ never in the server's own time zone, so a price changed at 01:30 Istanbul time
 names that day and not the previous one. The server binary embeds its own copy
 of the zone database, so this does not depend on the host having one installed.
 
+A successful (`200`) answer from either public endpoint carries
+`Cache-Control: no-cache` and an `ETag`. The browser may keep its copy but has
+to ask before reusing it: an unchanged menu comes back as `304 Not Modified`
+with no body, and a changed one as a full `200` — so a category or a price saved
+in the dashboard shows up on the very next load of the customer menu. (It used
+to be `public, max-age=60`, which let a browser show a menu up to a minute old
+without asking.) A `404` for an unknown business or menu carries neither header.
+
 ### `GET /api/preview/menu` 🔒
 
 Backs the **live preview** in the dashboard. It returns exactly the same body as

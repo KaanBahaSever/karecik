@@ -269,7 +269,7 @@ save), the inline quick edit (`PATCH /api/products/:id/price`) and the bulk
 update therefore all follow one rule, and a bulk apply that changes no price
 leaves the date alone.
 
-Two details keep the trigger cheap and its locking in one order everywhere:
+Two details keep the trigger cheap and its lock order predictable:
 
 - `now()` is constant inside a transaction, and the function only writes a menu
   whose date is not already `now()`. An N-row bulk `UPDATE` writes the menu row
@@ -280,6 +280,15 @@ Two details keep the trigger cheap and its locking in one order everywhere:
   the order a single-product edit uses. A loop inside one transaction would lock
   the menu after its first product and could deadlock against a concurrent
   inline edit of a later one.
+
+One path still takes the two locks the other way round: deleting a menu locks
+the menu row first and reaches its products only through the cascade. A price
+edit in that same menu at the same instant can therefore deadlock with the
+delete. PostgreSQL detects the cycle (after `deadlock_timeout`, one second by
+default) and aborts one of the two statements, which the API reports as a 500;
+the other completes. It takes an owner deleting a menu while a price in it is
+being saved, so the delete is left simple rather than made to lock products
+first.
 
 The footer formats the date on the Europe/Istanbul calendar (`utils.Istanbul`),
 never in the server's own time zone. The binary embeds the zone database

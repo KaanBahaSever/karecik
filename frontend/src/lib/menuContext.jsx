@@ -82,6 +82,29 @@ export function MenuProvider({ children }) {
   // Guards against a slow first fetch overwriting a newer reload().
   const requestRef = useRef(0)
 
+  /*
+    ORDERING. Three things put menu data into the list: load() (the whole list),
+    refreshMenu() (one menu, after a price edit) and saveActiveMenu() (one menu,
+    from the settings page). Each is numbered from sequenceRef — a load and a
+    refresh when they START, because their answer shows the server as of that
+    moment; a save when it LANDS, because its response is the saved truth.
+
+    - A one-menu answer is applied only when it is newer than the last one
+      applied to that menu. Two refreshes landing out of order, or a refresh that
+      was still on the wire when a save landed, cannot put older data back; and
+      when the newer of two refreshes fails, the older one's answer still counts.
+    - A load keeps any one-menu answer newer than itself instead of its own copy
+      of that menu, so a slow reload cannot revert a price date or a save.
+    - A refresh is dropped once a load that started after it has been APPLIED —
+      that list is newer. It is not dropped merely because such a load started:
+      the load may still fail, and the refresh's answer would be lost with it.
+    - Nothing that started before a logout lands after it.
+  */
+  const sequenceRef = useRef(0)
+  const latestMenuRef = useRef(new Map()) // menu id -> { number, menu }, newest one-menu answer applied
+  const appliedLoadRef = useRef(0) // number of the newest load whose list was applied
+  const sessionRef = useRef(0) // bumped on logout
+
   /** Stores one selection in state, in the ref and in localStorage. */
   const applySelection = useCallback((menu) => {
     const nextID = menu?.id || null
@@ -96,13 +119,20 @@ export function MenuProvider({ children }) {
 
     const request = requestRef.current + 1
     requestRef.current = request
+    const number = sequenceRef.current
     setLoading(true)
 
     try {
       const list = await api.listMenus()
       if (request !== requestRef.current) return
 
-      const nextMenus = Array.isArray(list) ? list : []
+      appliedLoadRef.current = Math.max(appliedLoadRef.current, number)
+      const nextMenus = (Array.isArray(list) ? list : []).map((menu) => {
+        const single = latestMenuRef.current.get(menu.id)
+        return single && single.number > number
+          ? { ...menu, ...single.menu, category_count: menu.category_count }
+          : menu
+      })
       setMenus(nextMenus)
       setError('')
       applySelection(pickMenu(nextMenus, menuIDRef.current))
@@ -118,6 +148,9 @@ export function MenuProvider({ children }) {
     if (!businessID) {
       // Logged out: drop the list, but keep the remembered id for the next session.
       requestRef.current += 1
+      sessionRef.current += 1
+      latestMenuRef.current.clear()
+      appliedLoadRef.current = 0
       setMenus([])
       setError('')
       setLoading(false)
@@ -182,6 +215,11 @@ export function MenuProvider({ children }) {
 
       const updated = await api.updateMenu(activeMenuId, payload)
       if (updated?.id) {
+        // Numbered when it lands; see ORDERING above.
+        const number = sequenceRef.current + 1
+        sequenceRef.current = number
+        latestMenuRef.current.set(updated.id, { number, menu: updated })
+
         // `category_count` is computed by the list endpoint only, so the update
         // response always carries 0. Saving a setting never adds or removes a
         // category, which makes the count already in state the correct one —
@@ -218,13 +256,25 @@ export function MenuProvider({ children }) {
   const refreshMenu = useCallback(async (id) => {
     if (!id) return
 
+    const number = sequenceRef.current + 1
+    sequenceRef.current = number
+    const session = sessionRef.current
+
     try {
       const fresh = await api.getMenu(id)
-      if (!fresh?.id) return
+      if (fresh?.id !== id || sessionRef.current !== session) return
 
+      // Out of date: a list requested after this refresh started has already
+      // been applied, or a newer answer for this menu (a later refresh, or a
+      // save) is already in place. See ORDERING above.
+      if (appliedLoadRef.current >= number) return
+      const applied = latestMenuRef.current.get(id)
+      if (applied && applied.number > number) return
+
+      latestMenuRef.current.set(id, { number, menu: fresh })
       setMenus((current) =>
         current.map((menu) =>
-          menu.id === fresh.id ? { ...menu, ...fresh, category_count: menu.category_count } : menu,
+          menu.id === id ? { ...menu, ...fresh, category_count: menu.category_count } : menu,
         ),
       )
     } catch (err) {

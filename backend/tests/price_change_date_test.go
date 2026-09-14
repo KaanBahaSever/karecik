@@ -323,14 +323,15 @@ func optionsSpelledWithDecimals(t *testing.T, groups []dialogOptionGroup) json.R
 // product or a bulk update — the menu's "prices valid from" date moves, and
 // whenever nothing priced changes, it stays exactly where it was.
 func TestPriceChangeDate(t *testing.T) {
-	// The whole test runs with this process in UTC. The footer has to name the
-	// Istanbul day wherever the server runs, and on a machine that is itself on
-	// Turkish time a footer formatted in time.Local names the right day by
-	// accident. Registered before the harness exists, so it is restored last,
-	// after every connection the harness opens has been closed.
-	savedLocal := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = savedLocal })
+	// This test deliberately leaves time.Local alone. It used to switch the
+	// process to UTC so that a footer formatted in the server's own zone would
+	// fail even on a machine that is itself on Turkish time. But the server
+	// starts goroutines that read the clock and outlive the harness — the race
+	// detector has reported both fasthttp's server-date updater and the request
+	// logger — so putting time.Local back afterwards was a data race. The
+	// Istanbul formatting is proven independently of the machine's zone by
+	// TestBuildFooterFormatsThePriceDateInIstanbul, and oldPriceDate is chosen so
+	// that this suite also catches the regression on a UTC machine such as CI.
 
 	istanbul, err := time.LoadLocation("Europe/Istanbul")
 	if err != nil {

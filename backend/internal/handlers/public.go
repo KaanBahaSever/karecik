@@ -88,9 +88,18 @@ func (h *Handler) servePublicMenu(c *fiber.Ctx, businessSlug, menuSlug string) e
 		}
 	}
 
-	// Menu content changes rarely; a short cache eases the QR traffic. The
-	// directory answer is just as public, so it is cached the same way.
-	c.Set("Cache-Control", "public, max-age=60")
+	// no-cache, not a max-age. This used to be "public, max-age=60", and that
+	// minute was visible: an owner who added a category in the panel and then
+	// reopened the menu in the same browser was handed the previous response
+	// straight from the browser cache, without a request reaching this server,
+	// and the new category was simply missing.
+	//
+	// no-cache still lets the browser keep its copy; it only has to ask before
+	// reusing it. The router puts an ETag on these routes, so an unchanged menu
+	// answers that question with a bodiless 304 and a returning phone does not
+	// download the same menu twice. The directory answer is revalidated the
+	// same way.
+	c.Set("Cache-Control", "no-cache")
 
 	if menu == nil {
 		payload, err := repository.BuildPublicDirectory(c.Context(), h.DB, business, opts)

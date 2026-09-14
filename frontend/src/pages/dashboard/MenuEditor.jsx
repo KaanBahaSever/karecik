@@ -218,13 +218,13 @@ export default function MenuEditor() {
 
     const nextOrder = arrayMove(categories, fromIndex, toIndex)
     setCategories(nextOrder)
-    refreshPreview()
 
     try {
       await api.reorderCategories(nextOrder.map((category) => category.id))
+      // After the write, for the reason given at onProductPriceChange.
+      refreshPreview()
     } catch (err) {
       setCategories(previousOrder)
-      refreshPreview()
       toast.error(err.message)
     }
   }
@@ -242,16 +242,16 @@ export default function MenuEditor() {
 
     const nextList = arrayMove(previousList, fromIndex, toIndex)
     setProductsByCategory((previous) => ({ ...previous, [key]: nextList }))
-    refreshPreview()
 
     try {
       await api.reorderProducts(
         categoryId,
         nextList.map((product) => product.id),
       )
+      // After the write, for the reason given at onProductPriceChange.
+      refreshPreview()
     } catch (err) {
       setProductsByCategory((previous) => ({ ...previous, [key]: previousList }))
-      refreshPreview()
       toast.error(err.message)
     }
   }
@@ -301,7 +301,13 @@ export default function MenuEditor() {
     setCategories((previous) => {
       const exists = previous.some((item) => item.id === category.id)
       return exists
-        ? previous.map((item) => (item.id === category.id ? category : item))
+        ? previous.map((item) =>
+            // The update response counts no products (only the list endpoint
+            // does), so the count already in state is kept. Without it the bulk
+            // price dialog reports "0 ürün" for a category right after it is
+            // edited.
+            item.id === category.id ? { ...category, product_count: item.product_count } : item,
+          )
         : [...previous, category]
     })
     setExpandedIds((previous) =>
@@ -352,7 +358,6 @@ export default function MenuEditor() {
     const previousPrice = current ? current.price : 0
 
     patchProductLocally(productId, { price: nextPrice })
-    refreshPreview()
 
     try {
       const updated = await api.updateProductPrice(productId, nextPrice)
@@ -360,9 +365,17 @@ export default function MenuEditor() {
       toast.success('Fiyat güncellendi.')
       // The new price may have moved the menu's price date; see onProductSaved.
       refreshMenu(activeMenuID)
+      // The live preview is refetched only now. It renders what the SERVER
+      // returns, so a refetch sent before this write can only bring back the old
+      // price and the old price date - and it did: with the PATCH slowed to
+      // 1.5 s the preview kept showing both after the row and the toast had
+      // switched to the new price. The row updates optimistically above; the
+      // preview follows as soon as the server has the change. A failed write
+      // leaves the server - and so the preview - as it was, so the error path
+      // has nothing to refetch.
+      refreshPreview()
     } catch (err) {
       patchProductLocally(productId, { price: previousPrice })
-      refreshPreview()
       toast.error(err.message)
     }
   }
@@ -370,14 +383,14 @@ export default function MenuEditor() {
   /** Show / hide a product from the menu via the eye icon. */
   async function onProductActiveChange(productId, nextState) {
     patchProductLocally(productId, { is_active: nextState })
-    refreshPreview()
 
     try {
       const updated = await api.updateProduct(productId, { is_active: nextState })
       if (updated && updated.id) patchProductLocally(productId, updated)
+      // After the write, for the reason given at onProductPriceChange.
+      refreshPreview()
     } catch (err) {
       patchProductLocally(productId, { is_active: !nextState })
-      refreshPreview()
       toast.error(err.message)
     }
   }

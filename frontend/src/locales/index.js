@@ -101,6 +101,7 @@ const STRINGS = {
     notFound: 'Menü bulunamadı',
     notFoundDetail: 'Bu adrese ait bir menü yok. Adresi kontrol edin.',
     untitledCategory: 'Adsız kategori',
+    itemUnavailable: 'Bu ürün şu anda gösterilemiyor.',
   },
   en: {
     menu: 'Menu',
@@ -130,6 +131,7 @@ const STRINGS = {
     notFound: 'Menu not found',
     notFoundDetail: 'There is no menu at this address. Please check the URL.',
     untitledCategory: 'Untitled category',
+    itemUnavailable: 'This item cannot be shown right now.',
   },
 }
 

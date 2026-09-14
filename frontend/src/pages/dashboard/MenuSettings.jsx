@@ -445,9 +445,31 @@ export default function MenuSettings() {
   const [saving, setSaving] = useState(false)
   const [slugError, setSlugError] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
+  // Bumped by every successful save; part of storedKey below.
+  const [savedVersion, setSavedVersion] = useState(0)
 
   // The stored state on the server (used for comparison).
-  const stored = useMemo(() => (activeMenu ? buildDraft(activeMenu) : null), [activeMenu])
+  //
+  // Keyed on the menu's own values rather than on the activeMenu object. The
+  // menu list hands out a new object whenever it refetches one menu — the menu
+  // editor does that after every price change, to keep the price date current —
+  // and keying on the object would rebuild `stored`, fire the reset below and
+  // wipe whatever the owner had typed here in the meantime.
+  //
+  // Only the two columns a price change moves, price_updated_at and updated_at,
+  // are left out. Every other value goes into the key exactly as the server sent
+  // it, not as buildDraft rewrites it: a save that buildDraft maps back onto the
+  // same draft — clearing the VAT note, which it turns back into the default
+  // sentence — still changes the key and resets the form, and so does switching
+  // to another menu. savedVersion covers the one case the values cannot: a save
+  // the server stores exactly as it already was (a VAT note that was already
+  // empty), after which the form must still reset to what is stored.
+  const storedKey = activeMenu
+    ? `${savedVersion}:` +
+      JSON.stringify({ ...activeMenu, price_updated_at: null, updated_at: null })
+    : ''
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stored = useMemo(() => (activeMenu ? buildDraft(activeMenu) : null), [storedKey])
 
   // Refresh the draft when the active menu changes (switch, first load or save).
   useEffect(() => {
@@ -641,6 +663,7 @@ export default function MenuSettings() {
     setSaving(true)
     try {
       const updated = await saveActiveMenu(body)
+      setSavedVersion((version) => version + 1)
 
       // The address was already taken inside this business: the server appended
       // a number, so the user is told which address was really stored.
@@ -1679,8 +1702,8 @@ export default function MenuSettings() {
                 <p className="help-text flex items-start gap-1.5">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
                   <span>
-                    Bu tarih, bu menüde toplu fiyat güncellemesi yaptığınızda otomatik olarak
-                    yenilenir.
+                    Bu tarih, bu menüde bir fiyat değiştiğinde (tek ürün düzenlemesi ya da
+                    toplu güncelleme) otomatik olarak yenilenir.
                   </span>
                 </p>
               </div>

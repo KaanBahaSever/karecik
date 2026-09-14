@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -144,9 +145,15 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	// from the subdomain and the menu from an optional "?menu=", the path form
 	// reads both from the path. The menu segment is optional in both, because
 	// the bare tenant address is a directory page, not an error.
-	app.Get("/api/public/menu", h.PublicMenuByHost)
-	app.Get("/api/public/menu/:businessSlug", h.PublicMenuByPath)
-	app.Get("/api/public/menu/:businessSlug/:menuSlug", h.PublicMenuByPath)
+	//
+	// The ETag pairs with the no-cache header servePublicMenu sets: the browser
+	// revalidates on every load and an unchanged menu comes back as a 304 with
+	// no body. It is computed from the finished response body, so it changes the
+	// moment the menu does, including a category or a price edited a second ago.
+	publicETag := etag.New()
+	app.Get("/api/public/menu", publicETag, h.PublicMenuByHost)
+	app.Get("/api/public/menu/:businessSlug", publicETag, h.PublicMenuByPath)
+	app.Get("/api/public/menu/:businessSlug/:menuSlug", publicETag, h.PublicMenuByPath)
 
 	// --------------------------------------------------- protected endpoints
 	api := app.Group("/api", middleware.Protected(h.Sessions, cfg))
