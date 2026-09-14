@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Ban, Loader2, Plus, X } from 'lucide-react'
 
 import api from '../../lib/api'
@@ -101,6 +101,20 @@ function isValidPriceText(text) {
   return /[0-9]/.test(clean)
 }
 
+/**
+ * Whether two openings of the dialog fill the form from the same values: both
+ * closed, or both open on the same product, preselected category and languages.
+ */
+function sameOpening(a, b) {
+  if (a === null || b === null) return a === b
+  return (
+    a.product === b.product &&
+    a.selectedCategoryId === b.selectedCategoryId &&
+    a.primaryLanguage === b.primaryLanguage &&
+    a.languageKey === b.languageKey
+  )
+}
+
 /** Label shown for a category in the picker. */
 function categoryName(category, defaultLanguage) {
   const translations = category?.translations || {}
@@ -124,6 +138,7 @@ function categoryName(category, defaultLanguage) {
  * @param {string}      defaultLanguage
  * @param {string}      currency           - 'TRY', 'EUR' ...
  * @param {Function}    onSaved            - (product) => void
+ * @param {Function}    onSaveFailed       - (error) => void, after a failed save's error toast
  */
 export default function ProductModal({
   open,
@@ -135,6 +150,7 @@ export default function ProductModal({
   defaultLanguage,
   currency,
   onSaved,
+  onSaveFailed,
 }) {
   const toast = useToast()
 
@@ -161,43 +177,55 @@ export default function ProductModal({
   const [errors, setErrors] = useState({})
   const [saving, setSaving] = useState(false)
 
-  /* Fill the form when the dialog opens. */
-  useEffect(() => {
-    if (!open) return
+  /* Fill the form when the dialog opens, and again when what it is opened on -
+     the product, the preselected category or the languages - changes while it
+     is open.
 
-    const initial = {}
-    languageList.forEach((code) => {
-      initial[code] = {
-        name: product?.translations?.[code]?.name || '',
-        description: product?.translations?.[code]?.description || '',
-        ingredients: product?.translations?.[code]?.ingredients || '',
-      }
-    })
+     This happens during render, not in an effect. An effect runs only after the
+     dialog has been drawn once, and that first drawing would still hold the
+     previous opening's values: "Bu kategoriye ürün ekle" would show the
+     category used last time before switching to its own. State set during
+     render makes React run this component again at once, before anything is
+     committed, so the first dialog drawn already holds these values. */
+  const opening = open ? { product, selectedCategoryId, primaryLanguage, languageKey } : null
+  const [filledFor, setFilledFor] = useState(null)
+  if (!sameOpening(filledFor, opening)) {
+    setFilledFor(opening)
 
-    setTranslations(initial)
-    setCategoryId(product?.category_id || selectedCategoryId || categoryList[0]?.id || '')
-    setPrice(product ? priceToInput(product.price) : '')
-    setComparePrice(
-      product?.compare_price !== null && product?.compare_price !== undefined
-        ? priceToInput(product.compare_price)
-        : '',
-    )
-    setCalories(
-      product?.calories === null || product?.calories === undefined
-        ? ''
-        : String(product.calories),
-    )
-    setImageUrl(product?.image_url || null)
-    setAllergens(Array.isArray(product?.allergens) ? [...product.allergens] : [])
-    setBadges(badgeRowsOf(product))
-    setOptionGroups(optionGroupsOf(product))
-    setVisible(product?.is_active !== false)
-    setFeatured(Boolean(product?.is_featured))
-    setActiveLanguage(primaryLanguage)
-    setErrors({})
-    setSaving(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, product, selectedCategoryId, primaryLanguage, languageKey])
+    if (opening) {
+      const initial = {}
+      languageList.forEach((code) => {
+        initial[code] = {
+          name: product?.translations?.[code]?.name || '',
+          description: product?.translations?.[code]?.description || '',
+          ingredients: product?.translations?.[code]?.ingredients || '',
+        }
+      })
+
+      setTranslations(initial)
+      setCategoryId(product?.category_id || selectedCategoryId || categoryList[0]?.id || '')
+      setPrice(product ? priceToInput(product.price) : '')
+      setComparePrice(
+        product?.compare_price !== null && product?.compare_price !== undefined
+          ? priceToInput(product.compare_price)
+          : '',
+      )
+      setCalories(
+        product?.calories === null || product?.calories === undefined
+          ? ''
+          : String(product.calories),
+      )
+      setImageUrl(product?.image_url || null)
+      setAllergens(Array.isArray(product?.allergens) ? [...product.allergens] : [])
+      setBadges(badgeRowsOf(product))
+      setOptionGroups(optionGroupsOf(product))
+      setVisible(product?.is_active !== false)
+      setFeatured(Boolean(product?.is_featured))
+      setActiveLanguage(primaryLanguage)
+      setErrors({})
+      setSaving(false)
+    }
+  }
 
   function updateField(languageCode, field, value) {
     setTranslations((previous) => ({
@@ -394,6 +422,7 @@ export default function ProductModal({
       onClose?.()
     } catch (error) {
       toast.error(error.message)
+      onSaveFailed?.(error)
     } finally {
       setSaving(false)
     }

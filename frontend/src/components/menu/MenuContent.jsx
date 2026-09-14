@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Check, Copy, Eye, EyeOff, Search, Star, Wifi } from 'lucide-react'
+import { ArrowLeft, Search, Star } from 'lucide-react'
 
 import { normalizeCategories } from '../../lib/category'
+import { buildContactItems, contactDisplayMode } from '../../lib/contact'
 import { formatPrice } from '../../lib/format'
 import { getSubdomain } from '../../lib/subdomain'
 import { useImageFallback } from '../../lib/useImageFallback'
@@ -11,6 +12,7 @@ import { fontStack, loadFont } from '../../themes/fonts'
 import { findAllergen, findLanguage, isRtl, t } from '../../locales/index.js'
 import ErrorBoundary from '../ui/ErrorBoundary.jsx'
 import CategoryThumb from './CategoryThumb.jsx'
+import { ContactBar, ContactList } from './ContactInfo.jsx'
 import ProductDetailModal from './ProductDetailModal.jsx'
 import MenuFooter from './MenuFooter.jsx'
 
@@ -26,8 +28,9 @@ import MenuFooter from './MenuFooter.jsx'
  * classes, so all six themes work with a single component tree.
  *
  * The customer is standing in the venue, so the address and the map view are
- * deliberately absent — the things worth showing here are the Wi-Fi details and
- * the menu itself.
+ * deliberately absent — the things worth showing here are the contact details
+ * (Wi-Fi first among them, laid out the way `contact_display` asks) and the
+ * menu itself.
  *
  * @param {object}   menu             - { business, categories, footer, menus }
  * @param {string}   language         - Active language code
@@ -98,43 +101,6 @@ function headerMode(value) {
  */
 const SAFE_TOP_PADDING = 'calc(1.25rem + var(--menu-safe-top, env(safe-area-inset-top, 0px)))'
 
-/**
- * Copies one string to the clipboard.
- *
- * navigator.clipboard is unavailable on plain-HTTP hosts and on older in-app
- * browsers, which is exactly where a QR menu tends to be opened, so the hidden
- * textarea + execCommand path stays as a fallback.
- */
-async function copyToClipboard(value) {
-  const text = String(value || '')
-  if (!text) return false
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    /* falls through to the textarea fallback below */
-  }
-
-  try {
-    const area = document.createElement('textarea')
-    area.value = text
-    area.setAttribute('readonly', '')
-    area.style.position = 'fixed'
-    area.style.top = '-1000px'
-    area.style.opacity = '0'
-    document.body.appendChild(area)
-    area.select()
-    const copied = document.execCommand('copy')
-    document.body.removeChild(area)
-    return copied
-  } catch {
-    return false
-  }
-}
-
 /** Clamp to two lines without needing the Tailwind line-clamp plugin. */
 const TWO_LINES = {
   display: '-webkit-box',
@@ -142,9 +108,6 @@ const TWO_LINES = {
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
 }
-
-/** How long the "Kopyalandı" confirmation stays on the button. */
-const COPY_FEEDBACK_MS = 1600
 
 /** A value as display text: a string trimmed, anything else ''. */
 function plainText(value) {
@@ -471,9 +434,6 @@ export default function MenuContent({
   const [selectedCategoryId, setSelectedCategoryId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedProduct, setSelectedProduct] = useState(null)
-  const [wifiRevealed, setWifiRevealed] = useState(false)
-  const [copyState, setCopyState] = useState(null) // null | { field, ok }
-  const copyTimer = useRef(null)
 
   // Load the selected font
   useEffect(() => {
@@ -486,8 +446,6 @@ export default function MenuContent({
       setSelectedCategoryId(null)
     }
   }, [categories, selectedCategoryId])
-
-  useEffect(() => () => clearTimeout(copyTimer.current), [])
 
   // The theme variables carry the theme's own background colour, so the
   // business' background must be spread AFTER them to win.
@@ -552,43 +510,16 @@ export default function MenuContent({
   const searchTerm = search.trim()
   const searching = searchTerm.length > 0
 
-  /* ------------------------------------------------------------------ wifi */
+  /* --------------------------------------------------------------- contact */
 
-  const wifiSsid = String(business.wifi_ssid || '').trim()
-  const wifiPassword = String(business.wifi_password || '').trim()
-
-  // The dot count is capped so a long password does not leak its length.
-  const maskedWifiPassword = '•'.repeat(Math.min(wifiPassword.length, 12))
-
-  const revealWifiButton = (
-    <button
-      type="button"
-      onClick={() => setWifiRevealed((visible) => !visible)}
-      aria-label={t('wifiPassword', language)}
-      aria-pressed={wifiRevealed}
-      className="shrink-0"
-      style={{ color: 'var(--menu-muted)' }}
-    >
-      {wifiRevealed ? (
-        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-      ) : (
-        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-      )}
-    </button>
-  )
-
-  async function copyValue(field, value) {
-    const ok = await copyToClipboard(value)
-    setCopyState({ field, ok })
-    clearTimeout(copyTimer.current)
-    copyTimer.current = setTimeout(() => setCopyState(null), COPY_FEEDBACK_MS)
-  }
-
-  /** Label of a copy button: idle, confirmed or failed. */
-  function copyLabel(field) {
-    if (copyState?.field !== field) return t('copy', language)
-    return copyState.ok ? t('copied', language) : t('copyFailed', language)
-  }
+  /* Wi-Fi, Instagram, the phone number and the owner's links, each one present
+     only when its field holds something usable (lib/contact.js). Where they
+     appear is `contact_display`: on the home view as chips ('inline') or as an
+     open list ('list'). 'footer' and 'hidden' draw nothing here — the product
+     screens' footer is MenuFooter's to fill. */
+  const contactMode = contactDisplayMode(business.contact_display)
+  const contactItems =
+    contactMode === 'inline' || contactMode === 'list' ? buildContactItems(business) : []
 
   /* ----------------------------------------------------------------- search */
 
@@ -846,80 +777,28 @@ export default function MenuContent({
           ) : null}
         </header>
 
-        {/* ------------------------------------------------------ wi-fi card */}
-        {/* Only on the home view — deeper screens are about the products. */}
-        {isHome && (wifiSsid || wifiPassword) ? (
-          <div
-            className="mt-4 flex items-center gap-3 px-3.5 py-3"
-            style={{
-              backgroundColor: 'var(--menu-surface)',
-              border: '1px solid var(--menu-border)',
-              borderRadius: 'var(--menu-radius)',
-              boxShadow: 'var(--menu-shadow)',
-            }}
-          >
-            <Wifi
-              className="h-4 w-4 shrink-0"
-              style={{ color: 'var(--menu-primary)' }}
-              aria-hidden="true"
-            />
+        {/* -------------------------------------------------------- contact */}
+        {/* Only on the home view — deeper screens are about the products, and
+            their footer carries the compact list instead.
 
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] leading-none" style={{ color: 'var(--menu-muted)' }}>
-                {wifiSsid ? t('wifiName', language) : t('wifiPassword', language)}
-              </p>
-              {/* With an SSID the headline is the network name and the password
-                  sits on its own masked line below. Without one the password IS
-                  the headline — and must still be masked, never printed in the
-                  clear where anyone glancing at the table can read it. */}
-              {wifiSsid ? (
-                <p
-                  className="mt-1 truncate text-sm font-medium leading-none"
-                  style={{ color: 'var(--menu-text)' }}
-                >
-                  {wifiSsid}
-                </p>
-              ) : (
-                <div className="mt-1 flex items-center gap-1.5">
-                  <span
-                    className="truncate text-sm font-medium leading-none"
-                    style={{ color: 'var(--menu-text)' }}
-                  >
-                    {wifiRevealed ? wifiPassword : maskedWifiPassword}
-                  </span>
-                  {revealWifiButton}
-                </div>
-              )}
-
-              {wifiSsid && wifiPassword ? (
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <span
-                    className="truncate text-xs tracking-wide"
-                    style={{ color: 'var(--menu-muted)' }}
-                  >
-                    {wifiRevealed ? wifiPassword : maskedWifiPassword}
-                  </span>
-                  {revealWifiButton}
-                </div>
-              ) : null}
-            </div>
-
-            {wifiPassword ? (
-              <button
-                type="button"
-                onClick={() => copyValue('wifi', wifiPassword)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] font-medium"
-                style={{ backgroundColor: 'var(--menu-primary)', color: onAccentText }}
-              >
-                {copyState?.field === 'wifi' && copyState.ok ? (
-                  <Check className="h-3 w-3" aria-hidden="true" />
-                ) : (
-                  <Copy className="h-3 w-3" aria-hidden="true" />
-                )}
-                {copyLabel('wifi')}
-              </button>
-            ) : null}
-          </div>
+            Both components render nothing without items, margin included, so
+            a menu with no contact details has the search box straight under
+            the header. The boundary keeps a contact block that cannot be drawn
+            from taking the header and the categories down with it: it simply
+            is not there. */}
+        {isHome && contactItems.length > 0 ? (
+          <ErrorBoundary resetKeys={[menu?.business]} fallback={null}>
+            {contactMode === 'inline' ? (
+              <ContactBar
+                items={contactItems}
+                language={language}
+                onAccentText={onAccentText}
+                className="mt-4"
+              />
+            ) : (
+              <ContactList items={contactItems} language={language} className="mt-4" />
+            )}
+          </ErrorBoundary>
         ) : null}
 
         {/* --------------------------------------------------------- search */}
@@ -1117,8 +996,9 @@ export default function MenuContent({
 
         {/*
           On the home view the footer is only the "Karecik ile hazırlandı"
-          signature. The price date, the VAT notice and the contact details live
-          on the screens that list products.
+          signature. The price date, the VAT notice and the compact contact list
+          (in every `contact_display` but 'hidden') live on the screens that
+          list products.
         */}
         <MenuFooter
           business={business}

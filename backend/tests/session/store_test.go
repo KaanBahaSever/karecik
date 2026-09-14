@@ -1,4 +1,4 @@
-package session
+package session_test
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"karecik/backend/internal/session"
 )
 
 // The store is the authentication boundary now that no database row backs it,
@@ -17,15 +19,13 @@ import (
 
 // newTestStore returns a store with a clock the test controls, so a session can
 // be aged past its expiry without sleeping.
-func newTestStore(clock *time.Time) *Store {
-	s := New()
-	s.now = func() time.Time { return *clock }
-	return s
+func newTestStore(clock *time.Time) *session.Store {
+	return session.NewWithClock(func() time.Time { return *clock })
 }
 
 // put adds a session that expires after ttl and returns its hash.
-func put(s *Store, userID uuid.UUID, at time.Time, ttl time.Duration, hash string) string {
-	s.Create(hash, Entry{
+func put(s *session.Store, userID uuid.UUID, at time.Time, ttl time.Duration, hash string) string {
+	s.Create(hash, session.Entry{
 		UserID:     userID,
 		BusinessID: uuid.New(),
 		CreatedAt:  at,
@@ -37,32 +37,11 @@ func put(s *Store, userID uuid.UUID, at time.Time, ttl time.Duration, hash strin
 // indexConsistency fails when byUser and byHash disagree. Every test calls it
 // at the end: a leaked index entry is invisible until the day revocation needs
 // it, which is the day it must not fail.
-func indexConsistency(t *testing.T, s *Store) {
+func indexConsistency(t *testing.T, s *session.Store) {
 	t.Helper()
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	counted := 0
-	for userID, hashes := range s.byUser {
-		if len(hashes) == 0 {
-			t.Errorf("byUser holds an empty set for %s — it should have been dropped", userID)
-		}
-		for hash := range hashes {
-			entry, ok := s.byHash[hash]
-			if !ok {
-				t.Errorf("byUser[%s] points at %q, which is not in byHash", userID, hash)
-				continue
-			}
-			if entry.UserID != userID {
-				t.Errorf("byUser[%s] holds %q, but that entry belongs to %s",
-					userID, hash, entry.UserID)
-			}
-			counted++
-		}
-	}
-	if counted != len(s.byHash) {
-		t.Errorf("byUser indexes %d session(s), byHash holds %d", counted, len(s.byHash))
+	for _, problem := range s.IndexProblems() {
+		t.Error(problem)
 	}
 }
 
@@ -72,7 +51,7 @@ func TestLookup(t *testing.T) {
 	user := uuid.New()
 	business := uuid.New()
 
-	s.Create("hash-a", Entry{
+	s.Create("hash-a", session.Entry{
 		UserID:     user,
 		BusinessID: business,
 		CreatedAt:  now,
@@ -238,17 +217,17 @@ func TestEvictsOldestBeyondTheCap(t *testing.T) {
 	user := uuid.New()
 
 	// One more than the cap, each a second older than the next.
-	for i := 0; i <= MaxSessionsPerUser; i++ {
+	for i := 0; i <= session.MaxSessionsPerUser; i++ {
 		put(s, user, now.Add(time.Duration(i)*time.Second), time.Hour, fmt.Sprintf("hash-%02d", i))
 	}
 
-	if s.Len() != MaxSessionsPerUser {
-		t.Errorf("Len() = %d, want the cap of %d", s.Len(), MaxSessionsPerUser)
+	if s.Len() != session.MaxSessionsPerUser {
+		t.Errorf("Len() = %d, want the cap of %d", s.Len(), session.MaxSessionsPerUser)
 	}
 	if _, ok := s.Lookup("hash-00"); ok {
 		t.Error("the oldest session survived the cap")
 	}
-	if _, ok := s.Lookup(fmt.Sprintf("hash-%02d", MaxSessionsPerUser)); !ok {
+	if _, ok := s.Lookup(fmt.Sprintf("hash-%02d", session.MaxSessionsPerUser)); !ok {
 		t.Error("the newest session was evicted instead of the oldest")
 	}
 
@@ -259,7 +238,7 @@ func TestEvictsOldestBeyondTheCap(t *testing.T) {
 // on every authenticated request and written by logins, logouts and the
 // janitor, all at once.
 func TestConcurrentAccess(t *testing.T) {
-	s := New()
+	s := session.New()
 	users := make([]uuid.UUID, 8)
 	for i := range users {
 		users[i] = uuid.New()
@@ -273,7 +252,7 @@ func TestConcurrentAccess(t *testing.T) {
 			user := users[worker]
 			for i := 0; i < 200; i++ {
 				hash := fmt.Sprintf("w%d-%d", worker, i)
-				s.Create(hash, Entry{
+				s.Create(hash, session.Entry{
 					UserID:     user,
 					BusinessID: uuid.New(),
 					CreatedAt:  time.Now(),
@@ -308,7 +287,7 @@ func TestConcurrentAccess(t *testing.T) {
 // TestStopIsIdempotent guards the shutdown path: Stop closes a channel, and
 // closing a closed channel panics.
 func TestStopIsIdempotent(t *testing.T) {
-	s := New()
+	s := session.New()
 	s.StartJanitor(time.Millisecond)
 	s.Stop()
 	s.Stop()

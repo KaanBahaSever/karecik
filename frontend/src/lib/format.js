@@ -47,7 +47,7 @@ const PRICE_DATE_TIME_ZONE = 'Europe/Istanbul'
  * sees does not depend on the time zone their computer is set to: 22:30 UTC on
  * 23 August is already 24.08 in Istanbul, while a browser in London would have
  * printed 23.08. The same date is printed on the customer menu by the backend
- * (repository/menu.go -> buildFooter), and the two must agree on the zone.
+ * (repository/menu.go -> BuildFooter), and the two must agree on the zone.
  *
  * The parts are joined by hand rather than taken from format(), so the order
  * and the separator stay "dd.mm.yyyy" whatever pattern the browser's locale

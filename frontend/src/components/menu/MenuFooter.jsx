@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, Instagram, KeyRound, Phone, Wifi } from 'lucide-react'
-
+import { buildContactItems, contactDisplayMode, trimSpace } from '../../lib/contact'
 import { t } from '../../locales/index.js'
 import Logo from '../ui/Logo.jsx'
+import { ContactList } from './ContactInfo.jsx'
 
 /**
  * Footer of the customer menu.
@@ -14,23 +13,25 @@ import Logo from '../ui/Logo.jsx'
  *                     details and the legal notices are omitted.
  *
  *   scope="products"  Any screen listing or searching products. Contact details
- *                     and the automatically generated legal notices appear here:
+ *                     and the legal notices appear here:
  *                       "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
- *                       "Fiyatlarımıza KDV dahildir."
- *                     plus, when the business enables it, the "Yerli Üretim"
- *                     block just above the signature.
+ *                       the menu's VAT sentence, while its toggle is on
+ *                     plus, when the menu enables it, the "Yerli Üretim" badge
+ *                     just above the signature.
  *
- * Both notices are produced by the backend (repository/menu.go -> buildFooter)
- * and merely displayed here. When the business turns them off they arrive empty
- * and the corresponding line is not rendered. The single exception is the VAT
- * line inside the dashboard live preview, where the footer payload is the last
- * SAVED one and cannot know about an unsaved draft — see the note beside
- * `draftVatNote` below.
+ * The contact details are the compact ContactList from ContactInfo.jsx, shown in
+ * the 'inline', 'list' and 'footer' modes of `contact_display` and absent in
+ * 'hidden'. What the home view shows for the first two modes is MenuContent's
+ * business, not this footer's.
+ *
+ * The price date is produced by the backend (repository/menu.go -> BuildFooter)
+ * and merely displayed here; it arrives empty when the menu turns it off. The
+ * VAT sentence is read from the menu's own fields instead - see vatNoteText.
  *
  * The address is deliberately absent: the customer is standing in the venue, so
  * a street address and a map view are noise. Wi-Fi is what they actually want.
  *
- * On both scopes the signature is the true page footer — last element, generous
+ * On both scopes the signature is the true page footer - last element, generous
  * top spacing, hairline rule above it.
  *
  * @param {object} business - PublicMenu.business
@@ -39,94 +40,43 @@ import Logo from '../ui/Logo.jsx'
  * @param {string} scope    - "home" | "products"
  */
 
-/** How long the "Kopyalandı" confirmation stays on the button. */
-const COPY_FEEDBACK_MS = 1600
+/**
+ * The VAT sentence of a menu whose toggle is on but whose own text is blank.
+ *
+ * It is the server's defaultVatNote (repository/menu.go), which BuildFooter puts
+ * into footer.vat_note in that case, and the sentence the settings page shows as
+ * that field's default.
+ */
+const DEFAULT_VAT_NOTE = 'Fiyatlarımıza KDV dahildir.'
 
 /**
- * The VAT sentence that accompanies the "Yerli Üretim" block.
+ * The one VAT sentence the page prints, or '' for none.
  *
- * It is only a FALLBACK. The menu already owns a VAT line of its own
- * (show_vat_note + vat_note_text, resolved into `vatNote` below and printed
- * with the other legal notices), and a menu that printed two VAT sentences
- * would look sloppy, so whenever the business has written its own the
- * business' text wins and this one is dropped.
- */
-const DEFAULT_VAT_NOTICE = 'Tüm fiyatlarımıza KDV dahildir.'
-
-/**
- * Copies one string to the clipboard.
+ * The menu's own toggle governs it, and there is no other VAT sentence anywhere
+ * on the page:
  *
- * navigator.clipboard is unavailable on plain-HTTP hosts and on older in-app
- * browsers, which is exactly where a QR menu tends to be opened, so the hidden
- * textarea + execCommand path stays as a fallback.
+ *   show_vat_note false  nothing
+ *   show_vat_note true   vat_note_text, trimmed as the server trims it, or
+ *                        DEFAULT_VAT_NOTE when that is blank
+ *
+ * This reads the business fields rather than footer.vat_note. On the customer
+ * menu the two say the same thing - BuildFooter derives footer.vat_note from
+ * exactly these two columns - but the dashboard live preview lays the unsaved
+ * draft over the last SAVED payload, and only the business fields carry an edit
+ * that is not saved yet. footer.vat_note is the fallback for a payload whose
+ * business lacks the fields.
  */
-async function copyToClipboard(value) {
-  const text = String(value || '')
-  if (!text) return false
+function vatNoteText(business, footer) {
+  const enabled = business?.show_vat_note
+  if (enabled === false) return ''
 
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    /* falls through to the textarea fallback below */
+  if (enabled === true) {
+    const text =
+      typeof business.vat_note_text === 'string' ? business.vat_note_text : footer?.vat_note
+    return trimSpace(text) || DEFAULT_VAT_NOTE
   }
 
-  try {
-    const area = document.createElement('textarea')
-    area.value = text
-    area.setAttribute('readonly', '')
-    area.style.position = 'fixed'
-    area.style.top = '-1000px'
-    area.style.opacity = '0'
-    document.body.appendChild(area)
-    area.select()
-    const copied = document.execCommand('copy')
-    document.body.removeChild(area)
-    return copied
-  } catch {
-    return false
-  }
-}
-
-/** Small inline "Kopyala" affordance next to a Wi-Fi value. */
-function CopyButton({ value, language, label }) {
-  const [state, setState] = useState('idle') // idle | copied | failed
-  const timer = useRef(null)
-
-  useEffect(() => () => clearTimeout(timer.current), [])
-
-  async function handleCopy() {
-    const ok = await copyToClipboard(value)
-    setState(ok ? 'copied' : 'failed')
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setState('idle'), COPY_FEEDBACK_MS)
-  }
-
-  const text =
-    state === 'copied'
-      ? t('copied', language)
-      : state === 'failed'
-        ? t('copyFailed', language)
-        : t('copy', language)
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      aria-label={`${label}: ${text}`}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
-      style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
-    >
-      {state === 'copied' ? (
-        <Check className="h-3 w-3" aria-hidden="true" />
-      ) : (
-        <Copy className="h-3 w-3" aria-hidden="true" />
-      )}
-      {text}
-    </button>
-  )
+  return trimSpace(footer?.vat_note)
 }
 
 /**
@@ -134,8 +84,8 @@ function CopyButton({ value, language, label }) {
  *
  * `Yerli Üretim Logosu` is an official certification mark administered by the
  * Ticaret Bakanlığı, so this component NEVER draws or approximates it. Either
- * the business supplies its own certified artwork — uploaded through the
- * dashboard, or seeded as an absolute URL — and it is rendered as-is, or the
+ * the business supplies its own certified artwork - uploaded through the
+ * dashboard, or seeded as an absolute URL - and it is rendered as-is, or the
  * fallback is a plain bordered text pill that claims nothing visually.
  *
  * @param {string} logoUrl - business.yerli_uretim_logo_url, may be empty
@@ -188,37 +138,26 @@ export default function MenuFooter({ business, footer, language = 'tr', scope = 
     )
   }
 
-  const phone = business?.phone?.trim()
-  const wifiSsid = business?.wifi_ssid?.trim()
-  const wifiPassword = business?.wifi_password?.trim()
-  const instagram = business?.instagram?.trim().replace(/^@/, '')
+  /* Contact details, in every display mode but 'hidden'. The product screens
+     never show the home view's chips or list, so this is where a customer who is
+     browsing products finds them - and in 'footer' mode it is the only place.
 
-  const hasContact = Boolean(phone || wifiSsid || wifiPassword || instagram)
+     The Wi-Fi password is masked here too: these are exactly the screens a
+     customer holds up at the table.
+
+     'hidden' is checked here rather than trusted to arrive empty. The server
+     redacts only the mode it has SAVED, and the dashboard preview lays the
+     unsaved draft over that payload - so a draft switched to 'hidden' still
+     carries every contact field. */
+  const contactItems =
+    contactDisplayMode(business?.contact_display) === 'hidden' ? [] : buildContactItems(business)
+  const hasContact = contactItems.length > 0
 
   const priceNote = footer?.price_note?.trim()
+  const vatNote = vatNoteText(business, footer)
 
-  /* The menu's own VAT line. `footer.vat_note` is the source of truth and the
-     backend only fills it when show_vat_note is on with non-empty text.
-
-     The dashboard live preview is the one place where the two halves disagree:
-     it keeps the SAVED footer payload while the draft changes underneath it,
-     and refetching cannot help because the new text is not persisted yet. So
-     the draft's own fields stand in — the very sentence the server will emit
-     once the settings are saved — and an explicit show_vat_note=false drops a
-     served note that is merely stale. On the customer menu the payload and the
-     business fields always agree, so nothing changes there. */
-  const draftVatNote = business?.show_vat_note ? business?.vat_note_text?.trim() || '' : ''
-  const vatNote =
-    business?.show_vat_note === false ? '' : footer?.vat_note?.trim() || draftVatNote
-
-  /* The "Yerli Üretim" block: the badge, and a VAT sentence UNDER it.
-     DO NOT PRINT TWO VAT SENTENCES. The menu already drives a VAT line of its
-     own (`vatNote` above, printed with the other legal notices) and whenever
-     that one is live IT WINS — the fixed sentence below is only the fallback
-     for a business that has not written one. */
   const showYerliUretim = Boolean(business?.show_yerli_uretim)
   const yerliUretimLogoUrl = business?.yerli_uretim_logo_url?.trim() || ''
-  const hasOwnVatNote = Boolean(vatNote)
 
   return (
     <footer className="text-center" style={{ color: 'var(--menu-muted)' }}>
@@ -227,57 +166,8 @@ export default function MenuFooter({ business, footer, language = 'tr', scope = 
           className="mt-10 pt-6"
           style={{ borderTop: '1px solid var(--menu-border)' }}
         >
-          {hasContact ? (
-            <div className="mb-5 flex flex-col items-center gap-2 text-xs">
-              {phone ? (
-                <p className="flex items-center justify-center gap-1.5">
-                  <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>{phone}</span>
-                </p>
-              ) : null}
-
-              {wifiSsid ? (
-                <div className="flex flex-wrap items-center justify-center gap-1.5">
-                  <Wifi className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>
-                    {t('wifiName', language)}:{' '}
-                    <span style={{ color: 'var(--menu-text)' }} className="font-medium">
-                      {wifiSsid}
-                    </span>
-                  </span>
-                  <CopyButton
-                    value={wifiSsid}
-                    language={language}
-                    label={t('wifiName', language)}
-                  />
-                </div>
-              ) : null}
-
-              {wifiPassword ? (
-                <div className="flex flex-wrap items-center justify-center gap-1.5">
-                  <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>
-                    {t('wifiPassword', language)}:{' '}
-                    <span style={{ color: 'var(--menu-text)' }} className="font-medium">
-                      {wifiPassword}
-                    </span>
-                  </span>
-                  <CopyButton
-                    value={wifiPassword}
-                    language={language}
-                    label={t('wifiPassword', language)}
-                  />
-                </div>
-              ) : null}
-
-              {instagram ? (
-                <p className="flex items-center justify-center gap-1.5">
-                  <Instagram className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>@{instagram}</span>
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+          {/* Renders nothing at all without items, so no margin is left behind. */}
+          <ContactList items={contactItems} language={language} compact className="mb-5" />
 
           {/* Legal notices, kept up to date automatically by the system */}
           {priceNote || vatNote ? (
@@ -289,10 +179,11 @@ export default function MenuFooter({ business, footer, language = 'tr', scope = 
         </div>
       ) : null}
 
+      {/* The badge alone, with no VAT sentence of its own: the menu's VAT
+          toggle governs the only one, vatNote above. */}
       {showYerliUretim ? (
-        <div className="mt-8 flex flex-col items-center gap-2 text-[11px] leading-relaxed">
+        <div className="mt-8 flex justify-center">
           <YerliUretimBadge logoUrl={yerliUretimLogoUrl} />
-          {hasOwnVatNote ? null : <p>{DEFAULT_VAT_NOTICE}</p>}
         </div>
       ) : null}
 

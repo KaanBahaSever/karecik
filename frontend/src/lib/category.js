@@ -98,8 +98,8 @@ function inRanges(ranges, codePoint) {
  *   '🇹🇷'        -> '🇹🇷'
  *   'coffee'     -> null   (legacy icon code)
  *   'кофе ☕'    -> null   (a word, emoji or not)
- *   '⠀'     -> null   (Braille blank: invisible)
- *   '​'     -> null   (nothing but an invisible character)
+ *   '\u2800'    -> null   (Braille blank: invisible)
+ *   '\u200b'    -> null   (nothing but an invisible character)
  *   '   '        -> null
  *   null / 42    -> null
  *

@@ -101,3 +101,31 @@
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   break-anywhere
+
+   For a value that is never truncated and must never run past the edge of its
+   line: a Wi-Fi password, a phone number, the contact values of the customer
+   menu's compact footer.
+
+   overflow-wrap: anywhere breaks inside such a value only where its line
+   offers no other break, so "+90 (532) 000 00 00" still wraps at its spaces
+   and only an unbroken run too long for the line is split. word-break:
+   break-all would break between any two characters wherever a line ends,
+   splitting a number or a password mid-value even where the value would fit
+   on the next line. It is therefore only the fallback for a browser without
+   overflow-wrap: anywhere (Safari before 15.4), where a long unbroken value
+   has no other way to stay on screen.
+
+   Plain CSS after the Tailwind layers, so it is always in the bundle.
+--------------------------------------------------------------------------- */
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@supports not (overflow-wrap: anywhere) {
+  .break-anywhere {
+    word-break: break-all;
+  }
+}

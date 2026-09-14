@@ -30,6 +30,11 @@ func scanUser(row pgx.Row) (*models.User, error) {
 
 // GetUserByEmail looks up a user by email, case-insensitively.
 func GetUserByEmail(ctx context.Context, db DB, email string) (*models.User, error) {
+	// Login and the password reset request look accounts up by what a stranger
+	// typed, and a form body can carry any bytes; see UnstorableText.
+	if UnstorableText(email) {
+		return nil, ErrNotFound
+	}
 	row := db.QueryRow(ctx,
 		`SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)`,
 		strings.TrimSpace(email))
@@ -44,6 +49,9 @@ func GetUserByID(ctx context.Context, db DB, id uuid.UUID) (*models.User, error)
 
 // EmailExists reports whether an email address is already registered.
 func EmailExists(ctx context.Context, db DB, email string) (bool, error) {
+	if UnstorableText(email) {
+		return false, nil
+	}
 	var exists bool
 	err := db.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1))`,

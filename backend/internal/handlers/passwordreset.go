@@ -68,7 +68,7 @@ func forgotPasswordAnswer(c *fiber.Ctx) error {
 
 // ForgotPassword issues a reset link.
 //
-// WHAT THIS ENDPOINT MUST NOT REVEAL
+// # WHAT THIS ENDPOINT MUST NOT REVEAL
 //
 // Every path below returns the same body and the same status. That includes
 // the address being unknown, a link having been sent inside the cooldown, the
@@ -99,6 +99,14 @@ func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
 	if !h.Mail.Configured() {
 		return utils.Fail(c, fiber.StatusServiceUnavailable, "MAIL_NOT_CONFIGURED",
 			"Şifre sıfırlama e-postası şu an gönderilemiyor. Lütfen bizimle iletişime geçin.")
+	}
+
+	// No account can hold an address PostgreSQL cannot store (see
+	// UnstorableText), so such an address gets the answer of an unknown one
+	// without a lookup. It is checked on the address as sent, before anything
+	// could turn a byte that is not UTF-8 into another character.
+	if UnstorableText(email) {
+		return forgotPasswordAnswer(c)
 	}
 
 	user, err := repository.GetUserByEmail(c.Context(), h.DB, email)
@@ -218,6 +226,12 @@ func (h *Handler) ResetPassword(c *fiber.Ctx) error {
 	}
 	if len(req.Password) < minPasswordLength {
 		return utils.Unprocessable(c, "Yeni şifreniz en az 8 karakter olmalıdır.")
+	}
+	// Refused before the token is consumed: utils.HashPassword would fail on
+	// such a password after the link had already been used up, and the person
+	// would be left with a 500 and a dead link instead of a message to act on.
+	if utils.PasswordTooLong(req.Password) {
+		return utils.Unprocessable(c, msgPasswordTooLong)
 	}
 
 	userID, err := repository.ConsumePasswordReset(c.Context(), h.DB,

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-// authResponse no longer carries a token. The session travels in an HttpOnly
+// authResponse carries no token. The session travels in an HttpOnly
 // cookie the browser attaches on its own, so there is nothing for the client to
 // store — and nothing for a script on the page to steal.
 type authResponse struct {
@@ -41,6 +42,12 @@ type changePasswordRequest struct {
 
 // minPasswordLength is enforced on register, on change, and by the reset CLI.
 const minPasswordLength = 8
+
+// msgPasswordTooLong refuses a password longer than bcrypt can hash — see
+// utils.MaxPasswordBytes — on register, change and reset. The limit is in
+// bytes, and the message says so, because a Turkish letter takes two of them.
+var msgPasswordTooLong = "Şifre çok uzun. En fazla " + strconv.Itoa(utils.MaxPasswordBytes) +
+	" bayt olabilir; Türkçe karakterler 2 bayt sayılır."
 
 // startSession issues a session, stores its hash and writes the cookie.
 //
@@ -89,16 +96,29 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 	}
 
 	req.BusinessName = strings.TrimSpace(req.BusinessName)
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	email, storable := NormalizeEmail(req.Email)
+	req.Email = email
 
+	// A business name PostgreSQL cannot store (see UnstorableText) gets the
+	// invalid-value message PUT /api/business gives the same field. An e-mail
+	// address of that kind is refused below as an invalid address: NormalizeEmail
+	// reports it before lowercasing could turn it into a different one.
+	if UnstorableText(req.BusinessName) {
+		return utils.Unprocessable(c, "İşletme adı metin olmalıdır.")
+	}
 	if len([]rune(req.BusinessName)) < 2 || len([]rune(req.BusinessName)) > 100 {
 		return utils.Unprocessable(c, "İşletme adı 2 ile 100 karakter arasında olmalıdır.")
 	}
-	if !isValidEmail(req.Email) {
+	if !storable || !IsValidEmail(req.Email) {
 		return utils.Unprocessable(c, "Geçerli bir e-posta adresi giriniz.")
 	}
 	if len(req.Password) < 8 {
 		return utils.Unprocessable(c, "Şifreniz en az 8 karakter olmalıdır.")
+	}
+	// Refused here, because utils.HashPassword would fail on it and the
+	// request would end as a 500.
+	if utils.PasswordTooLong(req.Password) {
+		return utils.Unprocessable(c, msgPasswordTooLong)
 	}
 
 	exists, err := repository.EmailExists(c.Context(), h.DB, req.Email)
@@ -140,12 +160,18 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "İstek gövdesi okunamadı.")
 	}
 
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	if req.Email == "" || req.Password == "" {
+	email, storable := NormalizeEmail(req.Email)
+	if strings.TrimSpace(req.Email) == "" || req.Password == "" {
 		return utils.Unprocessable(c, "E-posta ve şifre alanları zorunludur.")
 	}
+	// No account can hold an address PostgreSQL cannot store, so such an address
+	// gets the answer of any unknown one. NormalizeEmail reports it before
+	// lowercasing could turn it into a different — possibly registered — address.
+	if !storable {
+		return utils.Unauthorized(c, "E-posta veya şifre hatalı.")
+	}
 
-	user, err := repository.GetUserByEmail(c.Context(), h.DB, req.Email)
+	user, err := repository.GetUserByEmail(c.Context(), h.DB, email)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			// Do not reveal which of the two fields was wrong.
@@ -236,6 +262,12 @@ func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 	}
 	if len(req.NewPassword) < minPasswordLength {
 		return utils.Unprocessable(c, "Yeni şifreniz en az 8 karakter olmalıdır.")
+	}
+	// Refused before anything is checked or hashed: utils.HashPassword would
+	// fail on it. A current_password that long simply never matches (see
+	// utils.CheckPassword).
+	if utils.PasswordTooLong(req.NewPassword) {
+		return utils.Unprocessable(c, msgPasswordTooLong)
 	}
 	if req.NewPassword == req.CurrentPassword {
 		return utils.Unprocessable(c, "Yeni şifreniz mevcut şifrenizden farklı olmalıdır.")

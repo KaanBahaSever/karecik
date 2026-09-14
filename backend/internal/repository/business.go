@@ -18,8 +18,8 @@ import (
 // setting — branding, splash, contact, pricing, languages — lives on the menu,
 // because a menu is what a customer opens.
 //
-// There is no is_active on a business any more: a tenant is visible exactly
-// when it has active menus.
+// A business carries no is_active flag: a tenant is visible exactly when it has
+// active menus.
 const businessColumns = `id, user_id, name, slug, created_at, updated_at`
 
 func scanBusiness(row pgx.Row) (*models.Business, error) {
@@ -73,6 +73,11 @@ func GetBusinessByUserID(ctx context.Context, db DB, userID uuid.UUID) (*models.
 // then answered by the payload (menu_resolved false plus an empty menu list),
 // never by a 404 on a tenant that really exists.
 func GetBusinessBySlug(ctx context.Context, db DB, slug string) (*models.Business, error) {
+	// The slug comes from the address a customer opened — the Host header, the
+	// X-Forwarded-Host header or the path; see UnstorableText.
+	if UnstorableText(slug) {
+		return nil, ErrNotFound
+	}
 	return scanBusiness(db.QueryRow(ctx,
 		`SELECT `+businessColumns+` FROM businesses WHERE slug = lower($1)`,
 		strings.TrimSpace(slug)))

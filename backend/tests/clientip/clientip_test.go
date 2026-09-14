@@ -1,10 +1,12 @@
-package clientip
+package clientip_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"karecik/backend/internal/clientip"
 )
 
 // headers is a Header backed by a map, so the core can be exercised with no
@@ -28,8 +30,8 @@ const (
 	secretValue  = "correct-horse-battery-staple"
 )
 
-func proven() Resolver {
-	return Resolver{SecretHeader: secretHeader, Secret: secretValue, PortHeader: HeaderXClientPort}
+func proven() clientip.Resolver {
+	return clientip.Resolver{SecretHeader: secretHeader, Secret: secretValue, PortHeader: clientip.HeaderXClientPort}
 }
 
 // ---------------------------------------------------------------- normalise
@@ -75,12 +77,12 @@ func TestNormalizeIP(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := normalizeIP(tc.in)
+			got, ok := clientip.NormalizeIP(tc.in)
 			if ok != tc.ok {
-				t.Fatalf("normalizeIP(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
+				t.Fatalf("NormalizeIP(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
 			}
 			if ok && got != tc.want {
-				t.Errorf("normalizeIP(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("NormalizeIP(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -110,12 +112,12 @@ func TestNormalizePort(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run("port_"+tc.in, func(t *testing.T) {
-			got, ok := normalizePort(tc.in)
+			got, ok := clientip.NormalizePort(tc.in)
 			if ok != tc.ok {
-				t.Fatalf("normalizePort(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
+				t.Fatalf("NormalizePort(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
 			}
 			if ok && got != tc.want {
-				t.Errorf("normalizePort(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("NormalizePort(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -144,12 +146,12 @@ func TestRightmostForwarded(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := rightmostForwarded(tc.in)
+			got, ok := clientip.RightmostForwarded(tc.in)
 			if ok != tc.ok {
-				t.Fatalf("rightmostForwarded(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
+				t.Fatalf("RightmostForwarded(%q) ok=%v, want %v (got %q)", tc.in, ok, tc.ok, got)
 			}
 			if ok && got != tc.want {
-				t.Errorf("rightmostForwarded(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("RightmostForwarded(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -160,73 +162,73 @@ func TestRightmostForwarded(t *testing.T) {
 func TestResolvePrecedence(t *testing.T) {
 	cases := []struct {
 		name       string
-		resolver   Resolver
+		resolver   clientip.Resolver
 		hdr        headers
 		remote     string
 		wantIP     string
 		wantPort   string
-		wantSource Source
+		wantSource clientip.Source
 		wantProven bool
 	}{
 		{
 			name:     "verified cloudflare wins and carries the port",
 			resolver: proven(),
 			hdr: headers{
-				secretHeader:         secretValue,
-				HeaderCFConnectingIP: "203.0.113.9",
-				HeaderXClientPort:    "44321",
-				HeaderXRealIP:        "198.51.100.1",
+				secretHeader:                  secretValue,
+				clientip.HeaderCFConnectingIP: "203.0.113.9",
+				clientip.HeaderXClientPort:    "44321",
+				clientip.HeaderXRealIP:        "198.51.100.1",
 			},
 			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: "44321",
-			wantSource: SourceCloudflare, wantProven: true,
+			wantSource: clientip.SourceCloudflare, wantProven: true,
 		},
 		{
 			name:     "wrong secret downgrades to unverified and DROPS the port",
 			resolver: proven(),
 			hdr: headers{
-				secretHeader:         "guessed-wrong",
-				HeaderCFConnectingIP: "203.0.113.9",
-				HeaderXClientPort:    "44321",
+				secretHeader:                  "guessed-wrong",
+				clientip.HeaderCFConnectingIP: "203.0.113.9",
+				clientip.HeaderXClientPort:    "44321",
 			},
-			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: PortUnknown,
-			wantSource: SourceCloudflareUnverified,
+			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: clientip.PortUnknown,
+			wantSource: clientip.SourceCloudflareUnverified,
 		},
 		{
 			name:     "no secret configured: CF still used, still unverified",
-			resolver: Resolver{PortHeader: HeaderXClientPort},
+			resolver: clientip.Resolver{PortHeader: clientip.HeaderXClientPort},
 			hdr: headers{
-				HeaderCFConnectingIP: "203.0.113.9",
-				HeaderXClientPort:    "44321",
+				clientip.HeaderCFConnectingIP: "203.0.113.9",
+				clientip.HeaderXClientPort:    "44321",
 			},
-			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: PortUnknown,
-			wantSource: SourceCloudflareUnverified,
+			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: clientip.PortUnknown,
+			wantSource: clientip.SourceCloudflareUnverified,
 		},
 		{
 			name:       "no cloudflare: the platform edge header",
 			resolver:   proven(),
-			hdr:        headers{HeaderXRealIP: "198.51.100.1"},
+			hdr:        headers{clientip.HeaderXRealIP: "198.51.100.1"},
 			remote:     "10.0.0.5:1234",
 			wantIP:     "198.51.100.1",
-			wantPort:   PortUnknown,
-			wantSource: SourceEdge,
+			wantPort:   clientip.PortUnknown,
+			wantSource: clientip.SourceEdge,
 		},
 		{
 			name:       "XFF ignored unless enabled",
 			resolver:   proven(),
-			hdr:        headers{HeaderXForwardedFor: "203.0.113.9"},
+			hdr:        headers{clientip.HeaderXForwardedFor: "203.0.113.9"},
 			remote:     "10.0.0.5:1234",
 			wantIP:     "10.0.0.5",
 			wantPort:   "1234",
-			wantSource: SourcePeer,
+			wantSource: clientip.SourcePeer,
 		},
 		{
 			name:       "XFF used when explicitly enabled, rightmost entry",
-			resolver:   Resolver{TrustForwarded: true},
-			hdr:        headers{HeaderXForwardedFor: "1.1.1.1, 198.51.100.1"},
+			resolver:   clientip.Resolver{TrustForwarded: true},
+			hdr:        headers{clientip.HeaderXForwardedFor: "1.1.1.1, 198.51.100.1"},
 			remote:     "10.0.0.5:1234",
 			wantIP:     "198.51.100.1",
-			wantPort:   PortUnknown,
-			wantSource: SourceForwarded,
+			wantPort:   clientip.PortUnknown,
+			wantSource: clientip.SourceForwarded,
 		},
 		{
 			name:       "nothing but the peer",
@@ -235,51 +237,51 @@ func TestResolvePrecedence(t *testing.T) {
 			remote:     "[2001:db8::1]:5555",
 			wantIP:     "2001:db8::1",
 			wantPort:   "5555",
-			wantSource: SourcePeer,
+			wantSource: clientip.SourcePeer,
 		},
 		{
 			name:       "nothing at all",
 			resolver:   proven(),
 			hdr:        headers{},
 			remote:     "",
-			wantIP:     IPUnknown,
-			wantPort:   PortUnknown,
-			wantSource: SourceUnknown,
+			wantIP:     clientip.IPUnknown,
+			wantPort:   clientip.PortUnknown,
+			wantSource: clientip.SourceUnknown,
 		},
 		{
 			// One junk header must not blank the line; the walk continues.
 			name:     "junk CF header falls through to the edge header",
 			resolver: proven(),
 			hdr: headers{
-				secretHeader:         secretValue,
-				HeaderCFConnectingIP: "not-an-ip",
-				HeaderXRealIP:        "198.51.100.1",
+				secretHeader:                  secretValue,
+				clientip.HeaderCFConnectingIP: "not-an-ip",
+				clientip.HeaderXRealIP:        "198.51.100.1",
 			},
-			remote: "10.0.0.5:1234", wantIP: "198.51.100.1", wantPort: PortUnknown,
-			wantSource: SourceEdge,
+			remote: "10.0.0.5:1234", wantIP: "198.51.100.1", wantPort: clientip.PortUnknown,
+			wantSource: clientip.SourceEdge,
 		},
 		{
 			// Proven origin, but the transform rule is missing or broken.
 			name:     "verified cloudflare with an unusable port",
 			resolver: proven(),
 			hdr: headers{
-				secretHeader:         secretValue,
-				HeaderCFConnectingIP: "203.0.113.9",
-				HeaderXClientPort:    "0",
+				secretHeader:                  secretValue,
+				clientip.HeaderCFConnectingIP: "203.0.113.9",
+				clientip.HeaderXClientPort:    "0",
 			},
-			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: PortUnknown,
-			wantSource: SourceCloudflare, wantProven: true,
+			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: clientip.PortUnknown,
+			wantSource: clientip.SourceCloudflare, wantProven: true,
 		},
 		{
 			name:     "port header not configured at all",
-			resolver: Resolver{SecretHeader: secretHeader, Secret: secretValue},
+			resolver: clientip.Resolver{SecretHeader: secretHeader, Secret: secretValue},
 			hdr: headers{
-				secretHeader:         secretValue,
-				HeaderCFConnectingIP: "203.0.113.9",
-				HeaderXClientPort:    "44321",
+				secretHeader:                  secretValue,
+				clientip.HeaderCFConnectingIP: "203.0.113.9",
+				clientip.HeaderXClientPort:    "44321",
 			},
-			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: PortUnknown,
-			wantSource: SourceCloudflare, wantProven: true,
+			remote: "10.0.0.5:1234", wantIP: "203.0.113.9", wantPort: clientip.PortUnknown,
+			wantSource: clientip.SourceCloudflare, wantProven: true,
 		},
 		{
 			name:       "case-insensitive header lookup",
@@ -287,18 +289,18 @@ func TestResolvePrecedence(t *testing.T) {
 			hdr:        headers{"cf-connecting-ip": "203.0.113.9", "x-edge-secret": secretValue},
 			remote:     "10.0.0.5:1234",
 			wantIP:     "203.0.113.9",
-			wantPort:   PortUnknown, // no port header sent
-			wantSource: SourceCloudflare,
+			wantPort:   clientip.PortUnknown, // no port header sent
+			wantSource: clientip.SourceCloudflare,
 			wantProven: true,
 		},
 		{
 			name:       "ipv4-mapped ipv6 is normalised",
 			resolver:   proven(),
-			hdr:        headers{HeaderXRealIP: "::ffff:203.0.113.9"},
+			hdr:        headers{clientip.HeaderXRealIP: "::ffff:203.0.113.9"},
 			remote:     "10.0.0.5:1234",
 			wantIP:     "203.0.113.9",
-			wantPort:   PortUnknown,
-			wantSource: SourceEdge,
+			wantPort:   clientip.PortUnknown,
+			wantSource: clientip.SourceEdge,
 		},
 	}
 
@@ -328,21 +330,21 @@ func TestResolvePrecedence(t *testing.T) {
 // NAT. Accepting an unproven one would put a precise, wrong identity in an
 // audit trail — worse than recording no port at all.
 func TestUnverifiedNeverCarriesPort(t *testing.T) {
-	for _, r := range []Resolver{
-		{PortHeader: HeaderXClientPort}, // no secret configured
-		{SecretHeader: secretHeader, Secret: secretValue, PortHeader: HeaderXClientPort}, // secret wrong below
+	for _, r := range []clientip.Resolver{
+		{PortHeader: clientip.HeaderXClientPort},                                                  // no secret configured
+		{SecretHeader: secretHeader, Secret: secretValue, PortHeader: clientip.HeaderXClientPort}, // secret wrong below
 	} {
 		got := r.Resolve(headers{
-			HeaderCFConnectingIP: "203.0.113.9",
-			HeaderXClientPort:    "44321",
-			secretHeader:         "wrong",
+			clientip.HeaderCFConnectingIP: "203.0.113.9",
+			clientip.HeaderXClientPort:    "44321",
+			secretHeader:                  "wrong",
 		}, "10.0.0.5:1234")
 
 		if got.Verified {
 			t.Fatal("an unproven request was marked Verified")
 		}
-		if got.Port != PortUnknown {
-			t.Errorf("an unproven request carried port %q; it must be %q", got.Port, PortUnknown)
+		if got.Port != clientip.PortUnknown {
+			t.Errorf("an unproven request carried port %q; it must be %q", got.Port, clientip.PortUnknown)
 		}
 	}
 }
@@ -352,19 +354,19 @@ func TestSpoofAttempts(t *testing.T) {
 	r := proven()
 
 	t.Run("forged CF header without the secret is not trusted", func(t *testing.T) {
-		got := r.Resolve(headers{HeaderCFConnectingIP: "1.2.3.4"}, "10.0.0.5:1234")
+		got := r.Resolve(headers{clientip.HeaderCFConnectingIP: "1.2.3.4"}, "10.0.0.5:1234")
 		if got.Verified {
 			t.Error("a forged CF-Connecting-IP was accepted as verified")
 		}
-		if got.Source != SourceCloudflareUnverified {
-			t.Errorf("Source = %q, want %q", got.Source, SourceCloudflareUnverified)
+		if got.Source != clientip.SourceCloudflareUnverified {
+			t.Errorf("Source = %q, want %q", got.Source, clientip.SourceCloudflareUnverified)
 		}
 	})
 
 	t.Run("XFF stuffing cannot displace the edge header", func(t *testing.T) {
 		got := r.Resolve(headers{
-			HeaderXForwardedFor: "1.2.3.4, 5.6.7.8, 9.10.11.12",
-			HeaderXRealIP:       "198.51.100.1",
+			clientip.HeaderXForwardedFor: "1.2.3.4, 5.6.7.8, 9.10.11.12",
+			clientip.HeaderXRealIP:       "198.51.100.1",
 		}, "10.0.0.5:1234")
 		if got.IP != "198.51.100.1" {
 			t.Errorf("IP = %q; X-Forwarded-For displaced the edge header", got.IP)
@@ -373,9 +375,9 @@ func TestSpoofAttempts(t *testing.T) {
 
 	t.Run("control characters never reach the output", func(t *testing.T) {
 		got := r.Resolve(headers{
-			secretHeader:         secretValue,
-			HeaderCFConnectingIP: "203.0.113.9\r\n2026-01-01 FAKE ENTRY",
-			HeaderXRealIP:        "198.51.100.1",
+			secretHeader:                  secretValue,
+			clientip.HeaderCFConnectingIP: "203.0.113.9\r\n2026-01-01 FAKE ENTRY",
+			clientip.HeaderXRealIP:        "198.51.100.1",
 		}, "10.0.0.5:1234")
 		if strings.ContainsAny(got.IP, "\r\n") {
 			t.Fatalf("a newline survived into the IP field: %q", got.IP)
@@ -396,14 +398,14 @@ func TestSanitizeLogValue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := SanitizeLogValue(tc.in, 0); got != tc.want {
+			if got := clientip.SanitizeLogValue(tc.in, 0); got != tc.want {
 				t.Errorf("SanitizeLogValue(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
 
 	t.Run("truncates", func(t *testing.T) {
-		got := SanitizeLogValue(strings.Repeat("a", 100), 10)
+		got := clientip.SanitizeLogValue(strings.Repeat("a", 100), 10)
 		if len([]rune(got)) != 11 { // 10 runes plus the ellipsis
 			t.Errorf("SanitizeLogValue truncated to %d runes, want 11", len([]rune(got)))
 		}
@@ -417,8 +419,8 @@ func TestResolveRequest(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	req.Header.Set(secretHeader, secretValue)
-	req.Header.Set(HeaderCFConnectingIP, "203.0.113.9")
-	req.Header.Set(HeaderXClientPort, "44321")
+	req.Header.Set(clientip.HeaderCFConnectingIP, "203.0.113.9")
+	req.Header.Set(clientip.HeaderXClientPort, "44321")
 	req.RemoteAddr = "10.0.0.5:1234"
 
 	got := r.ResolveRequest(req)
@@ -427,14 +429,14 @@ func TestResolveRequest(t *testing.T) {
 	}
 
 	t.Run("nil request does not panic", func(t *testing.T) {
-		if got := r.ResolveRequest(nil); got.Source != SourceUnknown {
-			t.Errorf("ResolveRequest(nil).Source = %q, want %q", got.Source, SourceUnknown)
+		if got := r.ResolveRequest(nil); got.Source != clientip.SourceUnknown {
+			t.Errorf("ResolveRequest(nil).Source = %q, want %q", got.Source, clientip.SourceUnknown)
 		}
 	})
 }
 
 func TestNilHeaderDoesNotPanic(t *testing.T) {
-	got := Resolver{}.Resolve(nil, "203.0.113.9:44321")
+	got := clientip.Resolver{}.Resolve(nil, "203.0.113.9:44321")
 	if got.IP != "203.0.113.9" {
 		t.Errorf("IP = %q, want the peer to be used", got.IP)
 	}
@@ -442,9 +444,9 @@ func TestNilHeaderDoesNotPanic(t *testing.T) {
 
 func TestIPPort(t *testing.T) {
 	ip, port := proven().IPPort(headers{
-		secretHeader:         secretValue,
-		HeaderCFConnectingIP: "203.0.113.9",
-		HeaderXClientPort:    "44321",
+		secretHeader:                  secretValue,
+		clientip.HeaderCFConnectingIP: "203.0.113.9",
+		clientip.HeaderXClientPort:    "44321",
 	}, "10.0.0.5:1234")
 
 	if ip != "203.0.113.9" || port != "44321" {
@@ -473,8 +475,8 @@ func TestKeyIPIsNotAttackerControlled(t *testing.T) {
 
 	for _, forged := range []string{"1.2.3.4", "1.2.3.5", "9.9.9.9", "2001:db8::1", "198.51.100.77"} {
 		got := r.Resolve(headers{
-			HeaderCFConnectingIP: forged,        // attacker-chosen, no secret
-			HeaderXRealIP:        "203.0.113.7", // written by the platform edge
+			clientip.HeaderCFConnectingIP: forged,        // attacker-chosen, no secret
+			clientip.HeaderXRealIP:        "203.0.113.7", // written by the platform edge
 		}, "10.0.0.5:5555")
 
 		keys[got.KeyIP] = true
@@ -501,7 +503,7 @@ func TestKeyIPIsNotAttackerControlled(t *testing.T) {
 
 // TestKeyIPFallsBackToPeer covers the case with no edge header at all.
 func TestKeyIPFallsBackToPeer(t *testing.T) {
-	got := Resolver{}.Resolve(headers{HeaderCFConnectingIP: "1.2.3.4"}, "198.51.100.9:5555")
+	got := clientip.Resolver{}.Resolve(headers{clientip.HeaderCFConnectingIP: "1.2.3.4"}, "198.51.100.9:5555")
 	if got.KeyIP != "198.51.100.9" {
 		t.Errorf("KeyIP = %q, want the peer 198.51.100.9", got.KeyIP)
 	}
@@ -514,9 +516,9 @@ func TestKeyIPFallsBackToPeer(t *testing.T) {
 // edge address (which may be a whole Cloudflare egress) to the actual visitor.
 func TestVerifiedCloudflareIsKeyable(t *testing.T) {
 	got := proven().Resolve(headers{
-		secretHeader:         secretValue,
-		HeaderCFConnectingIP: "203.0.113.9",
-		HeaderXRealIP:        "198.51.100.1",
+		secretHeader:                  secretValue,
+		clientip.HeaderCFConnectingIP: "203.0.113.9",
+		clientip.HeaderXRealIP:        "198.51.100.1",
 	}, "10.0.0.5:5555")
 
 	if got.KeyIP != "203.0.113.9" {
@@ -541,11 +543,11 @@ func TestControlCharactersAreRefused(t *testing.T) {
 		"2001:db8::1%\x00",
 		"203.0.113.9\x7f",
 	} {
-		if got, ok := normalizeIP(in); ok {
-			t.Errorf("normalizeIP(%q) accepted the value as %q; control characters must be refused", in, got)
+		if got, ok := clientip.NormalizeIP(in); ok {
+			t.Errorf("NormalizeIP(%q) accepted the value as %q; control characters must be refused", in, got)
 		}
 	}
-	if _, ok := normalizePort("443\n"); ok {
-		t.Error("normalizePort accepted a value containing a newline")
+	if _, ok := clientip.NormalizePort("443\n"); ok {
+		t.Error("NormalizePort accepted a value containing a newline")
 	}
 }

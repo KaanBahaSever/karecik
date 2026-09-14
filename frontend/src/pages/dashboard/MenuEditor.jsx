@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -17,6 +17,7 @@ import { LayoutList, Percent, Plus } from 'lucide-react'
 
 import api from '../../lib/api'
 import { useActiveMenu } from '../../lib/menuContext.jsx'
+import { closestRowSlot, rowSlotKeyboardCoordinates } from '../../lib/sortableRows'
 import { findLanguage } from '../../locales/index.js'
 
 import { useToast } from '../../components/ui/Toast.jsx'
@@ -66,6 +67,17 @@ function getProductName(product, language) {
   return product.translations?.[language]?.name || product.translations?.tr?.name || 'İsimsiz ürün'
 }
 
+/**
+ * The 404 messages of a write whose category or menu no longer exists: it was
+ * deleted in another tab, say, while this page still lists it.
+ */
+const STALE_LIST_MESSAGES = ['Kategori bulunamadı.', 'Menü bulunamadı.']
+
+/** Whether a failed request says the editor's lists hold a category or a menu that is gone. */
+function isStaleListError(err) {
+  return err?.status === 404 && STALE_LIST_MESSAGES.includes(err?.message)
+}
+
 export default function MenuEditor() {
   const toast = useToast()
 
@@ -74,7 +86,7 @@ export default function MenuEditor() {
   // The bar at the top of the page decides which menu is edited here. Until it
   // has resolved one, nothing is fetched: an unscoped request would list every
   // category of the business and be thrown away a moment later.
-  const { activeMenu, loading: menusLoading, refreshMenu } = useActiveMenu()
+  const { activeMenu, loading: menusLoading, refreshMenu, setMenuCategoryCount } = useActiveMenu()
   const activeMenuID = activeMenu?.id || null
 
   // A business may own no menus at all. Neither the categories nor the forms
@@ -103,6 +115,13 @@ export default function MenuEditor() {
 
   const [loading, setLoading] = useState(true)
   const [categories, setCategories] = useState([])
+  // The list as last rendered, for the handlers that finish after an await:
+  // their render's `categories` may be older by then, and the category count
+  // they report to the menu context has to come from the current list.
+  const categoriesRef = useRef(categories)
+  useEffect(() => {
+    categoriesRef.current = categories
+  }, [categories])
   const [productsByCategory, setProductsByCategory] = useState({})
   const [expandedIds, setExpandedIds] = useState([])
   const [previewCounter, setPreviewCounter] = useState(0)
@@ -128,7 +147,9 @@ export default function MenuEditor() {
 
   /* ------------------------------------------------------------- loading */
 
-  const loadData = useCallback(async () => {
+  /* `reportedMessage` is an error message already on screen: a load that fails
+     with that same message does not show it again. See reloadIfStale. */
+  const loadData = useCallback(async ({ reportedMessage = '' } = {}) => {
     // Wait for the menu context; it clears `loading` even when it fails.
     if (menusLoading) return
 
@@ -151,6 +172,8 @@ export default function MenuEditor() {
 
       const list = Array.isArray(incomingCategories) ? incomingCategories : []
       setCategories(list)
+      // The "Menü Değiştir" dialog prints this count; see setMenuCategoryCount.
+      setMenuCategoryCount(activeMenuID, list.length)
       setProductsByCategory(groupProducts(incomingProducts))
       // Switching menus replaces the whole list, so ids that no longer exist are
       // dropped and the first category of the new menu is opened instead.
@@ -159,15 +182,33 @@ export default function MenuEditor() {
         return kept.length > 0 ? kept : list.slice(0, 1).map((category) => category.id)
       })
     } catch (err) {
-      toast.error(err.message)
+      if (err.message !== reportedMessage) toast.error(err.message)
     } finally {
       setLoading(false)
     }
-  }, [toast, menusLoading, activeMenuID])
+  }, [toast, menusLoading, activeMenuID, setMenuCategoryCount])
 
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  /**
+   * Reloads the categories and products and refreshes the preview after a
+   * write answered 404 "Kategori bulunamadı." or "Menü bulunamadı.": the
+   * category or menu it wrote into was deleted in another tab, so the lists on
+   * this page are out of date. The reload drops the category that is gone,
+   * instead of leaving it on screen for the next action on it to fail as well.
+   *
+   * The write's own error toast is already showing, and a menu deleted in
+   * another tab answers the reload with that same message, so the reload does
+   * not show it a second time. Returns whether it reloaded.
+   */
+  function reloadIfStale(err) {
+    if (!isStaleListError(err)) return false
+    loadData({ reportedMessage: err.message })
+    refreshPreview()
+    return true
+  }
 
   const getProducts = useCallback(
     (categoryId) => productsByCategory[String(categoryId)] || [],
@@ -206,6 +247,18 @@ export default function MenuEditor() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
+  /* The categories get their own keyboard getter and collision detection, from
+     lib/sortableRows.js, because their rows differ in height: an open category
+     is many rows tall. With dnd-kit's pair - closestCenter or closestCorners
+     with sortableKeyboardCoordinates - the arrow keys cannot move an open
+     category taller than about three closed rows at all, and a closed row moved
+     past an open one skips a place. Product rows have no open state, so the
+     product lists keep dnd-kit's pair. */
+  const categorySensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: rowSlotKeyboardCoordinates }),
+  )
+
   /** Category order changed: local state first, then the server. */
   async function onCategoryDragEnd(event) {
     const { active, over } = event
@@ -226,6 +279,7 @@ export default function MenuEditor() {
     } catch (err) {
       setCategories(previousOrder)
       toast.error(err.message)
+      reloadIfStale(err)
     }
   }
 
@@ -253,6 +307,7 @@ export default function MenuEditor() {
     } catch (err) {
       setProductsByCategory((previous) => ({ ...previous, [key]: previousList }))
       toast.error(err.message)
+      reloadIfStale(err)
     }
   }
 
@@ -296,6 +351,12 @@ export default function MenuEditor() {
       loadData()
       refreshPreview()
       return
+    }
+
+    // A new category adds one to the menu's count in the "Menü Değiştir" dialog.
+    const current = categoriesRef.current
+    if (!current.some((item) => item.id === category.id)) {
+      setMenuCategoryCount(activeMenuID, current.length + 1)
     }
 
     setCategories((previous) => {
@@ -377,6 +438,7 @@ export default function MenuEditor() {
     } catch (err) {
       patchProductLocally(productId, { price: previousPrice })
       toast.error(err.message)
+      reloadIfStale(err)
     }
   }
 
@@ -392,6 +454,7 @@ export default function MenuEditor() {
     } catch (err) {
       patchProductLocally(productId, { is_active: !nextState })
       toast.error(err.message)
+      reloadIfStale(err)
     }
   }
 
@@ -404,6 +467,10 @@ export default function MenuEditor() {
       await api.deleteCategory(target.id)
 
       setCategories((previous) => previous.filter((category) => category.id !== target.id))
+      setMenuCategoryCount(
+        activeMenuID,
+        categoriesRef.current.filter((category) => category.id !== target.id).length,
+      )
       setProductsByCategory((previous) => {
         const next = { ...previous }
         delete next[String(target.id)]
@@ -416,6 +483,8 @@ export default function MenuEditor() {
       toast.success('Kategori silindi.')
     } catch (err) {
       toast.error(err.message)
+      // A category that is already gone leaves nothing to confirm.
+      if (reloadIfStale(err)) setCategoryToDelete(null)
     } finally {
       setDeleting(false)
     }
@@ -442,6 +511,7 @@ export default function MenuEditor() {
       toast.success('Ürün silindi.')
     } catch (err) {
       toast.error(err.message)
+      reloadIfStale(err)
     } finally {
       setDeleting(false)
     }
@@ -544,8 +614,8 @@ export default function MenuEditor() {
           ) : (
             /* 1st DndContext — category ordering only */
             <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
+              sensors={categorySensors}
+              collisionDetection={closestRowSlot}
               onDragEnd={onCategoryDragEnd}
             >
               <SortableContext
@@ -653,6 +723,7 @@ export default function MenuEditor() {
             defaultLanguage={defaultLanguage}
             menuId={activeMenuID}
             onSaved={onCategorySaved}
+            onSaveFailed={reloadIfStale}
           />
 
           <ProductModal
@@ -668,6 +739,7 @@ export default function MenuEditor() {
             defaultLanguage={defaultLanguage}
             currency={currency}
             onSaved={onProductSaved}
+            onSaveFailed={reloadIfStale}
           />
 
           {/* Prices belong to the menu they are printed on, so the update is

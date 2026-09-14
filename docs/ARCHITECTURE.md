@@ -63,7 +63,7 @@ What follows from it, and why several decisions elsewhere look the way they do:
 
 - **No cross-origin requests exist.** The panel, every customer menu and the
   landing page's demo iframe are all served by the same process that answers
-  their `/api` calls. That is why the CORS allow-list no longer includes
+  their `/api` calls. That is why the CORS allow-list does not include
   `*.karecik.com`, and why the session cookie needs neither `SameSite=None` nor
   a `Domain` attribute.
 - **The bundle is baked into the image**, so frontend and API can never be at
@@ -203,7 +203,8 @@ called: requested language → default language → the first non-empty entry.
 
 `categories.position` and `products.position` are integers. After a drag and
 drop the client sends the **whole list** in order and the backend writes it in
-one statement:
+one transaction: a `SELECT ... ORDER BY id FOR NO KEY UPDATE` locks the listed
+rows of the business, and then this statement writes them:
 
 ```sql
 UPDATE categories c
@@ -212,8 +213,11 @@ FROM unnest($2::uuid[]) WITH ORDINALITY AS data(id, ord)
 WHERE c.id = data.id AND c.business_id = $1
 ```
 
-For products the same statement also updates `category_id`, which is why moving
-a product to another category and reordering it share a single endpoint.
+For products the lock is `FOR UPDATE` and the statement also updates
+`category_id`, which is why moving a product to another category and reordering
+it share a single endpoint; that transaction first takes the advisory locks of
+the target category and its menu. Both lock every listed row, in ascending id
+order, before they write the first one — see [Lock order](#lock-order).
 
 ---
 
@@ -221,13 +225,31 @@ a product to another category and reordering it share a single endpoint.
 
 `POST /api/products/bulk-price`
 
-1. The selected products of one menu (`menu_id`) are read (`ListPriceRows`).
-2. For each price: `new = old × (1 + percentage/100)` → `RoundPrice(new, mode)` → `max(0, …)`.
-3. With `apply: false` only a preview is returned; the database is untouched.
-4. With `apply: true` the changed prices are written in one set-based `UPDATE`
-   (`ApplyPrices`), the menu's `menus.price_updated_at` is read back into the
+1. For each price: `new = old × (1 + percentage/100)` → `RoundPrice(new, mode)`
+   → `max(0, …)` (`PlanPriceChanges`).
+2. With `apply: false` the selected products of one menu (`menu_id`) are read
+   without locking them (`ListPriceRows`) and only a preview is returned; the
+   database is untouched.
+3. With `apply: true` nothing read for a preview is reused. `ApplyPrices` runs
+   one transaction: the preview's `SELECT` names the selected products, a
+   `SELECT ... WHERE id = ANY(...) ORDER BY id FOR UPDATE` locks exactly those
+   rows, the preview's `SELECT` reads them again once every one of them is
+   locked, the new prices are computed in Go from exactly those rows, and one
+   `UPDATE` writes the rows whose price changes. The response's `preview` and
+   `affected` describe what that transaction read and wrote, so a price edited
+   while the apply waited for its locks is the price the percentage is applied
+   to, and a product moved to another category of the same menu meanwhile is
+   raised like every other.
+4. A preview and an apply alike refuse the whole update with a `422`, and write
+   nothing, when a new price would be larger than `9999999999.99` — the largest
+   value `products.price`, a `NUMERIC(12,2)`, holds (`utils.MaxPrice`).
+5. After an apply the menu's `menus.price_updated_at` is read back into the
    response, and a row is added to `price_update_logs`. The handler does not
    write the date itself — see below.
+
+The preview and the apply both list the products in menu editor order —
+category position, then product position — and count as `affected` only the
+products whose price changes.
 
 Rounding modes (`internal/utils/pricing.go`):
 
@@ -274,21 +296,201 @@ Two details keep the trigger cheap and its lock order predictable:
 - `now()` is constant inside a transaction, and the function only writes a menu
   whose date is not already `now()`. An N-row bulk `UPDATE` writes the menu row
   once, not N times.
-- `ApplyPrices` is one statement, not a loop of single-row updates. Row-level
-  AFTER trigger events fire at the end of the statement, so the bulk update
-  holds all of its product row locks before the trigger locks the menu row —
-  the order a single-product edit uses. A loop inside one transaction would lock
-  the menu after its first product and could deadlock against a concurrent
-  inline edit of a later one.
+- `ApplyPrices` writes with one `UPDATE`, not a loop of single-row updates,
+  and runs it after its locking `SELECT` has locked every product. Row-level AFTER
+  trigger events fire at the end of the statement, so the bulk update holds all
+  of its product row locks before the trigger locks the menu row — the order a
+  single-product edit uses. A loop inside one transaction would lock the menu
+  after its first product and could deadlock against a concurrent inline edit
+  of a later one.
 
-One path still takes the two locks the other way round: deleting a menu locks
-the menu row first and reaches its products only through the cascade. A price
-edit in that same menu at the same instant can therefore deadlock with the
-delete. PostgreSQL detects the cycle (after `deadlock_timeout`, one second by
-default) and aborts one of the two statements, which the API reports as a 500;
-the other completes. It takes an owner deleting a menu while a price in it is
-being saved, so the delete is left simple rather than made to lock products
-first.
+### Lock order
+
+A price edit locks its product row and then, through the trigger, the menu
+row. A product created in or moved into a category also takes a KEY SHARE lock
+on that category — the foreign key check on `products.category_id` — and a
+category created in or moved into a menu takes one on that menu. Two rules keep
+the writers from waiting on each other in a circle.
+
+**Row locks in one direction.** Every writer that locks several rows takes them
+in the same direction: product rows first, in ascending id order, then category
+rows, in ascending id order, and the menu row last.
+
+**Advisory locks before row locks.** A write into a parent reaches it only
+through its own foreign key check — after it has locked the row it moves, when
+it moves one — so row order alone cannot keep it apart from a delete of that
+parent. Deletes, and every write that puts a record into a menu or a category,
+therefore also take a transaction-level advisory lock on the parent —
+`pg_advisory_xact_lock(namespace, hashtext(id::text))`, or
+`pg_advisory_xact_lock_shared` with the same keys, with one fixed namespace for
+menus and one for categories (`repository/locks.go`) — before any row lock of
+their transaction. A delete takes the lock of what it deletes exclusively; a
+create, a move or a reorder takes the lock of the parent it writes into shared —
+for a category, its menu's lock first and then its own. A write into a parent
+that is being deleted therefore waits for the delete while it holds no row
+lock, and then finds its target gone (404); a delete waits for a write that is
+already writing into its parent before the delete has locked anything. Shared
+locks do not conflict, so creates, moves and reorders into the same parent
+still run side by side. And since every transaction takes its advisory locks
+before its first row lock, nothing that holds a row lock ever waits for one, so
+no cycle can pass through them.
+
+A lock is only taken on a menu or a category the business owns — the repository
+checks that before it takes the lock, and checks the parent again once the lock
+is held — so a request of another tenant never waits on one. Two ids whose
+`hashtext` values collide share a key, which can add a wait but never remove
+one. Price edits without a move, bulk price updates, category reorders,
+product deletes and menu creates and saves take no advisory lock: none of them
+puts a record into a menu or a category.
+
+| Writer | Advisory locks, taken first | Row locks, in this order |
+|---|---|---|
+| `PATCH /api/products/:id/price`, and `PUT /api/products/:id` without a `category_id` | — | the product row, then — on a price change — the menu row |
+| `PUT /api/products/:id` with `category_id` C (`UpdateProduct`) — a move, or a save that names the product's own category | C's menu, then C, both shared | the product row, then — when C is a new category — KEY SHARE on C, then — on a price change — the menu row |
+| `POST /api/products` into category C (`CreateProduct`) | C's menu, then C, both shared | KEY SHARE on C |
+| `DELETE /api/products/:id` | — | the product row |
+| `PUT /api/products/reorder` into category C (`ReorderProducts`) | C's menu, then C, both shared | the listed product rows in ascending id order, then — for a product that changes category — KEY SHARE on C |
+| `POST /api/products/bulk-price` with `apply: true` (`ApplyPrices`) | — | the product rows in ascending id order, then — when a price changes — the menu row |
+| `PUT /api/categories/:id` without a `menu_id` | — | the category row |
+| `PUT /api/categories/:id` with `menu_id` M (`UpdateCategory`) — a move, or a save that names the category's own menu | M, shared | the category row, then — when M is a new menu — KEY SHARE on M |
+| `POST /api/categories` into menu M (`CreateCategory`) | M, shared | KEY SHARE on M |
+| `PUT /api/categories/reorder` (`ReorderCategories`) | — | the listed category rows in ascending id order, `FOR NO KEY UPDATE` |
+| `POST /api/menus` | — | KEY SHARE on the business row |
+| `PUT /api/menus/:id` | — | the menu row |
+| `DELETE /api/categories/:id` (`DeleteCategory`) | the category, exclusive | its product rows in ascending id order, then the category row |
+| `DELETE /api/menus/:id` (`DeleteMenu`) | the menu, exclusive | its product rows in ascending id order, then its category rows in ascending id order, then the menu row |
+
+`ReorderProducts` and `ReorderCategories` lock the listed rows with a
+`SELECT ... WHERE id = ANY(...) ORDER BY id FOR UPDATE` (`FOR NO KEY UPDATE`
+for the categories), and `ApplyPrices` locks the products it has just read with
+the same kind of statement; each then writes with a separate `UPDATE` in the
+same transaction. Every row is therefore locked before the first one is
+written, and the `UPDATE`, which takes its snapshot after the last lock, sees
+the latest version of every row it names and writes all of them. None of these
+locking statements joins another table. Under READ COMMITTED a row that changed
+while a statement waited for it is checked again against the statement's
+conditions, with the rows of every joined table as the statement first read
+them, so a join to `categories` would drop a product moved to another category
+of the same menu while the statement waited — and a bulk apply would skip it
+without an error. Locking and writing in one statement — a locking CTE and an
+`UPDATE ... FROM` a join against it — is not used either: it works from the
+snapshot the statement started with, and can leave a row that another
+transaction wrote in the meantime unwritten, without an error.
+
+`DeleteCategory` and `DeleteMenu` run their locking `SELECT`s and then the
+`DELETE` inside one transaction. `DeleteMenu`'s product step does reach the
+products through a join to their categories. The only product whose category
+can change while that step waits is one that leaves the menu, which is right
+to drop out, because every write into a category of the menu waits for the
+delete at the menu's advisory lock.
+
+Each locking statement carries the same `business_id` predicate as the write it
+prepares, so a request naming another tenant's rows never locks — or waits on —
+theirs. `backend/tests/lock_tenant_scope_test.go` holds a row of tenant A and
+fails when a request of tenant B waits on it — for the deletes, both reorders
+and the bulk price update — and it fails when a write of tenant B into B's own
+records waits while A's delete holds the advisory lock of A's record.
+`backend/tests/repository/tenant_scope_db_test.go` calls the writers
+directly with the records of another business while their advisory locks are
+held, and requires each one to refuse at once without writing.
+
+Each of these interleavings is replayed by a regression test that stages it
+with locks of the test's own and asserts that PostgreSQL counts no deadlock,
+that no retry is logged, that no request answers 5xx and that the rows agree
+with the answers:
+
+- **Menu delete and price edit** (`backend/tests/product_lock_order_test.go`).
+  A delete that locked the menu row first and reached the products only through
+  the cascade would take the two locks the other way round from a price edit in
+  the same menu, and the two would deadlock. Hence products before the menu
+  row. The same file checks the multi-row product writers for their ascending
+  order.
+- **Menu delete and a product moved into that menu**
+  (`backend/tests/menu_delete_race_test.go`). The move holds its product and the
+  KEY SHARE lock on the target category and, with a new price, needs the menu
+  row, while the delete's cascade needs that category `FOR UPDATE`. Hence
+  categories before the menu row, and the menu's advisory lock, at which the
+  move waits for the delete before it locks anything.
+- **Menu delete and category reorder**
+  (`backend/tests/category_lock_order_test.go`). A reorder that locked
+  categories in any order but the delete's id order could hold one category
+  while waiting for another the delete holds. Hence the reorder locks in id
+  order too. The same file checks both category writers for their ascending
+  order.
+- **Writes into a parent that is being deleted**
+  (`backend/tests/lock_cycles_test.go`, `backend/tests/create_lock_test.go`).
+  Row order alone cannot prevent these: a category moved into, or created in, a
+  menu being deleted, followed by a price edit of one of its products; a product
+  moved into, or created in, a category of a menu being deleted — between the
+  delete's product and category lock steps — followed by a price edit of that
+  product or a bulk price update of the menu; and a product moved into, or
+  created in, a category being deleted, followed by a reorder or a bulk price
+  update that locks it together with a product the delete holds. The advisory
+  locks make the write wait for the delete before it holds any row, and
+  `deleted_products` counts every product a category delete removes.
+  `lock_cycles_test.go` also stages a move whose target category moves to
+  another menu between the move's first read of it and its lock, which
+  `writeIntoCategory` answers by reading the menu again and starting over.
+- **Lost writes** (`backend/tests/bulk_price_race_test.go`). A bulk apply while
+  other writers touch the same products, a bulk apply while an inline price
+  edit commits, a bulk apply while a product moves to another category of the
+  same menu, two product reorders of one category and two category reorders.
+  Hence the separate locking and writing statements, locking statements without
+  a join, and prices computed from the rows the apply has locked.
+- **Shared locks** (`backend/tests/advisory_lock_sharing_test.go`). Writes into
+  the same menu or category run side by side, a write into a category holds its
+  menu's lock while it waits for the category's, and a category reorder does
+  not wait for the KEY SHARE lock a product write holds on its category.
+
+A write into a menu or a category that a concurrent delete removes after the
+handler's ownership check does not become a 500 either. A create, a move or a
+reorder that waited for the delete at its advisory lock checks its parent again
+once it holds the lock, finds it gone and writes nothing
+(`repository.ErrParentNotFound`, staged by
+`backend/tests/repository/parent_gone_db_test.go`). A write racing a delete
+that took no advisory lock — a row removed past the API — fails its foreign key
+check instead: SQLSTATE `23503` once the delete commits
+(`repository.IsForeignKeyViolation`). The handlers of `CreateProduct`,
+`UpdateProduct`, `PatchProductPrice`, `ReorderProducts`, `CreateCategory` and
+`UpdateCategory` answer both with a 404 that names the record that vanished:
+`Kategori bulunamadı.` for a product written into a category,
+`Ürün bulunamadı.` for a price edit, which names no category, and
+`Menü bulunamadı.` for a category created in or moved to a menu.
+`backend/tests/foreign_key_race_test.go` stages
+the product and category moves, the product reorder and both creates against
+an uncommitted delete of the test's own.
+
+**The safety net.** Lock order and the advisory locks remove the cycles
+described above. For a cycle nobody has spotted yet, the handlers of
+`CreateProduct`, `UpdateProduct`, `PatchProductPrice`, `DeleteProduct`,
+`ReorderProducts`, `BulkPrice` (the apply step), `CreateCategory`,
+`UpdateCategory`, `DeleteCategory`, `ReorderCategories` and `DeleteMenu` run
+their write through `repository.RetryOnConflict`: a write that fails with
+SQLSTATE `40P01` (deadlock detected) or `40001` (serialization failure) runs
+again — at most three runs in all, after a jittered 25–100 ms pause. Every
+wrapped call is one statement or its own transaction, so a retry never runs
+inside a transaction PostgreSQL has already aborted. Besides such a cycle, the
+net covers the one case the advisory locks leave open on purpose: the last of
+the three runs of `writeIntoCategory` writes under the locks it holds even when
+its category has moved to another menu once more, so a delete of that menu can
+meet it without having waited.
+
+A retry that succeeds looks like any other success to the client, so every
+retry writes one line to the log, naming the handler, the SQLSTATE of the run
+it follows and the run it starts:
+
+```text
+[karecik] retrying DeleteMenu after 40P01 (attempt 2/3)
+```
+
+Such a line is a conflict the lock order above did not prevent, and worth a
+look.
+
+The loop also stops early once its context is cancelled — but for a request
+that context is Fiber's `c.Context()`, the fasthttp `RequestCtx`, and fasthttp
+(v1.51.0) closes its `Done` channel only when the server shuts down, never when
+the client disconnects. A request whose client has gone away still runs its
+retries to success or to the last run.
 
 The footer formats the date on the Europe/Istanbul calendar (`utils.Istanbul`),
 never in the server's own time zone. The binary embeds the zone database
@@ -354,9 +556,8 @@ every authenticated request — reinstating exactly the round trip the in-memory
 store exists to remove. It is safe to cache because a business id never changes
 and a user owns exactly one.
 
-A `sessions` table still exists in the schema from the earlier design. Nothing
-reads or writes it; migration `008` explains why it was left rather than
-dropped.
+The schema also holds a `sessions` table, which nothing reads or writes;
+migration `008` explains why it is kept rather than dropped.
 - The slug is generated at sign-up (`Kahve Durağı` → `kahve-duragi`); on a
   collision `-2`, `-3` … is appended. Reserved names (`www`, `api`, `panel`,
   `admin`, …) are never handed out.

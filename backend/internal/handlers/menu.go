@@ -3,12 +3,15 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"math"
+	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
 	"karecik/backend/internal/middleware"
+	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
 	"karecik/backend/internal/utils"
 )
@@ -77,7 +80,7 @@ func (h *Handler) CreateMenu(c *fiber.Ctx) error {
 
 	// An empty slug means "derive it from the name".
 	if value, ok := raw["slug"]; ok {
-		if text, err := decodeString(value); err == nil && strings.TrimSpace(text) == "" {
+		if text, err := DecodeString(value); err == nil && strings.TrimSpace(text) == "" {
 			delete(raw, "slug")
 		}
 	}
@@ -189,7 +192,14 @@ func (h *Handler) DeleteMenu(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz menü kimliği.")
 	}
 
-	err = repository.DeleteMenu(c.Context(), h.DB, id, middleware.BusinessID(c))
+	// DeleteMenu is its own transaction — it takes the menu's advisory lock,
+	// locks the menu's products, then its categories, then deletes the menu —
+	// so a run PostgreSQL aborted over a lock conflict left nothing behind and
+	// is simply run again. See repository.RetryOnConflict.
+	businessID := middleware.BusinessID(c)
+	err = repository.RetryOnConflict(c.Context(), "DeleteMenu", func() error {
+		return repository.DeleteMenu(c.Context(), h.DB, id, businessID)
+	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Menü bulunamadı.")
@@ -227,7 +237,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- identity
 	if value, ok := raw["name"]; ok {
-		name, err := decodeString(value)
+		name, err := DecodeString(value)
 		if err != nil {
 			return nil, false, utils.Unprocessable(c, "Menü adı metin olmalıdır.")
 		}
@@ -243,7 +253,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 	// "admin" is a perfectly good menu name under somebody's subdomain. Only the
 	// business slug is a hostname label and reserved-checked.
 	if value, ok := raw["slug"]; ok {
-		text, err := decodeString(value)
+		text, err := DecodeString(value)
 		if err != nil {
 			return nil, false, utils.Unprocessable(c, "Menü adresi metin olmalıdır.")
 		}
@@ -256,7 +266,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 	}
 
 	if value, ok := raw["description"]; ok {
-		description, err := decodeString(value)
+		description, err := DecodeString(value)
 		if err != nil {
 			return nil, false, utils.Unprocessable(c, "Menü açıklaması metin olmalıdır.")
 		}
@@ -281,7 +291,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 		"yerli_uretim_logo_url",
 	} {
 		if value, ok := raw[key]; ok {
-			ptr, err := decodeNullableString(value)
+			ptr, err := DecodeNullableString(value)
 			if err != nil {
 				return nil, false, utils.Unprocessable(c, key+" alanı metin veya boş olmalıdır.")
 			}
@@ -299,7 +309,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- currency
 	if value, ok := raw["currency"]; ok {
-		code, err := decodeString(value)
+		code, err := DecodeString(value)
 		if err != nil || !utils.IsValidCurrency(strings.ToUpper(code)) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz para birimi.")
 		}
@@ -308,14 +318,14 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- appearance
 	if value, ok := raw["theme"]; ok {
-		theme, err := decodeString(value)
+		theme, err := DecodeString(value)
 		if err != nil || !utils.IsValidTheme(theme) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz tasarım teması.")
 		}
 		fields["theme"] = theme
 	}
 	if value, ok := raw["font_family"]; ok {
-		font, err := decodeString(value)
+		font, err := DecodeString(value)
 		if err != nil || !utils.IsValidFont(font) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz yazı tipi.")
 		}
@@ -329,7 +339,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 	// where the caller has already earned a 422.
 	for _, key := range []string{"primary_color", "splash_bg_color", "text_color"} {
 		if value, ok := raw[key]; ok {
-			color, err := decodeString(value)
+			color, err := DecodeString(value)
 			if err != nil || !hexColorPattern.MatchString(color) {
 				return nil, false, utils.Unprocessable(c,
 					"Renk değeri #RRGGBB biçiminde olmalıdır.")
@@ -340,7 +350,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- languages
 	if value, ok := raw["default_language"]; ok {
-		lang, err := decodeString(value)
+		lang, err := DecodeString(value)
 		if err != nil || !utils.IsValidLanguage(lang) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz varsayılan dil.")
 		}
@@ -408,7 +418,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 		{"slogan", 120, "Slogan en fazla 120 karakter olabilir."},
 	} {
 		if value, ok := raw[field.key]; ok {
-			text, err := decodeString(value)
+			text, err := DecodeString(value)
 			if err != nil {
 				return nil, false, utils.Unprocessable(c, field.key+" alanı metin olmalıdır.")
 			}
@@ -424,28 +434,28 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 	// id this validator lets through therefore always satisfies the constraint,
 	// so a bad value is a 422 here and never a 500 from the UPDATE.
 	if value, ok := raw["splash_entrance"]; ok {
-		entrance, err := decodeString(value)
+		entrance, err := DecodeString(value)
 		if err != nil || !utils.IsValidSplashEntrance(entrance) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz karşılama giriş animasyonu.")
 		}
 		fields["splash_entrance"] = entrance
 	}
 	if value, ok := raw["splash_exit_animation"]; ok {
-		animation, err := decodeString(value)
+		animation, err := DecodeString(value)
 		if err != nil || !utils.IsValidSplashExitAnimation(animation) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz çıkış animasyonu.")
 		}
 		fields["splash_exit_animation"] = animation
 	}
 	if value, ok := raw["splash_exit_easing"]; ok {
-		easing, err := decodeString(value)
+		easing, err := DecodeString(value)
 		if err != nil || !utils.IsValidSplashEasing(easing) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz animasyon eğrisi.")
 		}
 		fields["splash_exit_easing"] = easing
 	}
 	if value, ok := raw["splash_display"]; ok {
-		mode, err := decodeString(value)
+		mode, err := DecodeString(value)
 		if err != nil || !utils.IsValidSplashDisplay(mode) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz karşılama ekranı görünümü.")
 		}
@@ -462,7 +472,7 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- menu background
 	if value, ok := raw["background_type"]; ok {
-		backgroundType, err := decodeString(value)
+		backgroundType, err := DecodeString(value)
 		if err != nil || !utils.IsValidBackgroundType(backgroundType) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz arka plan türü.")
 		}
@@ -479,11 +489,45 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- customer menu header
 	if value, ok := raw["header_display"]; ok {
-		mode, err := decodeString(value)
+		mode, err := DecodeString(value)
 		if err != nil || !utils.IsValidHeaderDisplay(mode) {
 			return nil, false, utils.Unprocessable(c, "Geçersiz başlık görünümü.")
 		}
 		fields["header_display"] = mode
+	}
+
+	// --- contact block
+	//
+	// contact_display is checked against utils.ContactDisplayModes, which is
+	// exactly the set menus_contact_display_check accepts, so a mode this lets
+	// through never turns into a constraint violation.
+	if value, ok := raw["contact_display"]; ok {
+		mode, err := DecodeString(value)
+		if err != nil || !utils.IsValidContactDisplay(mode) {
+			return nil, false, utils.Unprocessable(c, "Geçersiz iletişim görünümü.")
+		}
+		fields["contact_display"] = mode
+	}
+
+	// null means "no links", exactly like []: json.Unmarshal leaves the slice
+	// nil for null and SanitizeMenuLinks returns an empty list for it. A value
+	// that is not an array of link objects cannot be checked entry by entry, so
+	// it is refused as a whole with a message of its own.
+	//
+	// The target is []models.MenuLink and deliberately not models.MenuLinks:
+	// MenuLinks decodes leniently so that a stored row can always be read, and
+	// a request has to be decoded strictly so that a label that is a number is
+	// refused rather than quietly dropped.
+	if value, ok := raw["links"]; ok {
+		var links []models.MenuLink
+		if err := json.Unmarshal(value, &links); err != nil {
+			return nil, false, utils.Unprocessable(c, utils.MsgLinksUnreadable)
+		}
+		cleaned, errMessage := SanitizeMenuLinks(links)
+		if errMessage != "" {
+			return nil, false, utils.Unprocessable(c, errMessage)
+		}
+		fields["links"] = cleaned
 	}
 
 	// --- order in the dashboard
@@ -492,6 +536,11 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 		if err != nil || position < 0 {
 			return nil, false, utils.Unprocessable(c,
 				"Sıra değeri sıfır veya daha büyük olmalıdır.")
+		}
+		// menus.position is an INTEGER: a larger value fails the write — pgx
+		// refuses to encode it as one — so it is refused here with a 422.
+		if position > math.MaxInt32 {
+			return nil, false, utils.Unprocessable(c, "Sıra değeri çok büyük.")
 		}
 		fields["position"] = position
 	}
@@ -506,4 +555,51 @@ func validateMenuName(name string) string {
 		return "Menü adı 2 ile 60 karakter arasında olmalıdır."
 	}
 	return ""
+}
+
+// linkIDPattern is what a client-supplied link id has to look like to be kept.
+// Anything else, a missing id included, is replaced with a fresh UUID, so an
+// id is always safe to use as a key and never a carrier for arbitrary text.
+var linkIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// SanitizeMenuLinks validates the custom links of a menu and returns the
+// cleaned list plus an error message, which is empty when everything is valid.
+//
+// It is all-or-nothing, like SanitizeBadges and SanitizeOptions: the first
+// problem refuses the whole list, and an entry is never silently dropped, cut
+// short or reordered — an owner who typed nine links is told so rather than
+// quietly losing one. The count is checked first, then every entry in the
+// owner's order through utils.CheckMenuLink, each one label first and address
+// second, and the first problem found is the message.
+//
+// A valid list comes back with label and url trimmed and the scheme of the url
+// lowercased. An id is kept when it matches linkIDPattern and no earlier entry
+// of the list already has it; a missing, invalid or repeated id is replaced
+// with a fresh UUID, so the ids of a stored list are unique and the dashboard
+// can key its rows on them. The list is never nil, because links is a NOT NULL
+// jsonb column and pgx sends a nil slice as SQL NULL.
+//
+// NOTE: the messages are shown to the end user and are therefore Turkish.
+func SanitizeMenuLinks(in []models.MenuLink) (models.MenuLinks, string) {
+	if len(in) > utils.MaxMenuLinks {
+		return nil, utils.MsgLinksTooMany
+	}
+
+	out := make(models.MenuLinks, 0, len(in))
+	taken := make(map[string]bool, len(in))
+	for _, link := range in {
+		label, address, message := utils.CheckMenuLink(link.Label, link.URL)
+		if message != "" {
+			return nil, message
+		}
+
+		id := link.ID
+		if !linkIDPattern.MatchString(id) || taken[id] {
+			id = uuid.NewString()
+		}
+		taken[id] = true
+
+		out = append(out, models.MenuLink{ID: id, Label: label, URL: address})
+	}
+	return out, ""
 }

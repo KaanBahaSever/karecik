@@ -1,15 +1,16 @@
-package repository
+package repository_test
 
 import (
 	"fmt"
 	"strings"
 	"testing"
 
+	"karecik/backend/internal/repository"
 	"karecik/backend/internal/utils"
 )
 
 // The slug-length guarantee of EnsureUniqueMenuSlug lives in two pure helpers,
-// trimSlug and menuSlugFamily, so it can be proved here without a database.
+// TrimSlug and MenuSlugFamily, so it can be proved here without a database.
 // The query half of EnsureUniqueMenuSlug (which family is collected, which
 // suffix wins) belongs to the integration suite.
 
@@ -31,8 +32,8 @@ func TestTrimSlugCutsAndDropsTrailingDash(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := trimSlug(tc.slug, tc.limit); got != tc.want {
-				t.Fatalf("trimSlug(%q, %d) = %q, want %q",
+			if got := repository.TrimSlug(tc.slug, tc.limit); got != tc.want {
+				t.Fatalf("TrimSlug(%q, %d) = %q, want %q",
 					tc.slug, tc.limit, got, tc.want)
 			}
 		})
@@ -43,21 +44,21 @@ func TestTrimSlugCutsAndDropsTrailingDash(t *testing.T) {
 // 59-character base used to produce a 61-character "-2" slug that CreateMenu
 // stored and utils.IsValidSlug then rejected.
 func TestMenuSlugFamilyLeavesRoomForEverySuffix(t *testing.T) {
-	longest := len(fmt.Sprintf("-%d", maxMenuSlugSuffix))
+	longest := len(fmt.Sprintf("-%d", repository.MaxMenuSlugSuffix))
 
 	for _, length := range []int{2, 10, 54, 55, 56, 59, 60} {
 		base := strings.Repeat("a", length)
-		family := menuSlugFamily(base)
+		family := repository.MenuSlugFamily(base)
 
-		if len(family)+longest > menuSlugMaxLength {
-			t.Fatalf("menuSlugFamily(%d chars) = %d chars, no room for %q",
-				length, len(family), fmt.Sprintf("-%d", maxMenuSlugSuffix))
+		if len(family)+longest > repository.MenuSlugMaxLength {
+			t.Fatalf("MenuSlugFamily(%d chars) = %d chars, no room for %q",
+				length, len(family), fmt.Sprintf("-%d", repository.MaxMenuSlugSuffix))
 		}
 		if !strings.HasPrefix(base, family) {
-			t.Fatalf("menuSlugFamily(%d chars) = %q, not a prefix of the base",
+			t.Fatalf("MenuSlugFamily(%d chars) = %q, not a prefix of the base",
 				length, family)
 		}
-		for _, suffix := range []int{2, 9, 10, 99, 100, 999, maxMenuSlugSuffix} {
+		for _, suffix := range []int{2, 9, 10, 99, 100, 999, repository.MaxMenuSlugSuffix} {
 			candidate := fmt.Sprintf("%s-%d", family, suffix)
 			if !utils.IsValidSlug(candidate) {
 				t.Fatalf("candidate %q (%d chars) from a %d-character base is not a valid slug",
@@ -74,9 +75,9 @@ func TestMenuSlugFamilyNeverEndsInADash(t *testing.T) {
 	// dash at the 55-character room boundary.
 	base := strings.Repeat("a", 54) + "-" + strings.Repeat("b", 5)
 
-	family := menuSlugFamily(base)
+	family := repository.MenuSlugFamily(base)
 	if strings.HasSuffix(family, "-") {
-		t.Fatalf("menuSlugFamily(%q) = %q, ends in a dash", base, family)
+		t.Fatalf("MenuSlugFamily(%q) = %q, ends in a dash", base, family)
 	}
 	if candidate := family + "-2"; !utils.IsValidSlug(candidate) {
 		t.Fatalf("candidate %q is not a valid slug", candidate)
@@ -87,10 +88,10 @@ func TestMenuSlugFamilyNeverEndsInADash(t *testing.T) {
 // than an empty one; Slugify cannot produce such a base, but the fallback is
 // what keeps that unreachable rather than merely unlikely.
 func TestMenuSlugFamilyFallsBackWhenNothingSurvives(t *testing.T) {
-	if got := menuSlugFamily(""); got != "menu" {
-		t.Fatalf("menuSlugFamily(\"\") = %q, want %q", got, "menu")
+	if got := repository.MenuSlugFamily(""); got != "menu" {
+		t.Fatalf("MenuSlugFamily(\"\") = %q, want %q", got, "menu")
 	}
-	if got := menuSlugFamily(strings.Repeat("-", 80)); got != "menu" {
-		t.Fatalf("menuSlugFamily(all dashes) = %q, want %q", got, "menu")
+	if got := repository.MenuSlugFamily(strings.Repeat("-", 80)); got != "menu" {
+		t.Fatalf("MenuSlugFamily(all dashes) = %q, want %q", got, "menu")
 	}
 }

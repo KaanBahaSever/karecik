@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -150,9 +151,8 @@ func (h *Handler) currentBusiness(c *fiber.Ctx) (*models.Business, error) {
 // ------------------------------------------------------------------ helpers
 
 // menuLanguage resolves the language the texts of a record have to be written
-// in: the default_language of the menu the record lives on. There is no default
-// menu of a business to ask any more, so the menu is always reached through the
-// record itself.
+// in: the default_language of the menu the record lives on. A business has no
+// default menu to ask, so the menu is always reached through the record itself.
 //
 // Turkish is a last resort for a menu that disappeared between two requests —
 // categories.menu_id is NOT NULL, so every live record really has one.
@@ -198,10 +198,31 @@ func (h *Handler) productLanguage(c *fiber.Ctx, businessID, productID uuid.UUID)
 	return h.categoryLanguage(c, businessID, product.CategoryID)
 }
 
-var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$`)
+// emailPattern refuses control characters as well as whitespace: an address
+// holding U+0000 could not even be stored, and no control character belongs in
+// an address.
+var emailPattern = regexp.MustCompile(`^[^@\s\p{Cc}]+@[^@\s\p{Cc}]+\.[a-zA-Z]{2,}$`)
 
-func isValidEmail(email string) bool {
-	return emailPattern.MatchString(strings.TrimSpace(email))
+// IsValidEmail also refuses bytes that are not UTF-8, which the pattern alone
+// would not: Go's regexp matches such a byte as U+FFFD, and that is not in any
+// excluded class. PostgreSQL cannot store the address either way.
+func IsValidEmail(email string) bool {
+	return utf8.ValidString(email) && emailPattern.MatchString(strings.TrimSpace(email))
+}
+
+// NormalizeEmail trims and lowercases an e-mail address a request carries, and
+// reports whether the address as sent can be stored at all (see
+// UnstorableText); when it cannot, the address is "" and false.
+//
+// The check comes before the lowering, and it has to: strings.ToLower replaces
+// every byte that is not UTF-8 with U+FFFD, so an address PostgreSQL could
+// never hold would come out as a different, valid one — the address of an
+// account whose e-mail really holds U+FFFD, for one.
+func NormalizeEmail(raw string) (string, bool) {
+	if UnstorableText(raw) {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(raw)), true
 }
 
 // strPtr turns an empty string into NULL and returns a *string.
@@ -215,7 +236,7 @@ func strPtr(s string) *string {
 
 // optionalStrPtr is strPtr for a field a create body may leave out: nil stays
 // nil, and a present value is trimmed with a blank result becoming NULL — the
-// same value decodeNullableString gives the update paths.
+// same value DecodeNullableString gives the update paths.
 func optionalStrPtr(s *string) *string {
 	if s == nil {
 		return nil

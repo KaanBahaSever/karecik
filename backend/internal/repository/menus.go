@@ -18,14 +18,15 @@ import (
 // every SELECT, INSERT ... RETURNING and UPDATE ... RETURNING below lists
 // exactly these columns and menuScanTargets returns the destinations in exactly
 // the same order. The order follows the physical column order of the menus
-// table after migration 007, which is why logo_fade_in, text_color,
-// show_yerli_uretim and yerli_uretim_logo_url sit at the very end rather than
+// table after migration 011, which is why logo_fade_in, text_color,
+// show_yerli_uretim and yerli_uretim_logo_url sit near the end rather than
 // next to header_display and primary_color: 006 appended all four to the table.
 // slogan and splash_entrance follow them for the same reason — 007 appends
-// both after all four, slogan first and splash_entrance second, so they close
-// the list and the scan targets in that order. splash_entrance is therefore the
-// last column and the last scan target, NOT next to splash_exit_animation where
-// models.Menu declares it: the list follows the table, never the struct.
+// both after all four, slogan first and splash_entrance second — and
+// contact_display and links close the list because 011 appends them after
+// those, contact_display first. splash_entrance therefore scans right after
+// slogan, NOT next to splash_exit_animation where models.Menu declares it: the
+// list follows the table, never the struct.
 //
 // NOTE: models.Menu declares its fields in a different order (Currency and
 // CurrencySymbol sit before Theme, the timestamps sit at the end), so the scan
@@ -41,7 +42,7 @@ const menuColumns = `id, business_id, name, slug, description, is_active,
 	currency, currency_symbol, show_vat_note, vat_note_text, show_price_date,
 	price_updated_at, header_display, default_language, languages, logo_fade_in,
 	text_color, show_yerli_uretim, yerli_uretim_logo_url, slogan,
-	splash_entrance`
+	splash_entrance, contact_display, links`
 
 // menuColumnsM is menuColumns qualified with the m alias, needed wherever menus
 // is joined against categories: id, business_id, position, is_active,
@@ -99,13 +100,27 @@ func menuScanTargets(menu *models.Menu) []any {
 		// hence plain strings.
 		&menu.Slogan,
 		&menu.SplashEntrance,
+
+		// Appended by migration 011, after splash_entrance, so they scan last
+		// and in the order 011 adds them: contact_display first, then links.
+		// Both are NOT NULL with a default — 'inline' and '[]' — so the mode is
+		// a plain string and links scans from jsonb straight into the slice.
+		&menu.ContactDisplay,
+		&menu.Links,
 	}
 }
 
 // normalizeMenu fills in what the customer menu may not receive as null.
+//
+// links is NOT NULL and CHECKed to be an array, and '[]' scans into an empty
+// slice rather than nil, so the Links branch is a guarantee rather than a
+// repair: the payload says [] in every case, exactly as it does for languages.
 func normalizeMenu(menu *models.Menu) {
 	if menu.Languages == nil {
 		menu.Languages = []string{menu.DefaultLanguage}
+	}
+	if menu.Links == nil {
+		menu.Links = models.MenuLinks{}
 	}
 }
 
@@ -152,6 +167,32 @@ var menuUpdatableColumns = map[string]bool{
 
 	"text_color": true, "show_yerli_uretim": true,
 	"yerli_uretim_logo_url": true,
+
+	"contact_display": true, "links": true,
+}
+
+// applyLinksArray makes sure a links write stores a JSON array. The handler
+// already hands over a non-nil list, but a nil one — a nil models.MenuLinks, a
+// nil []models.MenuLink or a bare nil — would reach the jsonb column as SQL
+// NULL, which the NOT NULL column refuses and the caller would answer with a
+// 500. An absent list means no links, so an empty one is what gets written.
+func applyLinksArray(values map[string]any) {
+	value, ok := values["links"]
+	if !ok {
+		return
+	}
+	switch links := value.(type) {
+	case nil:
+		values["links"] = models.MenuLinks{}
+	case models.MenuLinks:
+		if links == nil {
+			values["links"] = models.MenuLinks{}
+		}
+	case []models.MenuLink:
+		if links == nil {
+			values["links"] = models.MenuLinks{}
+		}
+	}
 }
 
 // applyCurrencySymbol derives currency_symbol from the currency code whenever
@@ -176,6 +217,7 @@ func updatableFields(fields map[string]any) map[string]any {
 		}
 	}
 	applyCurrencySymbol(values)
+	applyLinksArray(values)
 	return values
 }
 
@@ -262,6 +304,10 @@ func GetMenu(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.Menu
 func GetMenuBySlug(ctx context.Context, db DB, businessID uuid.UUID,
 	slug string) (*models.Menu, error) {
 
+	// The slug comes from the address a customer opened; see UnstorableText.
+	if UnstorableText(slug) {
+		return nil, ErrNotFound
+	}
 	return scanMenu(db.QueryRow(ctx, `
 		SELECT `+menuColumns+` FROM menus
 		WHERE business_id = $1 AND slug = lower($2) AND is_active = true`,
@@ -274,19 +320,19 @@ func GetMenuBySlug(ctx context.Context, db DB, businessID uuid.UUID,
 // re-reads the taken slugs before it writes.
 const menuWriteAttempts = 5
 
-// maxMenuSlugSuffix caps the "-2, -3, ..." search of EnsureUniqueMenuSlug.
-const maxMenuSlugSuffix = 1000
+// MaxMenuSlugSuffix caps the "-2, -3, ..." search of EnsureUniqueMenuSlug.
+const MaxMenuSlugSuffix = 1000
 
-// menuSlugMaxLength mirrors the 60-character cap of utils.IsValidSlug. Whatever
+// MenuSlugMaxLength mirrors the 60-character cap of utils.IsValidSlug. Whatever
 // EnsureUniqueMenuSlug returns is stored by CreateMenu and re-validated by the
 // app on the next edit, so a longer slug is a row the application itself
 // rejects — the length has to be enforced on the way in, not only on input.
-const menuSlugMaxLength = 60
+const MenuSlugMaxLength = 60
 
-// trimSlug cuts a slug to at most limit characters and drops any trailing
+// TrimSlug cuts a slug to at most limit characters and drops any trailing
 // hyphen the cut leaves behind, since utils.IsValidSlug rejects one. A slug is
 // [a-z0-9-] only, so slicing by byte can never split a rune.
-func trimSlug(slug string, limit int) string {
+func TrimSlug(slug string, limit int) string {
 	if limit < 0 {
 		limit = 0
 	}
@@ -296,16 +342,16 @@ func trimSlug(slug string, limit int) string {
 	return strings.TrimRight(slug, "-")
 }
 
-// menuSlugFamily is the prefix every "-N" candidate is built on: the base cut
+// MenuSlugFamily is the prefix every "-N" candidate is built on: the base cut
 // short enough that base + "-" + the widest suffix the search can reach still
-// fits menuSlugMaxLength. Without it a 59-character base yields a 61-character
+// fits MenuSlugMaxLength. Without it a 59-character base yields a 61-character
 // "-2" slug that CreateMenu stores and utils.IsValidSlug then rejects.
 //
 // It is pure, which is what lets the length guarantee be tested without a
 // database.
-func menuSlugFamily(base string) string {
-	room := menuSlugMaxLength - len(fmt.Sprintf("-%d", maxMenuSlugSuffix))
-	family := trimSlug(base, room)
+func MenuSlugFamily(base string) string {
+	room := MenuSlugMaxLength - len(fmt.Sprintf("-%d", MaxMenuSlugSuffix))
+	family := TrimSlug(base, room)
 	if family == "" {
 		// Only reachable if the base were all hyphens, which Slugify cannot
 		// produce; the fallback keeps the result a valid slug regardless.
@@ -329,12 +375,12 @@ func menuSlugFamily(base string) string {
 // metacharacter (% or _) — no ESCAPE clause is needed.
 //
 // Every slug it returns satisfies utils.IsValidSlug: the base is capped at
-// menuSlugMaxLength and the "-N" candidates are built on menuSlugFamily(base),
+// MenuSlugMaxLength and the "-N" candidates are built on MenuSlugFamily(base),
 // which reserves room for the suffix.
 func EnsureUniqueMenuSlug(ctx context.Context, db DB, businessID uuid.UUID,
 	baseSlug string, excludeID *uuid.UUID) (string, error) {
 
-	base := trimSlug(strings.ToLower(strings.TrimSpace(baseSlug)), menuSlugMaxLength)
+	base := TrimSlug(strings.ToLower(strings.TrimSpace(baseSlug)), MenuSlugMaxLength)
 	if base == "" {
 		base = "menu"
 	}
@@ -344,7 +390,7 @@ func EnsureUniqueMenuSlug(ctx context.Context, db DB, businessID uuid.UUID,
 	// has to collect — so it is computed BEFORE the query, not after it. The
 	// untrimmed base is still matched exactly, because a base that is free is
 	// returned whole rather than needlessly shortened.
-	family := menuSlugFamily(base)
+	family := MenuSlugFamily(base)
 
 	rows, err := db.Query(ctx, `
 		SELECT slug FROM menus
@@ -371,7 +417,7 @@ func EnsureUniqueMenuSlug(ctx context.Context, db DB, businessID uuid.UUID,
 	if !taken[base] {
 		return base, nil
 	}
-	for suffix := 2; suffix <= maxMenuSlugSuffix; suffix++ {
+	for suffix := 2; suffix <= MaxMenuSlugSuffix; suffix++ {
 		candidate := fmt.Sprintf("%s-%d", family, suffix)
 		if !taken[candidate] {
 			return candidate, nil
@@ -413,9 +459,14 @@ func insertMenu(ctx context.Context, db DB, values map[string]any) (*models.Menu
 func CreateMenu(ctx context.Context, db DB, businessID uuid.UUID,
 	fields map[string]any) (*models.Menu, error) {
 
+	// The next position is computed as a bigint and capped at the largest
+	// INTEGER. A request may set menus.position to that largest value itself,
+	// and one more would fail the INSERT instead of appending the menu. A capped
+	// position ties with the menu holding the largest one, and ListMenus orders
+	// a tie by created_at, so the new menu still comes last.
 	var nextPosition int
 	err := db.QueryRow(ctx, `
-		SELECT COALESCE(MAX(position) + 1, 0)
+		SELECT LEAST(COALESCE(MAX(position)::bigint + 1, 0), 2147483647)
 		FROM menus WHERE business_id = $1`, businessID).Scan(&nextPosition)
 	if err != nil {
 		return nil, err
@@ -503,16 +554,110 @@ func UpdateMenu(ctx context.Context, db DB, id, businessID uuid.UUID,
 //
 // NOTE: categories.menu_id cascades, so deleting a menu also deletes its
 // categories and their products. The handler warns the user before calling it.
-func DeleteMenu(ctx context.Context, db DB, id, businessID uuid.UUID) error {
-	tag, err := db.Exec(ctx,
-		`DELETE FROM menus WHERE id = $1 AND business_id = $2`, id, businessID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+//
+// LOCK ORDER. A menu the business does not own is ErrNotFound before anything
+// is locked. Otherwise DeleteMenu takes, inside one transaction and in this
+// order:
+//
+//  1. the menu's exclusive advisory lock (see locks.go);
+//  2. every product of the menu, in ascending id order;
+//  3. every category of the menu, in ascending id order;
+//  4. the menu row, through the DELETE.
+//
+// Every writer in this package that locks more than one product row takes the
+// product rows in ascending id order, product rows before category rows, and a
+// menu row — when it takes one — last. Every writer that takes an advisory lock
+// takes it before its first row lock.
+//
+// The advisory lock first: a write into this menu — a category created in it or
+// moved into it, a product created, moved or reordered into one of its
+// categories — takes the same lock shared before it locks anything. While the
+// delete runs, such a write waits at that lock holding nothing, and then finds
+// its target gone; a delete that starts while such a write is running waits for
+// it before the delete has locked anything. Without the lock, a write that
+// landed between the steps above — and a price edit of its product after it —
+// could each end up holding a row the other needed. It also means step 2 takes
+// its snapshot once no write into the menu is in progress, so the DELETE's
+// cascade finds every product of the menu locked.
+//
+// Step 2 reaches the products through a join to their categories. Under READ
+// COMMITTED a product that another transaction changed while the delete waited
+// for it is checked again against the category row the statement read first,
+// so a product whose category_id changed in the meantime drops out of the lock.
+// That is right for a product that left the menu, and leaving it is the only
+// such change the delete can meet: a product moved or reordered into a category
+// of this menu, the one it is in included, takes this menu's advisory lock and
+// so never runs while the delete does. A product whose category moved to
+// another menu keeps its category_id and stays locked until the delete ends;
+// step 3 no longer finds that category in the menu, so the cascade removes
+// neither.
+//
+// Products before the menu row: a single-product edit locks its one product
+// and then, through the products_touch_menu_price_date trigger of migration
+// 010, the menu. A delete that locked the menu row first and reached the
+// products only through the cascade would take the two the other way round,
+// and a price edit and a delete in the same menu at the same instant would wait
+// on each other until PostgreSQL aborted one of them after deadlock_timeout.
+// With the products locked first, a price edit that holds one of them
+// finishes, menu row included, while the delete waits for it; a delete that
+// already holds them makes the price edit wait before it has locked anything
+// the delete still needs.
+//
+// Categories before the menu row: the cascade needs every category of the menu
+// FOR UPDATE, which conflicts with the FOR NO KEY UPDATE lock a category reorder
+// holds and with the KEY SHARE lock the foreign key check of a product write
+// takes. Locked in step 3, in the id order ReorderCategories locks in, those
+// writers make the delete wait before it has the menu row, or wait for the
+// delete before they have locked anything it needs.
+//
+// The ownership check and both SELECTs are scoped to the business exactly like
+// the DELETE, so a request naming another tenant's menu takes no lock at all,
+// deletes nothing and comes back as ErrNotFound.
+func DeleteMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID) error {
+	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+		owned, err := menuOwned(ctx, tx, id, businessID)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			return ErrNotFound
+		}
+		if err := lockMenu(ctx, tx, id, true); err != nil {
+			return err
+		}
+
+		// Exec discards the rows of both SELECTs. What they are for are the row
+		// locks they leave behind, which the transaction holds until the DELETE
+		// commits.
+		if _, err := tx.Exec(ctx, `
+			SELECT p.id
+			FROM products p
+			JOIN categories c ON c.id = p.category_id
+			WHERE c.menu_id = $1 AND c.business_id = $2 AND p.business_id = $2
+			ORDER BY p.id
+			FOR UPDATE OF p`, id, businessID); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `
+			SELECT id
+			FROM categories
+			WHERE menu_id = $1 AND business_id = $2
+			ORDER BY id
+			FOR UPDATE`, id, businessID); err != nil {
+			return err
+		}
+
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM menus WHERE id = $1 AND business_id = $2`, id, businessID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // MenuSlugTaken reports whether another menu OF THE SAME BUSINESS already uses

@@ -282,6 +282,25 @@ export function MenuProvider({ children }) {
     }
   }, [])
 
+  /**
+   * Sets the `category_count` of one menu in the list.
+   *
+   * Only the list endpoint computes that count, so without this the "Menü
+   * Değiştir" dialog would keep showing the count of the last full load after
+   * the menu editor loads, adds or deletes a category. The editor knows the new
+   * count exactly, so nothing is refetched, and `loading` is left alone for the
+   * reason given at refreshMenu. A count that is already right keeps the same
+   * list, so nothing that reads the menus re-renders for it.
+   */
+  const setMenuCategoryCount = useCallback((id, count) => {
+    if (!id || !Number.isInteger(count) || count < 0) return
+
+    setMenus((current) => {
+      if (!current.some((menu) => menu.id === id && menu.category_count !== count)) return current
+      return current.map((menu) => (menu.id === id ? { ...menu, category_count: count } : menu))
+    })
+  }, [])
+
   const value = useMemo(
     () => ({
       menus,
@@ -296,6 +315,7 @@ export function MenuProvider({ children }) {
       deleteMenu,
       saveActiveMenu,
       refreshMenu,
+      setMenuCategoryCount,
     }),
     [
       menus,
@@ -310,6 +330,7 @@ export function MenuProvider({ children }) {
       deleteMenu,
       saveActiveMenu,
       refreshMenu,
+      setMenuCategoryCount,
     ],
   )
 

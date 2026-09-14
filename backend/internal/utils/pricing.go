@@ -13,6 +13,13 @@ const (
 	RoundEnds50    = "ends_50"    // to a multiple of .50 (147.60 -> 147.50)
 )
 
+// MaxPrice is the largest price a product can carry. products.price and
+// products.compare_price are both NUMERIC(12,2), which holds at most
+// 9999999999.99; a larger value fails the write with SQLSTATE 22003 (numeric
+// field overflow), so every price a request carries is checked against it
+// first, and so is every price a bulk update computes.
+const MaxPrice = 9999999999.99
+
 // ValidRoundingModes is used to validate the value coming from the request.
 var ValidRoundingModes = map[string]bool{
 	RoundNone: true, RoundInteger: true, RoundNearest5: true,

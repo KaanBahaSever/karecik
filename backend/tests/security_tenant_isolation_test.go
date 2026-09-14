@@ -410,8 +410,8 @@ func (h *harness) register(label, businessName, email string) *tenant {
 		h.t.Fatalf("fixture register %s: the response carried no business id: %s", label, payload)
 	}
 
-	// Sign-up must hand back a session cookie; the body no longer carries a
-	// token, so a missing cookie means nothing downstream could authenticate.
+	// Sign-up must hand back a session cookie; the body carries no token, so a
+	// missing cookie means nothing downstream could authenticate.
 	session := sessionCookie(resp)
 	if session == "" {
 		h.t.Fatalf("fixture register %s: no %s cookie was set", label, utils.SessionCookieName)
@@ -538,10 +538,12 @@ func findCategory(categories []categoryPayload, id string) *categoryPayload {
 // handler crashed instead of refusing, which is not a defence either.
 //
 // Both 403 and 404 are permitted where the brief permits both — the codebase
-// uses 403 when the request named someone else's PARENT entity and 404 when the
-// target itself is not yours, and pinning one here would make the suite brittle
-// against a deliberate choice. The status that actually came back is always
-// recorded, so a regression is diagnosable from the log alone.
+// uses 403 when the request names someone else's MENU as the parent of a write
+// (the ownsMenu gates), 404 when the target itself is not yours, and 404 as well
+// when a product write names someone else's CATEGORY, which it answers exactly
+// like a category that does not exist — and pinning one here would make the
+// suite brittle against a deliberate choice. The status that actually came back
+// is always recorded, so a regression is diagnosable from the log alone.
 func assertDenied(t *testing.T, what string, resp *http.Response, payload []byte, allowed ...int) {
 	t.Helper()
 
@@ -638,8 +640,12 @@ func TestTenantIsolation(t *testing.T) {
 			"translations": map[string]any{"tr": map[string]any{"name": "B'nin ürünü"}},
 			"price":        99,
 		})
+		// 404: a product write answers a category of another business exactly
+		// like one that does not exist, and like one deleted while it runs, so
+		// the answer tells B nothing about A's ids. 422 stays allowed for a body
+		// refused before the category is looked at.
 		assertDenied(t, "B adding a product to A's category", resp, payload,
-			http.StatusForbidden, http.StatusUnprocessableEntity)
+			http.StatusNotFound, http.StatusUnprocessableEntity)
 
 		after := h.listProductsAsOwner(t, "B adding a product to A's category",
 			tenantA, categoryA.ID)

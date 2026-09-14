@@ -27,6 +27,7 @@ const ICON_OPTIONS = [
  *                                        MenuEditor only mounts this dialog once
  *                                        a menu is selected.
  * @param {Function}    onSaved         - (category) => void
+ * @param {Function}    onSaveFailed    - (error) => void, after a failed save's error toast
  */
 export default function CategoryModal({
   open,
@@ -36,6 +37,7 @@ export default function CategoryModal({
   defaultLanguage,
   menuId,
   onSaved,
+  onSaveFailed,
 }) {
   const toast = useToast()
 
@@ -130,6 +132,7 @@ export default function CategoryModal({
       onClose?.()
     } catch (error) {
       toast.error(error.message)
+      onSaveFailed?.(error)
     } finally {
       setSaving(false)
     }

@@ -79,9 +79,20 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 	}
 
 	// The texts are required in the language of the menu the category lands on.
-	translations, errMessage := sanitizeTranslations(req.Translations, menu.DefaultLanguage, "Kategori")
+	translations, errMessage := SanitizeTranslations(req.Translations, menu.DefaultLanguage, "Kategori")
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
+	}
+
+	// The update path reads icon and image_url through DecodeNullableString,
+	// which refuses a text PostgreSQL cannot store; this body was decoded by
+	// BodyParser instead — possibly from a form, which can carry any bytes — so
+	// the check is made here, with the update path's messages.
+	if req.Icon != nil && UnstorableText(*req.Icon) {
+		return utils.Unprocessable(c, "icon alanı metin veya boş olmalıdır.")
+	}
+	if req.ImageURL != nil && UnstorableText(*req.ImageURL) {
+		return utils.Unprocessable(c, "image_url alanı metin veya boş olmalıdır.")
 	}
 
 	isActive := true
@@ -90,12 +101,30 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 	}
 
 	// icon and image_url are trimmed and a blank value is stored as NULL, which
-	// is exactly what UpdateCategory stores through decodeNullableString. Create
+	// is exactly what UpdateCategory stores through DecodeNullableString. Create
 	// and update therefore agree: a category saved without an emoji or an image
 	// carries NULL, never "" or a run of spaces.
-	category, err := repository.CreateCategory(c.Context(), h.DB, businessID, menu.ID,
-		translations, optionalStrPtr(req.Icon), optionalStrPtr(req.ImageURL), isActive)
+	icon, imageURL := optionalStrPtr(req.Icon), optionalStrPtr(req.ImageURL)
+
+	// CreateCategory is one transaction of its own — the menu's advisory lock,
+	// then the INSERT — so a run PostgreSQL aborted over a lock conflict wrote
+	// nothing and is simply run again. See repository.RetryOnConflict.
+	category, err := repository.RetryOnConflictValue(c.Context(), "CreateCategory",
+		func() (*models.Category, error) {
+			return repository.CreateCategory(c.Context(), h.DB, businessID, menu.ID,
+				translations, icon, imageURL, isActive)
+		})
 	if err != nil {
+		// ownsMenu vouched for the menu a moment ago, but a delete of that menu
+		// can still land before the create holds the menu's advisory lock: the
+		// create waits for the delete there and then finds the menu gone
+		// (ErrParentNotFound). A delete that took no advisory lock is caught by
+		// the INSERT's foreign key check (23503) instead. The row that vanished
+		// is the menu the category was to be added to, so the 404 names the menu
+		// rather than being a 500.
+		if errors.Is(err, repository.ErrParentNotFound) || repository.IsForeignKeyViolation(err) {
+			return utils.NotFound(c, "Menü bulunamadı.")
+		}
 		return utils.Internal(c, err)
 	}
 	return utils.Created(c, category)
@@ -171,7 +200,7 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 			}
 			lang = resolved
 		}
-		cleaned, errMessage := sanitizeTranslations(translations, lang, "Kategori")
+		cleaned, errMessage := SanitizeTranslations(translations, lang, "Kategori")
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
@@ -180,7 +209,7 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 
 	for _, key := range []string{"icon", "image_url"} {
 		if value, ok := raw[key]; ok {
-			ptr, err := decodeNullableString(value)
+			ptr, err := DecodeNullableString(value)
 			if err != nil {
 				return utils.Unprocessable(c, key+" alanı metin veya boş olmalıdır.")
 			}
@@ -196,10 +225,25 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 		fields["is_active"] = flag
 	}
 
-	category, err := repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields)
+	// One UPDATE or, for a move to another menu, one transaction of its own, so
+	// a run PostgreSQL aborted over a lock conflict wrote nothing and is simply
+	// run again.
+	category, err := repository.RetryOnConflictValue(c.Context(), "UpdateCategory",
+		func() (*models.Category, error) {
+			return repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields)
+		})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Kategori bulunamadı.")
+		}
+		// A move into a menu that was deleted after ownsMenu checked it. The move
+		// waits for the delete at the menu's advisory lock and then finds the
+		// menu gone (ErrParentNotFound); a delete that took no advisory lock is
+		// caught by the foreign key check (23503) instead. The record that
+		// vanished is the menu, so the 404 names the menu, and the category stays
+		// where it was.
+		if errors.Is(err, repository.ErrParentNotFound) || repository.IsForeignKeyViolation(err) {
+			return utils.NotFound(c, "Menü bulunamadı.")
 		}
 		return utils.Internal(c, err)
 	}
@@ -214,7 +258,13 @@ func (h *Handler) DeleteCategory(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz kategori kimliği.")
 	}
 
-	deleted, err := repository.DeleteCategory(c.Context(), h.DB, id, middleware.BusinessID(c))
+	// DeleteCategory is its own transaction — it takes the category's advisory
+	// lock, locks the products, then deletes the category — so a run PostgreSQL
+	// aborted over a lock conflict left nothing behind and is simply run again.
+	businessID := middleware.BusinessID(c)
+	deleted, err := repository.RetryOnConflictValue(c.Context(), "DeleteCategory", func() (int, error) {
+		return repository.DeleteCategory(c.Context(), h.DB, id, businessID)
+	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Kategori bulunamadı.")
@@ -236,8 +286,14 @@ func (h *Handler) ReorderCategories(c *fiber.Ctx) error {
 		return utils.Unprocessable(c, "Sıralanacak kategori listesi boş olamaz.")
 	}
 
+	// ReorderCategories is one transaction of its own — it locks the rows, then
+	// writes them — so a run PostgreSQL aborted over a lock conflict wrote
+	// nothing and is simply run again.
 	businessID := middleware.BusinessID(c)
-	if err := repository.ReorderCategories(c.Context(), h.DB, businessID, req.IDs); err != nil {
+	err := repository.RetryOnConflict(c.Context(), "ReorderCategories", func() error {
+		return repository.ReorderCategories(c.Context(), h.DB, businessID, req.IDs)
+	})
+	if err != nil {
 		return utils.Internal(c, err)
 	}
 
@@ -250,13 +306,26 @@ func (h *Handler) ReorderCategories(c *fiber.Ctx) error {
 	return utils.OK(c, categories)
 }
 
-// sanitizeTranslations cleans and validates a translations map: unsupported
+// SanitizeTranslations cleans and validates a translations map: unsupported
 // language codes are dropped and whitespace is trimmed. It returns an error
 // message when no name is present (or the default language has none).
 //
 // The label argument appears in the returned message, so it is Turkish.
-func sanitizeTranslations(in models.Translations, defaultLang, label string) (models.Translations, string) {
+func SanitizeTranslations(in models.Translations, defaultLang, label string) (models.Translations, string) {
 	out := models.Translations{}
+
+	// A text PostgreSQL cannot store, anywhere in the map, refuses the whole map
+	// (see UnstorableText). It is its own pass, before the length checks below,
+	// so the message does not depend on the order in which Go walks the map.
+	for lang, translation := range in {
+		if !utils.IsValidLanguage(lang) {
+			continue
+		}
+		if UnstorableText(translation.Name) || UnstorableText(translation.Description) ||
+			UnstorableText(translation.Ingredients) {
+			return nil, "Çeviri alanı geçersiz."
+		}
+	}
 
 	for lang, translation := range in {
 		if !utils.IsValidLanguage(lang) {

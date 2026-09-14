@@ -1,10 +1,11 @@
-package repository
+package repository_test
 
 import (
 	"testing"
 	"time"
 
 	"karecik/backend/internal/models"
+	"karecik/backend/internal/repository"
 )
 
 // The footer names a day, and which day depends on the zone the instant is read
@@ -24,8 +25,8 @@ func TestBuildFooterFormatsThePriceDateInIstanbul(t *testing.T) {
 	}
 
 	const want = "Fiyatlarımız 14.09.2026 tarihinden itibaren geçerlidir."
-	if got := buildFooter(menu).PriceNote; got != want {
-		t.Fatalf("buildFooter price note = %q, want %q: 2026-09-13T22:30:00Z is 14.09.2026 "+
+	if got := repository.BuildFooter(menu).PriceNote; got != want {
+		t.Fatalf("BuildFooter price note = %q, want %q: 2026-09-13T22:30:00Z is 14.09.2026 "+
 			"in Europe/Istanbul, so any other day means the date was not formatted in "+
 			"Istanbul (time.Local is UTC in this test)", got, want)
 	}

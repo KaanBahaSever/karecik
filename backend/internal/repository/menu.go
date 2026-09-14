@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -42,7 +44,7 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	fallback := menu.DefaultLanguage
 
 	// categories.menu_id is NOT NULL since 005, so a category belongs to
-	// exactly one menu and nothing has to be inherited any more.
+	// exactly one menu and nothing has to be inherited from another one.
 	categoryQuery := `SELECT ` + categoryColumns + `
 		FROM categories WHERE business_id = $1 AND menu_id = $2`
 
@@ -155,9 +157,9 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	}
 
 	return &models.PublicMenu{
-		Business:     toPublicBusiness(business, menu),
+		Business:     ToPublicBusiness(business, menu),
 		Categories:   categories,
-		Footer:       buildFooter(menu),
+		Footer:       BuildFooter(menu),
 		Menus:        menus,
 		MenuResolved: true,
 	}, nil
@@ -236,7 +238,7 @@ func resolveLanguage(menu *models.Menu, lang string) string {
 	return menu.DefaultLanguage
 }
 
-// toPublicBusiness turns the menu into the header block of the customer
+// ToPublicBusiness turns the menu into the header block of the customer
 // payload. Name and Slug are the MENU's — the menu is the venue the customer
 // opened — while BusinessName and BusinessSlug carry the tenant alongside them,
 // so the two together spell {business_slug}.karecik.com/{menu_slug}.
@@ -244,10 +246,14 @@ func resolveLanguage(menu *models.Menu, lang string) string {
 // CurrencySymbol is the stored one, never re-derived: the repository is the
 // only writer of that column, so what is stored is by definition what belongs
 // to the currency.
-func toPublicBusiness(business *models.Business, menu *models.Menu) models.PublicBusiness {
+func ToPublicBusiness(business *models.Business, menu *models.Menu) models.PublicBusiness {
 	name := menu.Name
 
-	return models.PublicBusiness{
+	// Only the entries that pass the link rules, and always an array — see
+	// PublicLinks.
+	links := PublicLinks(menu.Links)
+
+	public := models.PublicBusiness{
 		Name:            menu.Name,
 		Slug:            menu.Slug,
 		LogoURL:         menu.LogoURL,
@@ -304,27 +310,114 @@ func toPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 		WifiSSID:     menu.WifiSSID,
 		WifiPassword: menu.WifiPassword,
 
+		ContactDisplay: menu.ContactDisplay,
+		Links:          links,
+
 		BusinessName: business.Name,
 		BusinessSlug: business.Slug,
 		MenuSlug:     menu.Slug,
 		MenuName:     &name,
 	}
+
+	// "hidden" is the owner saying the contact block is not for customers, and
+	// a customer can read this payload as easily as the page drawn from it — so
+	// in that mode the entries are left out of the payload rather than merely
+	// not drawn. The owner loses nothing: GET /api/menus/:id reads the menu, not
+	// this payload. Address is not part of the contact block and stays. The
+	// other three modes only move the block around the page, so they send it
+	// whole.
+	if menu.ContactDisplay == utils.ContactDisplayHidden {
+		public.Phone = nil
+		public.Instagram = nil
+		public.WifiSSID = nil
+		public.WifiPassword = nil
+		public.Links = models.MenuLinks{}
+	}
+
+	return public
+}
+
+// PublicLinks is the list of links a customer receives: the stored entries that
+// pass the link rules (utils.CheckMenuLink), in their stored order, with their
+// label and url cleaned the way a save cleans them. The API refuses a list that
+// breaks a rule, but a row written past the API can still hold one, and the
+// owner's own endpoints return such a row as it is, so that the owner can see
+// the entry and fix it. The payload a customer reads never carries it.
+//
+// At most utils.MaxMenuLinks entries are kept, the first ones that pass: the
+// API never stores more, and a row that holds more was not written by it.
+//
+// Ids are never rewritten into new UUIDs here — a payload built twice from the
+// same row has to come out the same, or every read would change its ETag.
+// Instead every entry in the payload gets a unique id: the first entry to carry
+// an id keeps it, and an entry whose id is blank or already used gets
+// "link-<index>", its index in this list — or, when that id is itself taken,
+// the next "link-<n>" that is free.
+//
+// The result is never nil, so the payload carries [] and not null.
+func PublicLinks(stored models.MenuLinks) models.MenuLinks {
+	links := make(models.MenuLinks, 0, len(stored))
+	for _, link := range stored {
+		label, address, message := utils.CheckMenuLink(link.Label, link.URL)
+		if message != "" {
+			continue
+		}
+		links = append(links, models.MenuLink{ID: link.ID, Label: label, URL: address})
+		if len(links) == utils.MaxMenuLinks {
+			break
+		}
+	}
+
+	// Two passes, so that a generated "link-<n>" can never collide with an id
+	// an entry further down the list already carries.
+	keeps := make([]bool, len(links))
+	used := make(map[string]bool, len(links))
+	for i, link := range links {
+		if strings.TrimSpace(link.ID) != "" && !used[link.ID] {
+			keeps[i] = true
+			used[link.ID] = true
+		}
+	}
+	for i := range links {
+		if keeps[i] {
+			continue
+		}
+		for n := i; ; n++ {
+			candidate := "link-" + strconv.Itoa(n)
+			if !used[candidate] {
+				links[i].ID = candidate
+				used[candidate] = true
+				break
+			}
+		}
+	}
+	return links
 }
 
 // toDirectoryBusiness is the header block when no menu resolved: the tenant
 // identity and nothing else. Every menu-sourced setting stays at its zero
 // value, because there is no menu to source it from — the directory page paints
-// itself with the neutral theme defaults. Languages is still an empty slice so
-// the payload carries [] instead of null.
+// itself with the neutral theme defaults. Languages and Links are still empty
+// slices so the payload carries [] instead of null.
 func toDirectoryBusiness(business *models.Business) models.PublicBusiness {
 	return models.PublicBusiness{
 		BusinessName: business.Name,
 		BusinessSlug: business.Slug,
 		Languages:    []string{},
+		Links:        models.MenuLinks{},
 	}
 }
 
-// buildFooter produces the legal notices at the bottom of the menu.
+// defaultVatNote is footer.vat_note when a menu shows the VAT note but its text
+// is blank. It is the column default of menus.vat_note_text (migration 005), and
+// the settings page leaves an empty field empty and shows this sentence only as
+// its placeholder, so an owner who switches the note on without typing a text
+// sees in advance the sentence the customer reads.
+//
+// NOTE: the wording is customer-facing and therefore Turkish on purpose.
+const defaultVatNote = "Fiyatlarımıza KDV dahildir."
+
+// BuildFooter produces the legal notices at the bottom of the menu.
 //
 // The price date is menus.price_updated_at. Nothing in Go writes it: the
 // products_touch_menu_price_date trigger of migration 010 moves it whenever a
@@ -337,7 +430,7 @@ func toDirectoryBusiness(business *models.Business) models.PublicBusiness {
 // time would print the previous day.
 //
 // NOTE: the wording is customer-facing and therefore Turkish on purpose.
-func buildFooter(menu *models.Menu) models.PublicFooter {
+func BuildFooter(menu *models.Menu) models.PublicFooter {
 	footer := models.PublicFooter{PoweredBy: poweredBy}
 
 	if menu.ShowPriceDate {
@@ -345,8 +438,14 @@ func buildFooter(menu *models.Menu) models.PublicFooter {
 			"Fiyatlarımız %s tarihinden itibaren geçerlidir.",
 			menu.PriceUpdatedAt.In(utils.Istanbul).Format("02.01.2006"))
 	}
+	// The VAT note is the trimmed text, or defaultVatNote when that is blank: a
+	// note that is switched on is never printed empty, and an empty field prints
+	// the sentence the settings page shows as its placeholder.
 	if menu.ShowVatNote {
-		footer.VatNote = menu.VatNoteText
+		footer.VatNote = strings.TrimSpace(menu.VatNoteText)
+		if footer.VatNote == "" {
+			footer.VatNote = defaultVatNote
+		}
 	}
 	return footer
 }

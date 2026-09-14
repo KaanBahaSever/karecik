@@ -22,6 +22,7 @@
 package session
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -94,10 +95,17 @@ type Store struct {
 
 // New builds an empty store. The janitor is NOT started; call StartJanitor.
 func New() *Store {
+	return NewWithClock(time.Now)
+}
+
+// NewWithClock is New with the clock the store reads the time from. A test
+// passes a clock of its own, so it can age a session past its expiry without
+// sleeping; everything else calls New, whose clock is time.Now.
+func NewWithClock(now func() time.Time) *Store {
 	return &Store{
 		byHash: make(map[string]Entry),
 		byUser: make(map[uuid.UUID]map[string]struct{}),
-		now:    time.Now,
+		now:    now,
 		stop:   make(chan struct{}),
 	}
 }
@@ -264,6 +272,45 @@ func (s *Store) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.byHash)
+}
+
+// IndexProblems describes every way byUser and byHash disagree, and returns nil
+// when they agree. byUser is what revocation walks, so a hash it has lost
+// survives a password change while nothing else about the store looks wrong;
+// the tests check this after every operation.
+//
+// The descriptions name token hashes, so they belong in a test failure, never in
+// a log line.
+func (s *Store) IndexProblems() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var problems []string
+	counted := 0
+	for userID, hashes := range s.byUser {
+		if len(hashes) == 0 {
+			problems = append(problems, fmt.Sprintf(
+				"byUser holds an empty set for %s — it should have been dropped", userID))
+		}
+		for hash := range hashes {
+			entry, ok := s.byHash[hash]
+			if !ok {
+				problems = append(problems, fmt.Sprintf(
+					"byUser[%s] points at %q, which is not in byHash", userID, hash))
+				continue
+			}
+			if entry.UserID != userID {
+				problems = append(problems, fmt.Sprintf(
+					"byUser[%s] holds %q, but that entry belongs to %s", userID, hash, entry.UserID))
+			}
+			counted++
+		}
+	}
+	if counted != len(s.byHash) {
+		problems = append(problems, fmt.Sprintf(
+			"byUser indexes %d session(s), byHash holds %d", counted, len(s.byHash)))
+	}
+	return problems
 }
 
 // removeLocked deletes one hash from BOTH maps. Every deletion in this file

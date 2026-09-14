@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ var hexColorPattern = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 // Serves the fixed catalogues the dashboard needs from a single source:
 // currencies, themes, fonts, allergens, badge icons, splash entrances, splash
 // exit animations with their easings and slide styles, splash and header
-// display modes, languages and rounding modes.
+// display modes, contact display modes, languages and rounding modes.
 func (h *Handler) Meta(c *fiber.Ctx) error {
 	currencies := make([]utils.Currency, 0, len(utils.Currencies))
 	for _, code := range []string{"TRY", "USD", "EUR", "GBP", "AZN", "RUB", "SAR", "AED"} {
@@ -41,6 +42,7 @@ func (h *Handler) Meta(c *fiber.Ctx) error {
 		"splash_display_modes":   utils.SplashDisplayModes,
 		"slide_fade_modes":       utils.SlideFadeModes,
 		"header_display_modes":   utils.HeaderDisplayModes,
+		"contact_display_modes":  utils.ContactDisplayModes,
 		"languages":              utils.Languages,
 		"rounding_modes": []fiber.Map{
 			{"id": utils.RoundNone, "label": "Yuvarlama yok"},
@@ -87,7 +89,7 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 	fields := make(map[string]any)
 
 	if value, ok := raw["name"]; ok {
-		name, err := decodeString(value)
+		name, err := DecodeString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "İşletme adı metin olmalıdır.")
 		}
@@ -99,7 +101,7 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 	}
 
 	if value, ok := raw["slug"]; ok {
-		text, err := decodeString(value)
+		text, err := DecodeString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "İşletme adresi metin olmalıdır.")
 		}
@@ -136,18 +138,43 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 
 // ------------------------------------------------------------ JSON decoders
 
-func decodeString(raw json.RawMessage) (string, error) {
-	var s string
-	err := json.Unmarshal(raw, &s)
-	return s, err
+// errUnstorableText is what DecodeString returns for a string PostgreSQL
+// cannot store (see UnstorableText).
+var errUnstorableText = errors.New("the text holds U+0000 or bytes that are not UTF-8")
+
+// UnstorableText reports whether PostgreSQL would refuse a text: one that holds
+// U+0000, or bytes that are not valid UTF-8. PostgreSQL accepts U+0000 neither
+// in a text column nor, as its JSON escape, in a jsonb value, and it refuses an
+// invalid byte sequence in any text, so a write carrying either fails in the
+// database and the request would end as a 500. A JSON body cannot carry
+// invalid UTF-8 past encoding/json, which replaces a bad byte with U+FFFD, but
+// a form body, which BodyParser decodes as well, can. Every user text is
+// checked before it gets that far, and refused with the 422 its field already
+// answers an invalid value with.
+func UnstorableText(s string) bool {
+	return strings.ContainsRune(s, 0) || !utf8.ValidString(s)
 }
 
-// decodeNullableString maps JSON null to NULL; an empty string becomes NULL too.
-func decodeNullableString(raw json.RawMessage) (*string, error) {
+// DecodeString reads a JSON string and refuses one PostgreSQL cannot store
+// (see UnstorableText). Every caller already answers a decode error with its
+// own 422 for an invalid value, so that is the answer such a text gets too.
+func DecodeString(raw json.RawMessage) (string, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", err
+	}
+	if UnstorableText(s) {
+		return "", errUnstorableText
+	}
+	return s, nil
+}
+
+// DecodeNullableString maps JSON null to NULL; an empty string becomes NULL too.
+func DecodeNullableString(raw json.RawMessage) (*string, error) {
 	if string(raw) == "null" {
 		return nil, nil
 	}
-	s, err := decodeString(raw)
+	s, err := DecodeString(raw)
 	if err != nil {
 		return nil, err
 	}

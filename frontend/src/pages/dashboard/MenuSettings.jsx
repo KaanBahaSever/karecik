@@ -1,24 +1,42 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   Eye,
   EyeOff,
   Globe,
   Image as ImageIcon,
   Info,
   Instagram,
+  Link2,
   MapPin,
   Palette,
   Percent,
   Phone,
+  Plus,
   Save,
   Sparkles,
   Store,
+  Trash2,
   Wifi,
 } from 'lucide-react'
 
 import { useAuth } from '../../lib/auth.jsx'
 import { useActiveMenu } from '../../lib/menuContext.jsx'
+import {
+  completeLinkUrl,
+  CONTACT_DISPLAY_MODES,
+  contactDisplayMode,
+  instagramHandle,
+  instagramUrl,
+  keptLinkIds,
+  LINK_MESSAGES,
+  linkLabelProblem,
+  linkUrlProblem,
+  MAX_LINKS,
+  trimSpace,
+} from '../../lib/contact'
 import { CURRENCY_LIST, formatDate, formatPrice } from '../../lib/format'
 import { cleanSlugInput, MIN_SLUG_LENGTH, slugify } from '../../lib/slugify'
 import { APP_DOMAIN } from '../../lib/subdomain'
@@ -68,6 +86,8 @@ const MENU_FIELDS = [
   'instagram',
   'wifi_ssid',
   'wifi_password',
+  'links',
+  'contact_display',
   /* 3. currency and languages */
   'currency',
   'languages',
@@ -131,6 +151,8 @@ const TRIMMED_FIELDS = [
   'splash_text',
 ]
 
+/* The sentence the customer menu prints for a blank VAT text. The settings field
+   shows it only as its placeholder; see buildDraft. */
 const DEFAULT_VAT_NOTE = 'Fiyatlarımıza KDV dahildir.'
 /* The domain every public address sits under; lib/subdomain.js owns the value */
 const MENU_SUFFIX = `.${APP_DOMAIN}`
@@ -160,6 +182,34 @@ const SPLASH_ENTRANCES = [
 const SLIDE_FADE_MODES = [
   { value: true, label: 'Kayarken soluklaşsın' },
   { value: false, label: 'Tam opak kaysın (perde gibi)' },
+]
+
+/**
+ * One line under each option of the contact display picker. The ids and labels
+ * are CONTACT_DISPLAY_MODES in lib/contact.js; only the help text lives here,
+ * beside the one control that shows it.
+ */
+const CONTACT_DISPLAY_HELP = {
+  inline: 'Ana sayfada küçük düğmeler halinde yan yana dizilir; dokunulan düğmenin bilgisi açılır.',
+  list: 'Ana sayfada tüm bilgiler her zaman açık bir liste halinde görünür.',
+  footer: 'Ana sayfada görünmez; yalnızca ürün ekranlarının en altında yer alır.',
+  hidden: 'Telefon, Instagram, Wi-Fi ve linkler menünün hiçbir yerinde gösterilmez.',
+}
+
+/*
+  The owner's custom links are checked with the link rules of lib/contact.js -
+  the limits, the messages and the order they are checked in - so a list this
+  page lets through is not answered with a 422 the owner cannot trace back to a
+  row, and the first problem reported here is the one the server reports.
+*/
+
+/* Problems typing more cannot fix, so a row shows them at once rather than
+   after its field is left: a label or an address that is too long, a label
+   holding a control character. */
+const IMMEDIATE_LINK_PROBLEMS = [
+  LINK_MESSAGES.labelTooLong,
+  LINK_MESSAGES.labelInvalid,
+  LINK_MESSAGES.urlTooLong,
 ]
 
 /* Menu background presets — light shades first, then the darker ones */
@@ -269,6 +319,117 @@ function isSlideAnimation(animation) {
   return String(animation || '').startsWith('slide-')
 }
 
+let linkIdCounter = 0
+
+/**
+ * A client id for a new link row, shaped so the server keeps it.
+ *
+ * Not crypto.randomUUID: that exists only in secure contexts, so a dashboard
+ * served over plain HTTP would have no such function. getRandomValues has no
+ * such limit, and where even that is missing the time and the counter still
+ * keep ids apart within the page.
+ */
+function newLinkId() {
+  linkIdCounter += 1
+
+  let random = ''
+  try {
+    const values = new Uint32Array(2)
+    globalThis.crypto.getRandomValues(values)
+    random = Array.from(values, (value) => value.toString(36)).join('')
+  } catch {
+    random = Math.random().toString(36).slice(2, 12)
+  }
+
+  return `link-${Date.now().toString(36)}-${linkIdCounter.toString(36)}-${random}`.slice(0, 64)
+}
+
+/** True for `{...}` records; false for null, arrays, strings, numbers and the like. */
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === '[object Object]'
+}
+
+/** A client id for a link row that no id in `taken` already is. */
+function unusedLinkId(taken) {
+  let id = newLinkId()
+  while (taken.has(id)) id = newLinkId()
+  return id
+}
+
+/**
+ * The editor rows for `menu.links`: always an array of { id, label, url } with
+ * string values, in the stored order.
+ *
+ * A row keeps the id the server keeps (keptLinkIds); a missing, invalid or
+ * repeated id is replaced with a client id that no row of the list has. The
+ * editor finds rows by id and React keys them by it, so two rows sharing one
+ * would move and delete together, and React would mix them up.
+ */
+function buildLinkRows(links) {
+  if (!Array.isArray(links)) return []
+
+  const rows = links.filter(isPlainObject)
+  const kept = keptLinkIds(rows)
+  const taken = new Set(kept.filter(Boolean))
+
+  return rows.map((link, index) => {
+    let id = kept[index]
+    if (!id) {
+      id = unusedLinkId(taken)
+      taken.add(id)
+    }
+
+    return {
+      id,
+      label: typeof link.label === 'string' ? link.label : '',
+      url: typeof link.url === 'string' ? link.url : '',
+    }
+  })
+}
+
+/**
+ * The rows a save sends: label and URL trimmed exactly as the server trims them
+ * (Go's strings.TrimSpace, see trimSpace), and every row the owner left
+ * completely empty dropped — an untouched "Link ekle" row is not a link.
+ */
+function savableLinks(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({ id: row.id, label: trimSpace(row.label), url: trimSpace(row.url) }))
+    .filter((row) => row.label !== '' || row.url !== '')
+}
+
+/**
+ * Whether two link lists would save the same thing: the same label and URL
+ * pairs, in the same order. Ids are not compared — they only tell rows apart —
+ * and neither are empty rows, so adding a row and leaving it blank is not an
+ * unsaved change.
+ */
+function linksEqual(a, b) {
+  const first = savableLinks(a)
+  const second = savableLinks(b)
+  return (
+    first.length === second.length &&
+    first.every((row, index) => row.label === second[index].label && row.url === second[index].url)
+  )
+}
+
+/**
+ * What the Instagram field shows for a stored `instagram`: the user name when
+ * instagramHandle reads one in it - the rule the customer menu links with - and
+ * otherwise the stored text, trimmed, as it is.
+ *
+ * So a stored value that holds no user name ("@", "@ x", a sentence) stays in
+ * the field, with the warning under it, where the owner can see it and clear
+ * it. buildDraft puts this into both the draft and `stored`, so the
+ * unsaved-changes check compares the field with the stored value read the same
+ * way: an untouched value is not a change, and clearing a value that holds no
+ * user name is one, which saves null.
+ */
+function instagramFieldValue(value) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return instagramHandle(text) || text
+}
+
 /** Builds an editable draft from a menu object. */
 function buildDraft(menu) {
   const languages =
@@ -288,9 +449,14 @@ function buildDraft(menu) {
     /* contact */
     phone: menu.phone || '',
     address: menu.address || '',
-    instagram: String(menu.instagram || '').replace(/^@+/, ''),
+    instagram: instagramFieldValue(menu.instagram),
     wifi_ssid: menu.wifi_ssid || '',
     wifi_password: menu.wifi_password || '',
+    // Always an array of string-valued rows with ids the editor can key on;
+    // a payload from before the column existed simply has no links.
+    links: buildLinkRows(menu.links),
+    // Unknown or missing means 'inline', the column default.
+    contact_display: contactDisplayMode(menu.contact_display),
     /* currency and languages */
     currency: menu.currency || 'TRY',
     languages,
@@ -332,7 +498,11 @@ function buildDraft(menu) {
     /* footer notices */
     show_price_date: Boolean(menu.show_price_date),
     show_vat_note: Boolean(menu.show_vat_note),
-    vat_note_text: menu.vat_note_text || DEFAULT_VAT_NOTE,
+    // Kept blank when it is blank. The menu prints DEFAULT_VAT_NOTE for a blank
+    // text, and the field shows that sentence as its placeholder only: filled
+    // into the field, it would come back after a blank text is saved, and the
+    // next keystroke would be appended to a sentence the owner has just deleted.
+    vat_note_text: typeof menu.vat_note_text === 'string' ? menu.vat_note_text : '',
     // The column defaults to true, so a payload without the field means "on".
     show_yerli_uretim: menu.show_yerli_uretim !== false,
     yerli_uretim_logo_url: menu.yerli_uretim_logo_url || null,
@@ -341,7 +511,15 @@ function buildDraft(menu) {
   }
 }
 
-/** Compares two field values (array order is irrelevant). */
+/**
+ * Compares two field values (array order is irrelevant).
+ *
+ * The array branch sorts and then compares by identity. That is right for
+ * `languages`, a set of codes, and wrong for `links`: an ordered array of
+ * objects whose rows become new objects on every edit, so the list would read
+ * as changed even after the owner typed the original values back. Links go
+ * through linksEqual instead; see fieldEqual.
+ */
 function isEqual(a, b) {
   if (Array.isArray(a) || Array.isArray(b)) {
     const first = (Array.isArray(a) ? a : []).slice().sort()
@@ -350,6 +528,11 @@ function isEqual(a, b) {
   }
   if (typeof a === 'boolean' || typeof b === 'boolean') return Boolean(a) === Boolean(b)
   return String(a ?? '').trim() === String(b ?? '').trim()
+}
+
+/** Compares one field of the draft with the stored menu. */
+function fieldEqual(field, a, b) {
+  return field === 'links' ? linksEqual(a, b) : isEqual(a, b)
 }
 
 /* ---------------------------------------------------------- small pieces */
@@ -445,6 +628,15 @@ export default function MenuSettings() {
   const [saving, setSaving] = useState(false)
   const [slugError, setSlugError] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
+  // The link fields the owner has already left once, as `${id}:label` and
+  // `${id}:url`. On a new row a "required" or format error shows only after
+  // that — or after a save attempt, which sets linkErrorsVisible — so a row does
+  // not turn red while it is still being typed into. A stored row, and the
+  // problems in IMMEDIATE_LINK_PROBLEMS, show theirs at once.
+  const [touchedLinkFields, setTouchedLinkFields] = useState({})
+  const [linkErrorsVisible, setLinkErrorsVisible] = useState(false)
+  // The row whose label input takes focus after the next render ("Link ekle").
+  const [focusLinkId, setFocusLinkId] = useState(null)
   // Bumped by every successful save; part of storedKey below.
   const [savedVersion, setSavedVersion] = useState(0)
 
@@ -456,17 +648,25 @@ export default function MenuSettings() {
   // and keying on the object would rebuild `stored`, fire the reset below and
   // wipe whatever the owner had typed here in the meantime.
   //
-  // Only the two columns a price change moves, price_updated_at and updated_at,
-  // are left out. Every other value goes into the key exactly as the server sent
-  // it, not as buildDraft rewrites it: a save that buildDraft maps back onto the
-  // same draft — clearing the VAT note, which it turns back into the default
-  // sentence — still changes the key and resets the form, and so does switching
-  // to another menu. savedVersion covers the one case the values cannot: a save
-  // the server stores exactly as it already was (a VAT note that was already
-  // empty), after which the form must still reset to what is stored.
+  // For the same reason the values that change without this page saving are
+  // left out: price_updated_at and updated_at, which a price change moves, and
+  // category_count, which setMenuCategoryCount sets from the menu editor - so a
+  // count set there can never reset a draft here either. Every other value goes
+  // into the key exactly as the server sent it, not as buildDraft rewrites it,
+  // so every stored change resets the form - a save, or a switch to another
+  // menu - even one that buildDraft maps onto the draft the form already holds.
+  // savedVersion covers what the values cannot: a save whose answer carries
+  // exactly the values the menu already had. The key would not change, and the
+  // form would keep the owner's edits and its unsaved-changes bar although the
+  // server has answered with what it stores.
   const storedKey = activeMenu
     ? `${savedVersion}:` +
-      JSON.stringify({ ...activeMenu, price_updated_at: null, updated_at: null })
+      JSON.stringify({
+        ...activeMenu,
+        price_updated_at: null,
+        updated_at: null,
+        category_count: null,
+      })
     : ''
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const stored = useMemo(() => (activeMenu ? buildDraft(activeMenu) : null), [storedKey])
@@ -475,7 +675,17 @@ export default function MenuSettings() {
   useEffect(() => {
     setDraft(stored ? { ...stored } : null)
     setSlugError('')
+    setTouchedLinkFields({})
+    setLinkErrorsVisible(false)
   }, [stored])
+
+  // "Link ekle" asks for its new row's label input, which exists only once that
+  // render is committed. Focusing it also scrolls it into view.
+  useEffect(() => {
+    if (!focusLinkId) return
+    document.getElementById(`link-label-${focusLinkId}`)?.focus()
+    setFocusLinkId(null)
+  }, [focusLinkId])
 
   // Render the font cards in their own typefaces.
   useEffect(() => {
@@ -510,8 +720,13 @@ export default function MenuSettings() {
     setDraft((previous) => ({ ...previous, [field]: value }))
   }
 
-  const changedFields = MENU_FIELDS.filter((field) => !isEqual(draft[field], stored[field]))
+  const changedFields = MENU_FIELDS.filter(
+    (field) => !fieldEqual(field, draft[field], stored[field]),
+  )
   const hasChanges = changedFields.length > 0
+
+  // The ids of the link rows that came from the server; see the links editor.
+  const storedLinkIds = new Set(stored.links.map((link) => link.id))
 
   // The public address is `{business-slug}.karecik.com/{menu-slug}`: the
   // subdomain names the business, this slug names the menu inside it.
@@ -570,6 +785,55 @@ export default function MenuSettings() {
     }))
   }
 
+  /* Link rows. Every change goes through the previous draft and finds its row
+     by id, so two quick clicks in a row never act on a stale list. */
+
+  /** Changes one field of one link row. */
+  const updateLink = (id, field, value) => {
+    setDraft((previous) => ({
+      ...previous,
+      links: previous.links.map((link) => (link.id === id ? { ...link, [field]: value } : link)),
+    }))
+  }
+
+  /** Appends an empty row — never past MAX_LINKS — and focuses its label input. */
+  const addLink = () => {
+    const id = unusedLinkId(new Set(draft.links.map((link) => link.id)))
+    setDraft((previous) =>
+      previous.links.length >= MAX_LINKS
+        ? previous
+        : { ...previous, links: [...previous.links, { id, label: '', url: '' }] },
+    )
+    setFocusLinkId(id)
+  }
+
+  /** Moves a row one place up (-1) or down (+1). */
+  const moveLink = (id, offset) => {
+    setDraft((previous) => {
+      const index = previous.links.findIndex((link) => link.id === id)
+      const target = index + offset
+      if (index === -1 || target < 0 || target >= previous.links.length) return previous
+
+      const links = previous.links.slice()
+      const [moved] = links.splice(index, 1)
+      links.splice(target, 0, moved)
+      return { ...previous, links }
+    })
+  }
+
+  const removeLink = (id) => {
+    setDraft((previous) => ({
+      ...previous,
+      links: previous.links.filter((link) => link.id !== id),
+    }))
+  }
+
+  /** Records that the owner has left a link field once; see touchedLinkFields. */
+  const touchLinkField = (id, field) => {
+    const key = `${id}:${field}`
+    setTouchedLinkFields((previous) => (previous[key] ? previous : { ...previous, [key]: true }))
+  }
+
   /** Collects only the changed fields and saves them onto the active menu. */
   const save = async () => {
     if (!hasChanges || saving) return
@@ -597,6 +861,35 @@ export default function MenuSettings() {
     if (draft.slogan.trim().length > 120) {
       toast.error('Slogan en fazla 120 karakter olabilir.')
       return
+    }
+
+    /* Links, in the server's order: the count, then each row's label and URL.
+       The toast names the row by the number printed on it, and the input at
+       fault takes focus, which scrolls the row into view — the save bar sits
+       at the bottom of the page and the links editor may be far above it.
+
+       Only when the links themselves changed, because only then are they sent.
+       A stored link that breaks the rules — the menu endpoints return stored
+       links as they are — must not stop the owner saving an unrelated setting;
+       its row shows the problem either way. */
+    const links = savableLinks(draft.links)
+    if (changedFields.includes('links')) {
+      if (links.length > MAX_LINKS) {
+        setLinkErrorsVisible(true)
+        toast.error(LINK_MESSAGES.tooMany)
+        return
+      }
+      for (const link of links) {
+        const labelProblem = linkLabelProblem(link.label)
+        const problem = labelProblem || linkUrlProblem(link.url)
+        if (!problem) continue
+
+        const rowNumber = draft.links.findIndex((row) => row.id === link.id) + 1
+        setLinkErrorsVisible(true)
+        toast.error(`${rowNumber}. link: ${problem}`)
+        document.getElementById(`link-${labelProblem ? 'label' : 'url'}-${link.id}`)?.focus()
+        return
+      }
     }
     if (draft.languages.length === 0) {
       toast.error('En az bir menü dili seçmelisiniz.')
@@ -631,6 +924,11 @@ export default function MenuSettings() {
       }
       if (field === 'name') {
         body.name = name
+        return
+      }
+      if (field === 'links') {
+        // Trimmed, with the empty rows dropped: exactly { id, label, url } per row.
+        body.links = links.map(({ id, label, url }) => ({ id, label, url }))
         return
       }
       if (field === 'background_overlay_opacity') {
@@ -853,7 +1151,7 @@ export default function MenuSettings() {
             <SectionHeading
               icon={Phone}
               title="İletişim"
-              description="Menünün altında müşterilerinize gösterilir."
+              description="Telefon, Instagram, Wi-Fi ve linkleriniz müşteri menüsünde, bu bölümün sonunda seçtiğiniz iletişim görünümüyle gösterilir. Boş bıraktıklarınız menüde hiç yer almaz."
             />
 
             <div className="space-y-5">
@@ -915,7 +1213,22 @@ export default function MenuSettings() {
                     }
                   />
                 </div>
-                <p className="help-text">Menünün altında Instagram bağlantısı olarak görünür.</p>
+                <p className="help-text">
+                  Seçtiğiniz iletişim görünümüne göre menüde Instagram bağlantısı olarak yer alır.
+                  Boş bırakırsanız gösterilmez.
+                </p>
+                {/* The customer menu links only a user name it can read
+                    (instagramHandle in lib/contact.js: a name, @name or the
+                    profile address). Anything else still appears there, as
+                    plain text with no link and no "Instagram'da aç" button, so
+                    this line tells the owner why. It does not block saving. */}
+                {draft.instagram.trim() && !instagramUrl(draft.instagram) ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Kullanıcı adınızı ya da profil adresinizi yazın; kullanıcı adı yalnızca harf,
+                    rakam, nokta ve alt çizgi içerebilir. Bu haliyle menüde bağlantısız, düz metin
+                    olarak görünür.
+                  </p>
+                ) : null}
               </div>
 
               <div className="grid gap-5 border-t border-gray-100 pt-5 sm:grid-cols-2">
@@ -968,6 +1281,232 @@ export default function MenuSettings() {
                     </button>
                   </div>
                   <p className="help-text">Boş bırakırsanız menüde gösterilmez.</p>
+                </div>
+              </div>
+
+              {/* ------------------------------------------------ custom links */}
+              <div className="border-t border-gray-100 pt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="label mb-0 inline-flex items-center gap-1.5">
+                    <Link2 className="h-3.5 w-3.5 text-gray-400" aria-hidden="true" />
+                    Linkler
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {draft.links.length} / {MAX_LINKS}
+                  </span>
+                </div>
+                <p className="help-text">
+                  Web siteniz, WhatsApp hattınız ya da Google Haritalar değerlendirme bağlantınız gibi
+                  adresleri ekleyin. Menüde Wi-Fi, Instagram ve telefondan sonra, buradaki sırayla yer
+                  alır.
+                </p>
+
+                {draft.links.length > 0 ? (
+                  <ol className="mt-3 space-y-3">
+                    {draft.links.map((link, index) => {
+                      const rowNumber = index + 1
+                      const label = trimSpace(link.label)
+                      const url = trimSpace(link.url)
+
+                      // A row with both fields empty is dropped on save, so there
+                      // is nothing about it to be wrong.
+                      const blank = label === '' && url === ''
+                      const labelProblem = blank ? '' : linkLabelProblem(label)
+                      const urlProblem = blank ? '' : linkUrlProblem(url)
+                      // A stored row shows its problems from the start: nobody is
+                      // typing into it, and a save of other settings does not stop
+                      // on it, so this is where the owner finds out.
+                      const isStoredRow = storedLinkIds.has(link.id)
+                      const showLabelProblem =
+                        Boolean(labelProblem) &&
+                        (linkErrorsVisible ||
+                          isStoredRow ||
+                          Boolean(touchedLinkFields[`${link.id}:label`]) ||
+                          IMMEDIATE_LINK_PROBLEMS.includes(labelProblem))
+                      const showUrlProblem =
+                        Boolean(urlProblem) &&
+                        (linkErrorsVisible ||
+                          isStoredRow ||
+                          Boolean(touchedLinkFields[`${link.id}:url`]) ||
+                          IMMEDIATE_LINK_PROBLEMS.includes(urlProblem))
+
+                      return (
+                        <li key={link.id} className="rounded-lg border border-gray-200 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-gray-500">
+                              {rowNumber}. link
+                            </span>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                className="btn-ghost btn-sm px-2"
+                                onClick={() => moveLink(link.id, -1)}
+                                disabled={index === 0}
+                                aria-label={`${rowNumber}. linki yukarı taşı`}
+                                title="Yukarı taşı"
+                              >
+                                <ArrowUp className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost btn-sm px-2"
+                                onClick={() => moveLink(link.id, 1)}
+                                disabled={index === draft.links.length - 1}
+                                aria-label={`${rowNumber}. linki aşağı taşı`}
+                                title="Aşağı taşı"
+                              >
+                                <ArrowDown className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost btn-sm px-2 text-red-600 hover:bg-red-50"
+                                onClick={() => removeLink(link.id)}
+                                aria-label={`${rowNumber}. linki sil`}
+                                title="Sil"
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                            <div>
+                              <label className="label" htmlFor={`link-label-${link.id}`}>
+                                Link adı
+                              </label>
+                              <input
+                                id={`link-label-${link.id}`}
+                                type="text"
+                                className={`input ${
+                                  showLabelProblem
+                                    ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
+                                    : ''
+                                }`}
+                                value={link.label}
+                                placeholder="Web sitemiz"
+                                autoComplete="off"
+                                aria-invalid={showLabelProblem}
+                                aria-describedby={
+                                  showLabelProblem ? `link-label-error-${link.id}` : undefined
+                                }
+                                onChange={(event) => updateLink(link.id, 'label', event.target.value)}
+                                onBlur={() => touchLinkField(link.id, 'label')}
+                              />
+                              {showLabelProblem ? (
+                                <p id={`link-label-error-${link.id}`} className="error-text">
+                                  {labelProblem}
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <div>
+                              <label className="label" htmlFor={`link-url-${link.id}`}>
+                                Link adresi
+                              </label>
+                              <input
+                                id={`link-url-${link.id}`}
+                                type="text"
+                                inputMode="url"
+                                className={`input ${
+                                  showUrlProblem
+                                    ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
+                                    : ''
+                                }`}
+                                value={link.url}
+                                placeholder="https://www.ornek.com"
+                                autoComplete="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                aria-invalid={showUrlProblem}
+                                aria-describedby={
+                                  showUrlProblem ? `link-url-error-${link.id}` : undefined
+                                }
+                                onChange={(event) => updateLink(link.id, 'url', event.target.value)}
+                                onBlur={(event) => {
+                                  // "ornek.com" becomes "https://ornek.com"; see completeLinkUrl.
+                                  const completed = completeLinkUrl(event.target.value)
+                                  if (completed !== link.url) updateLink(link.id, 'url', completed)
+                                  touchLinkField(link.id, 'url')
+                                }}
+                              />
+                              {showUrlProblem ? (
+                                <p id={`link-url-error-${link.id}`} className="error-text">
+                                  {urlProblem}
+                                </p>
+                              ) : null}
+                            </div>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                ) : null}
+
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={addLink}
+                    disabled={draft.links.length >= MAX_LINKS}
+                  >
+                    <Plus className="h-4 w-4" aria-hidden="true" />
+                    Link ekle
+                  </button>
+
+                  {/* At the limit this explains the disabled button. Past it —
+                      only reachable with a stored list longer than the limit,
+                      which no save accepts — it is the error the save would
+                      stop on. */}
+                  {draft.links.length >= MAX_LINKS ? (
+                    <span
+                      className={`text-xs ${
+                        savableLinks(draft.links).length > MAX_LINKS
+                          ? 'text-red-600'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      {LINK_MESSAGES.tooMany}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* ------------------------------------------ where they appear */}
+              {/* The option-card pattern of the theme and currency pickers: each
+                  mode needs a line of explanation, which a segmented control
+                  has no room for. */}
+              <div className="border-t border-gray-100 pt-5">
+                <span className="label" id="contact-display-label">
+                  İletişim görünümü
+                </span>
+
+                <div
+                  className="grid gap-3 sm:grid-cols-2"
+                  role="group"
+                  aria-labelledby="contact-display-label"
+                >
+                  {CONTACT_DISPLAY_MODES.map((mode) => {
+                    const isSelected = draft.contact_display === mode.id
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => update('contact_display', mode.id)}
+                        aria-pressed={isSelected}
+                        className={`rounded-xl border p-3 text-left hover:border-brand-400 ${
+                          isSelected ? 'border-brand-600 ring-2 ring-brand-600' : 'border-gray-200'
+                        }`}
+                      >
+                        <span className="block text-sm font-medium text-gray-900">
+                          {mode.label}
+                        </span>
+                        <span className="mt-0.5 block text-xs leading-snug text-gray-500">
+                          {CONTACT_DISPLAY_HELP[mode.id]}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             </div>
@@ -1729,7 +2268,10 @@ export default function MenuSettings() {
                     disabled={!draft.show_vat_note}
                     onChange={(event) => update('vat_note_text', event.target.value)}
                   />
-                  <p className="help-text">{draft.vat_note_text.length} / 200 karakter</p>
+                  <p className="help-text">
+                    Boş bırakırsanız menüde “{DEFAULT_VAT_NOTE}” yazar ·{' '}
+                    {draft.vat_note_text.length} / 200 karakter
+                  </p>
                 </div>
               </div>
 

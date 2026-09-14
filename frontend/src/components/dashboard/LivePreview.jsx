@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AlertCircle, Eye, LayoutList, Play } from 'lucide-react'
+import { AlertCircle, Eye, LayoutList, Loader2, Play } from 'lucide-react'
 
 import api from '../../lib/api'
 import { currencySymbol } from '../../lib/format'
@@ -57,6 +57,12 @@ const REPLAY_FIELDS = [
    the pointer settles, instead of on every pixel of the drag. */
 const SPLASH_REPLAY_DELAY = 250
 
+/* Nothing loaded and nothing failed yet. Shared objects, so resetting a state
+   that is already empty hands React the same object, which it treats as no
+   change. */
+const NO_PAYLOAD = { slug: '', menu: null }
+const NO_FAILURE = { slug: '', message: '' }
+
 /**
  * Phone-shaped preview that shows how dashboard changes look in the customer menu.
  *
@@ -81,9 +87,19 @@ export default function LivePreview({
   showSplashControl = false,
 }) {
   const [language, setLanguage] = useState(business?.default_language || 'tr')
-  const [menu, setMenu] = useState(null)
+  // The last payload that loaded and the last failure, each with the slug it
+  // belongs to; see "Fetch the menu content" below.
+  const [payload, setPayload] = useState(NO_PAYLOAD)
+  const [failure, setFailure] = useState(NO_FAILURE)
   const [loading, setLoading] = useState(Boolean(menuSlug))
-  const [error, setError] = useState('')
+
+  /* Both are read through the slug. Switching to another menu must not show the
+     previous menu's categories under the new menu's settings — or its error —
+     while the new request is on the wire, so a payload or a failure that
+     belongs to another slug counts as nothing at all. */
+  const hasPayload = Boolean(menuSlug) && payload.slug === menuSlug
+  const menu = hasPayload ? payload.menu : null
+  const error = menuSlug && failure.slug === menuSlug ? failure.message : ''
 
   // Splash replay: `splashKey` is handed to SplashScreen as `replayKey`, so
   // pressing the button again while the screen is up restarts the sequence.
@@ -148,30 +164,40 @@ export default function LivePreview({
     }
   }, [])
 
-  // Fetch the menu content.
+  /* Fetch the menu content.
+
+     A refetch — a `refresh` bump, a language switch — leaves the current
+     preview on screen. Swapping MenuContent for the spinner would unmount it,
+     and the category the owner has open in the phone would close on every
+     refetch. So the spinner is only for a preview with nothing to show yet; a
+     refetch is signalled by the small spinner beside the title, and MenuContent
+     keeps its state through it.
+
+     A failed refetch keeps the last good preview as well, with a one-line note
+     under the phone. The full error box is for when there is nothing to show. */
   useEffect(() => {
     let cancelled = false
 
     // Nothing to preview: there is no default menu to fall back to, so the
     // request is not made at all and the frame renders its placeholder.
     if (!menuSlug) {
-      setMenu(null)
-      setError('')
+      setPayload(NO_PAYLOAD)
+      setFailure(NO_FAILURE)
       setLoading(false)
       return undefined
     }
 
     async function loadMenu() {
       setLoading(true)
-      setError('')
+      setFailure(NO_FAILURE)
       try {
         const data = await api.previewMenu(language, { menu: menuSlug })
         if (cancelled) return
-        setMenu(data)
+        setPayload({ slug: menuSlug, menu: data })
       } catch (err) {
         if (cancelled) return
         // No toast here: a preview failure should not be noisy.
-        setError(err.message || 'Önizleme yüklenemedi.')
+        setFailure({ slug: menuSlug, message: err.message || 'Önizleme yüklenemedi.' })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -269,6 +295,17 @@ export default function LivePreview({
         <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
           <Eye className="h-4 w-4 text-brand-600" aria-hidden="true" />
           <span>Canlı Önizleme</span>
+          {/* The refetch indicator. Its slot is always reserved, so the spinner
+              coming and going never reflows this row, which is allowed to
+              wrap. */}
+          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+            {loading && previewMenu ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" aria-hidden="true" />
+                <span className="sr-only">Önizleme güncelleniyor</span>
+              </>
+            ) : null}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -377,23 +414,13 @@ export default function LivePreview({
                     Bir menü oluşturduğunuzda burada görünecek
                   </p>
                 </div>
-              ) : loading ? (
-                <Loading text="Önizleme hazırlanıyor..." />
-              ) : error ? (
-                <div className="flex h-full items-center justify-center p-6">
-                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-left">
-                    <AlertCircle
-                      className="mt-0.5 h-4 w-4 shrink-0 text-red-600"
-                      aria-hidden="true"
-                    />
-                    <div>
-                      <p className="text-xs font-medium text-red-800">Önizleme yüklenemedi</p>
-                      <p className="mt-0.5 text-[11px] leading-snug text-red-700">{error}</p>
-                    </div>
-                  </div>
-                </div>
               ) : previewMenu ? (
-                /* The preview draws records the owner is editing at this very
+                /* Checked before `loading` on purpose: during a refetch the
+                   last payload stays on screen and MenuContent stays mounted,
+                   so whatever the owner had open in the phone stays open. See
+                   the fetch effect above.
+
+                   The preview draws records the owner is editing at this very
                    moment, so one that cannot be rendered must not unmount the
                    whole dashboard with it. A fresh payload, or the refresh that
                    follows the next edit, gives MenuContent another try. */
@@ -418,7 +445,26 @@ export default function LivePreview({
                     embedded
                   />
                 </ErrorBoundary>
-              ) : null}
+              ) : error ? (
+                /* The full error box is only for a preview with nothing on
+                   screen; a failed refetch keeps the last preview instead. */
+                <div className="flex h-full items-center justify-center p-6">
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-left">
+                    <AlertCircle
+                      className="mt-0.5 h-4 w-4 shrink-0 text-red-600"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <p className="text-xs font-medium text-red-800">Önizleme yüklenemedi</p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-red-700">{error}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : hasPayload && !loading ? null : (
+                /* Nothing for this menu yet: the first request is on its way,
+                   or starts right after this render. */
+                <Loading text="Önizleme hazırlanıyor..." />
+              )}
             </div>
 
             {/* `contained` keeps the splash inside the phone instead of covering
@@ -435,9 +481,24 @@ export default function LivePreview({
         </div>
       </div>
 
-      <p className="mt-3 text-center text-xs text-gray-500">
-        Değişiklikler burada anında görünür, kaydedene kadar müşterilere yansımaz.
-      </p>
+      {/* A failed refetch while a preview is on screen. The note takes the
+          caption's place rather than adding a line above the phone: the frame
+          is scaled to fit the window with the caption already counted in, so
+          a failing request does not push the phone's bottom out of view. */}
+      {error && previewMenu ? (
+        <p
+          className="mt-3 flex items-start justify-center gap-1.5 text-center text-xs text-red-600"
+          role="alert"
+          title={error}
+        >
+          <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>Önizleme güncellenemedi, son yüklenen hali gösteriliyor.</span>
+        </p>
+      ) : (
+        <p className="mt-3 text-center text-xs text-gray-500">
+          Değişiklikler burada anında görünür, kaydedene kadar müşterilere yansımaz.
+        </p>
+      )}
     </div>
   )
 }

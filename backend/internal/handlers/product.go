@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -74,11 +75,14 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	if req.CategoryID == uuid.Nil {
 		return utils.Unprocessable(c, "Ürünün ekleneceği kategoriyi seçmelisiniz.")
 	}
-	// Does the category belong to this business?
+	// Does the category belong to this business? A category of another business
+	// is answered exactly like one that does not exist, and like one deleted
+	// while this request runs (below): all three are a category this business
+	// does not have.
 	category, err := repository.GetCategory(c.Context(), h.DB, req.CategoryID, businessID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return utils.Forbidden(c, "Bu kategoriye ürün ekleyemezsiniz.")
+			return utils.NotFound(c, "Kategori bulunamadı.")
 		}
 		return utils.Internal(c, err)
 	}
@@ -89,29 +93,41 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
-	translations, errMessage := sanitizeTranslations(req.Translations, lang, "Ürün")
+	translations, errMessage := SanitizeTranslations(req.Translations, lang, "Ürün")
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
 	}
 
-	if req.Price < 0 {
-		return utils.Unprocessable(c, "Fiyat sıfırdan küçük olamaz.")
+	if errMessage := CheckPrice(req.Price, msgPriceNegative, msgPriceInvalid,
+		MsgPriceTooLarge); errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
 	}
-	if req.ComparePrice != nil && *req.ComparePrice < 0 {
-		return utils.Unprocessable(c, "Karşılaştırma fiyatı sıfırdan küçük olamaz.")
+	if req.ComparePrice != nil {
+		if errMessage := CheckPrice(*req.ComparePrice, msgComparePriceNegative,
+			msgComparePriceInvalid, MsgComparePriceTooLarge); errMessage != "" {
+			return utils.Unprocessable(c, errMessage)
+		}
 	}
 	if errMessage := validateCalories(req.Calories); errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
 	}
 
-	badges, errMessage := sanitizeBadges(req.Badges)
+	badges, errMessage := SanitizeBadges(req.Badges)
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
 	}
 
-	options, errMessage := sanitizeOptions(req.Options)
+	options, errMessage := SanitizeOptions(req.Options)
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
+	}
+
+	// The update path reads image_url through DecodeNullableString, which
+	// refuses a text PostgreSQL cannot store; this body was decoded by
+	// BodyParser instead — possibly from a form, which can carry any bytes — so
+	// the check is made here, with the update path's message.
+	if req.ImageURL != nil && UnstorableText(*req.ImageURL) {
+		return utils.Unprocessable(c, "Görsel adresi geçersiz.")
 	}
 
 	isActive, isFeatured := true, false
@@ -123,16 +139,73 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	}
 
 	// image_url is trimmed and a blank value is stored as NULL — exactly what
-	// UpdateProduct stores through decodeNullableString, so a product created
+	// UpdateProduct stores through DecodeNullableString, so a product created
 	// without an image and one whose image was later cleared look the same.
-	product, err := repository.CreateProduct(c.Context(), h.DB, businessID, req.CategoryID,
-		translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.Calories,
-		optionalStrPtr(req.ImageURL), sanitizeAllergens(req.Allergens), badges, options,
-		isActive, isFeatured)
+	imageURL, allergens := optionalStrPtr(req.ImageURL), sanitizeAllergens(req.Allergens)
+
+	// CreateProduct is one transaction of its own — the advisory locks of the
+	// category's menu and of the category, then the INSERT — so a run
+	// PostgreSQL aborted over a lock conflict wrote nothing and is simply run
+	// again. See repository.RetryOnConflict.
+	product, err := repository.RetryOnConflictValue(c.Context(), "CreateProduct",
+		func() (*models.Product, error) {
+			return repository.CreateProduct(c.Context(), h.DB, businessID, req.CategoryID,
+				translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.Calories,
+				imageURL, allergens, badges, options, isActive, isFeatured)
+		})
 	if err != nil {
+		// The category was checked above, but a delete of it — or of its menu —
+		// can still land before the create holds its locks: the create waits for
+		// that delete at its advisory locks and then finds the category gone
+		// (ErrParentNotFound). A delete that took no advisory lock is caught by
+		// the INSERT's foreign key check (23503) instead. Either way the category
+		// is gone: a 404, not a server error.
+		if errors.Is(err, repository.ErrParentNotFound) || repository.IsForeignKeyViolation(err) {
+			return utils.NotFound(c, "Kategori bulunamadı.")
+		}
 		return utils.Internal(c, err)
 	}
 	return utils.Created(c, product)
+}
+
+// The refusals of a price a request carries. The too-large messages name
+// utils.MaxPrice the way the dashboard writes a price, with Turkish digit
+// grouping.
+const (
+	msgPriceNegative        = "Fiyat sıfırdan küçük olamaz."
+	msgPriceInvalid         = "Fiyat sıfır veya daha büyük bir sayı olmalıdır."
+	MsgPriceTooLarge        = "Fiyat en fazla 9.999.999.999,99 olabilir."
+	msgComparePriceNegative = "Karşılaştırma fiyatı sıfırdan küçük olamaz."
+	msgComparePriceInvalid  = "Karşılaştırma fiyatı geçersiz."
+	MsgComparePriceTooLarge = "Karşılaştırma fiyatı en fazla 9.999.999.999,99 olabilir."
+
+	// MsgBulkPriceTooLarge refuses a bulk price update that would give a
+	// product a price above utils.MaxPrice, on preview and apply alike.
+	MsgBulkPriceTooLarge = "Bu değişiklik bazı fiyatları izin verilen en yüksek değerin (9.999.999.999,99) üzerine çıkarıyor."
+)
+
+// CheckPrice returns the refusal of a price a request carries, or "" when the
+// price can be stored: negative for a price below zero, notANumber for NaN and
+// tooLarge for a price above utils.MaxPrice, which products.price and
+// products.compare_price cannot hold. The price is compared as it was sent,
+// before utils.Round2, so a price that passes also fits once rounded.
+//
+// NaN needs a case of its own. A JSON body cannot carry it, but a form or an
+// XML body can — BodyParser reads "NaN" as a float64 — and NaN is neither below
+// zero nor above the limit. PostgreSQL stores it in a NUMERIC column, where the
+// CHECK (price >= 0) lets it through, and every later read of the product would
+// then fail to encode its price. +Inf and -Inf need nothing extra: one is above
+// the limit and the other below zero.
+func CheckPrice(price float64, negative, notANumber, tooLarge string) string {
+	switch {
+	case math.IsNaN(price):
+		return notANumber
+	case price < 0:
+		return negative
+	case price > utils.MaxPrice:
+		return tooLarge
+	}
+	return ""
 }
 
 // UpdateProduct — PUT /api/products/:id
@@ -160,8 +233,10 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		}
 		category, err := repository.GetCategory(c.Context(), h.DB, categoryID, businessID)
 		if err != nil {
+			// A category of another business is answered like one that does not
+			// exist, and like one deleted while the move runs (below).
 			if errors.Is(err, repository.ErrNotFound) {
-				return utils.Forbidden(c, "Ürünü bu kategoriye taşıyamazsınız.")
+				return utils.NotFound(c, "Kategori bulunamadı.")
 			}
 			return utils.Internal(c, err)
 		}
@@ -186,17 +261,23 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		if err != nil {
 			return utils.Internal(c, err)
 		}
-		cleaned, errMessage := sanitizeTranslations(translations, lang, "Ürün")
+		cleaned, errMessage := SanitizeTranslations(translations, lang, "Ürün")
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
 		fields["translations"] = cleaned
 	}
 
+	// A negative price gets this path's invalid-value message, the one it gives
+	// a value that is not a number at all.
 	if value, ok := raw["price"]; ok {
 		price, err := decodeFloat(value)
-		if err != nil || price < 0 {
-			return utils.Unprocessable(c, "Fiyat sıfır veya daha büyük bir sayı olmalıdır.")
+		if err != nil {
+			return utils.Unprocessable(c, msgPriceInvalid)
+		}
+		if errMessage := CheckPrice(price, msgPriceInvalid, msgPriceInvalid,
+			MsgPriceTooLarge); errMessage != "" {
+			return utils.Unprocessable(c, errMessage)
 		}
 		fields["price"] = utils.Round2(price)
 	}
@@ -206,8 +287,12 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 			fields["compare_price"] = nil
 		} else {
 			price, err := decodeFloat(value)
-			if err != nil || price < 0 {
-				return utils.Unprocessable(c, "Karşılaştırma fiyatı geçersiz.")
+			if err != nil {
+				return utils.Unprocessable(c, msgComparePriceInvalid)
+			}
+			if errMessage := CheckPrice(price, msgComparePriceInvalid, msgComparePriceInvalid,
+				MsgComparePriceTooLarge); errMessage != "" {
+				return utils.Unprocessable(c, errMessage)
 			}
 			rounded := utils.Round2(price)
 			fields["compare_price"] = &rounded
@@ -231,7 +316,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 	}
 
 	if value, ok := raw["image_url"]; ok {
-		ptr, err := decodeNullableString(value)
+		ptr, err := DecodeNullableString(value)
 		if err != nil {
 			return utils.Unprocessable(c, "Görsel adresi geçersiz.")
 		}
@@ -253,9 +338,9 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 				return utils.Unprocessable(c, "Rozet listesi geçersiz.")
 			}
 		}
-		// badges is a NOT NULL jsonb column, so sanitizeBadges always returns
+		// badges is a NOT NULL jsonb column, so SanitizeBadges always returns
 		// a non-nil list — a nil one would be written as the literal null.
-		cleaned, errMessage := sanitizeBadges(badges)
+		cleaned, errMessage := SanitizeBadges(badges)
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
@@ -264,7 +349,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 
 	// An empty array clears the options of a product; null does the same, so a
 	// dashboard that sends either gets the same result. options is a NOT NULL
-	// jsonb column, so sanitizeOptions never returns a nil list.
+	// jsonb column, so SanitizeOptions never returns a nil list.
 	if value, ok := raw["options"]; ok {
 		var options models.ProductOptions
 		if string(value) != "null" {
@@ -272,7 +357,7 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 				return utils.Unprocessable(c, "Seçenek listesi geçersiz.")
 			}
 		}
-		cleaned, errMessage := sanitizeOptions(options)
+		cleaned, errMessage := SanitizeOptions(options)
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
@@ -293,10 +378,26 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 	// compare_price or an option surcharge, the products_touch_menu_price_date
 	// trigger of migration 010 moves the "prices valid from" date of the menu
 	// the product ends up in. A second mechanism in Go would only drift from it.
-	product, err := repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
+	//
+	// The update is one statement — the trigger runs inside it — or, when the
+	// body names a category, one transaction of its own, so a run PostgreSQL
+	// aborted over a lock conflict wrote nothing and is simply run again. See
+	// repository.RetryOnConflict.
+	product, err := repository.RetryOnConflictValue(c.Context(), "UpdateProduct",
+		func() (*models.Product, error) {
+			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
+		})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Ürün bulunamadı.")
+		}
+		// A move into a category that was deleted after GetCategory checked it.
+		// The move waits for a delete of the category or of its menu at its
+		// advisory lock and then finds the category gone (ErrParentNotFound);
+		// a delete that took no advisory lock is caught by the foreign key check
+		// (23503). Either way the category is gone: a 404 rather than a 500.
+		if errors.Is(err, repository.ErrParentNotFound) || repository.IsForeignKeyViolation(err) {
+			return utils.NotFound(c, "Kategori bulunamadı.")
 		}
 		return utils.Internal(c, err)
 	}
@@ -315,17 +416,26 @@ func (h *Handler) PatchProductPrice(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.BadRequest(c, "İstek gövdesi okunamadı.")
 	}
-	if req.Price < 0 {
-		return utils.Unprocessable(c, "Fiyat sıfırdan küçük olamaz.")
+	if errMessage := CheckPrice(req.Price, msgPriceNegative, msgPriceInvalid,
+		MsgPriceTooLarge); errMessage != "" {
+		return utils.Unprocessable(c, errMessage)
 	}
 
 	// A different price moves the menu's "prices valid from" date through the
 	// trigger of migration 010, and re-sending the same price does not. No
-	// timestamp code belongs here — see UpdateProduct.
-	product, err := repository.UpdateProduct(c.Context(), h.DB, id, middleware.BusinessID(c),
-		map[string]any{"price": utils.Round2(req.Price)})
+	// timestamp code belongs here — see UpdateProduct, which also explains the
+	// retry.
+	businessID := middleware.BusinessID(c)
+	fields := map[string]any{"price": utils.Round2(req.Price)}
+	product, err := repository.RetryOnConflictValue(c.Context(), "PatchProductPrice",
+		func() (*models.Product, error) {
+			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
+		})
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		// A foreign key violation is mapped here as on every other product
+		// write, with this path's own not-found message: a price edit names no
+		// category, only the product.
+		if errors.Is(err, repository.ErrNotFound) || repository.IsForeignKeyViolation(err) {
 			return utils.NotFound(c, "Ürün bulunamadı.")
 		}
 		return utils.Internal(c, err)
@@ -340,7 +450,13 @@ func (h *Handler) DeleteProduct(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz ürün kimliği.")
 	}
 
-	if err := repository.DeleteProduct(c.Context(), h.DB, id, middleware.BusinessID(c)); err != nil {
+	// One self-contained DELETE, so a run PostgreSQL aborted over a lock
+	// conflict wrote nothing and is simply run again.
+	businessID := middleware.BusinessID(c)
+	err = repository.RetryOnConflict(c.Context(), "DeleteProduct", func() error {
+		return repository.DeleteProduct(c.Context(), h.DB, id, businessID)
+	})
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Ürün bulunamadı.")
 		}
@@ -361,14 +477,30 @@ func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 	}
 
 	businessID := middleware.BusinessID(c)
+	// A category of another business is answered like one that does not exist,
+	// and like one deleted while the reorder runs (below).
 	if _, err := repository.GetCategory(c.Context(), h.DB, *req.CategoryID, businessID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return utils.Forbidden(c, "Bu kategori üzerinde işlem yapamazsınız.")
+			return utils.NotFound(c, "Kategori bulunamadı.")
 		}
 		return utils.Internal(c, err)
 	}
 
-	if err := repository.ReorderProducts(c.Context(), h.DB, businessID, *req.CategoryID, req.IDs); err != nil {
+	// ReorderProducts is one transaction of its own — advisory locks, then the
+	// row locks, then the write — so a run PostgreSQL aborted over a lock
+	// conflict wrote nothing and is simply run again.
+	err := repository.RetryOnConflict(c.Context(), "ReorderProducts", func() error {
+		return repository.ReorderProducts(c.Context(), h.DB, businessID, *req.CategoryID, req.IDs)
+	})
+	if err != nil {
+		// The target category was checked above, but a delete of it — or of its
+		// menu — can still land before the reorder holds its locks: the reorder
+		// waits for it and then finds the category gone (ErrParentNotFound), or,
+		// for a delete that took no advisory lock, fails its foreign key check
+		// (23503). The category is gone: a 404 rather than a 500.
+		if errors.Is(err, repository.ErrParentNotFound) || repository.IsForeignKeyViolation(err) {
+			return utils.NotFound(c, "Kategori bulunamadı.")
+		}
 		return utils.Internal(c, err)
 	}
 
@@ -389,6 +521,13 @@ func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 // a menu the user did not pick is not a fallback worth having, so a missing one
 // is a plain 422.
 //
+// A preview reads the prices without locking them. An apply does not reuse
+// that read: repository.ApplyPrices locks the products, reads their prices
+// under the lock and writes the new ones in one transaction, and the answer —
+// preview and affected alike — is built from what it read and wrote. A price
+// edited while the apply waited for its locks is therefore the price the
+// percentage applies to.
+//
 // An apply moves the menu's "prices valid from" date only when it really
 // changes a price, and this handler never moves it itself: see the note after
 // ApplyPrices.
@@ -398,7 +537,10 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "İstek gövdesi okunamadı.")
 	}
 
-	if req.Percentage < -90 || req.Percentage > 1000 {
+	// Written as "not within" so that NaN, which a form or an XML body can
+	// carry and which no comparison holds for, is refused as well: every price
+	// it touched would become NaN.
+	if !(req.Percentage >= -90 && req.Percentage <= 1000) {
 		return utils.Unprocessable(c, "Yüzde değeri -90 ile 1000 arasında olmalıdır.")
 	}
 	if req.Rounding == "" {
@@ -418,42 +560,43 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 		return err
 	}
 
-	rows, err := repository.ListPriceRows(c.Context(), h.DB, businessID, menu.ID, req.CategoryIDs)
-	if err != nil {
-		return utils.Internal(c, err)
-	}
-
-	preview := make([]models.PriceChangePreview, 0, len(rows))
-	changes := make(map[uuid.UUID]float64)
-
-	for _, row := range rows {
-		newPrice := utils.RoundPrice(
-			utils.ApplyPercentage(row.Price, req.Percentage), req.Rounding)
-
-		preview = append(preview, models.PriceChangePreview{
-			ID:       row.ID,
-			Name:     row.Translations.Resolve(menu.DefaultLanguage, menu.DefaultLanguage).Name,
-			OldPrice: utils.Round2(row.Price),
-			NewPrice: newPrice,
-		})
-
-		if newPrice != utils.Round2(row.Price) {
-			changes[row.ID] = newPrice
-		}
-	}
-
-	result := models.BulkPriceResult{
-		Applied:  false,
-		Affected: len(changes),
-		Preview:  preview,
-	}
-
 	if !req.Apply {
-		return utils.OK(c, result)
+		rows, err := repository.ListPriceRows(c.Context(), h.DB, businessID, menu.ID, req.CategoryIDs)
+		if err != nil {
+			return utils.Internal(c, err)
+		}
+		changes := repository.PlanPriceChanges(rows, req.Percentage, req.Rounding)
+		// Refused exactly as an apply of the same prices would be, so a preview
+		// never promises prices the apply then refuses to write.
+		if repository.PriceLimitExceeded(changes) {
+			return utils.Unprocessable(c, MsgBulkPriceTooLarge)
+		}
+		affected := 0
+		for _, change := range changes {
+			if change.Changed() {
+				affected++
+			}
+		}
+		return utils.OK(c, bulkPriceResult(menu, changes, affected))
 	}
 
-	affected, err := repository.ApplyPrices(c.Context(), h.DB, businessID, menu.ID, changes)
+	// ApplyPrices is one transaction of its own, so a run PostgreSQL aborted
+	// over a lock conflict wrote nothing and is simply run again; the answer is
+	// built from the rows the last run read and wrote. See
+	// repository.RetryOnConflict.
+	var changes []repository.PriceChange
+	affected, err := repository.RetryOnConflictValue(c.Context(), "BulkPrice", func() (int, error) {
+		priced, written, err := repository.ApplyPrices(c.Context(), h.DB, businessID, menu.ID,
+			req.CategoryIDs, req.Percentage, req.Rounding)
+		changes = priced
+		return written, err
+	})
 	if err != nil {
+		// ApplyPrices refuses a plan with a price above the limit before it
+		// writes anything, exactly as the preview refuses it.
+		if errors.Is(err, repository.ErrPriceTooLarge) {
+			return utils.Unprocessable(c, MsgBulkPriceTooLarge)
+		}
 		return utils.Internal(c, err)
 	}
 
@@ -479,11 +622,28 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
+	result := bulkPriceResult(menu, changes, affected)
 	result.Applied = true
-	result.Affected = affected
 	result.PriceUpdatedAt = &updatedAt
 
 	return utils.OK(c, result)
+}
+
+// bulkPriceResult is the answer of the bulk price endpoint: every priced product
+// with its name in the menu's default language, the price it was read at and
+// the price the update gives it, and how many products get a new price — or, for
+// an apply, got one.
+func bulkPriceResult(menu *models.Menu, changes []repository.PriceChange, affected int) models.BulkPriceResult {
+	preview := make([]models.PriceChangePreview, 0, len(changes))
+	for _, change := range changes {
+		preview = append(preview, models.PriceChangePreview{
+			ID:       change.ID,
+			Name:     change.Translations.Resolve(menu.DefaultLanguage, menu.DefaultLanguage).Name,
+			OldPrice: utils.Round2(change.Price),
+			NewPrice: change.NewPrice,
+		})
+	}
+	return models.BulkPriceResult{Affected: affected, Preview: preview}
 }
 
 // ------------------------------------------------------------------ helpers
@@ -494,12 +654,12 @@ const (
 	defaultBadgeTextColor = "#ffffff"
 )
 
-// sanitizeBadges validates the custom badges of a product and fills in the
+// SanitizeBadges validates the custom badges of a product and fills in the
 // missing identifiers and colours. It returns the cleaned list plus an error
 // message, which is empty when everything is valid.
 //
 // NOTE: the message is shown to the end user and is therefore Turkish.
-func sanitizeBadges(in models.Badges) (models.Badges, string) {
+func SanitizeBadges(in models.Badges) (models.Badges, string) {
 	if len(in) > models.MaxBadges {
 		return nil, fmt.Sprintf("En fazla %d rozet ekleyebilirsiniz.", models.MaxBadges)
 	}
@@ -507,6 +667,14 @@ func sanitizeBadges(in models.Badges) (models.Badges, string) {
 	out := make(models.Badges, 0, len(in))
 
 	for _, badge := range in {
+		// Every field of a badge is stored in the jsonb column, the id included,
+		// so a text PostgreSQL cannot store in any of them refuses the list (see
+		// UnstorableText).
+		if UnstorableText(badge.ID) || UnstorableText(badge.Text) || UnstorableText(badge.Icon) ||
+			UnstorableText(badge.BgColor) || UnstorableText(badge.TextColor) {
+			return nil, "Rozet listesi geçersiz."
+		}
+
 		badge.Text = strings.TrimSpace(badge.Text)
 		if badge.Text == "" {
 			return nil, "Rozet metni boş olamaz."
@@ -552,7 +720,7 @@ func sanitizeBadges(in models.Badges) (models.Badges, string) {
 // opinion about what a cafe may charge.
 const maxOptionItemPrice = 100000
 
-// sanitizeOptions validates the option groups of a product and returns the
+// SanitizeOptions validates the option groups of a product and returns the
 // cleaned list plus an error message, which is empty when everything is valid.
 //
 // It checks the RAW payload before normalising, because Normalize truncates
@@ -568,13 +736,20 @@ const maxOptionItemPrice = 100000
 // as well.
 //
 // NOTE: the messages are shown to the end user and are therefore Turkish.
-func sanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
+func SanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
 	if len(in) > models.MaxOptionGroups {
 		return nil, fmt.Sprintf("En fazla %d seçenek grubu ekleyebilirsiniz.",
 			models.MaxOptionGroups)
 	}
 
 	for _, group := range in {
+		// The group and item names are stored in the jsonb column, so a text
+		// PostgreSQL cannot store in one of them refuses the list (see
+		// UnstorableText). The type is not stored as sent — an unknown one is
+		// refused below — so it needs no check of its own.
+		if UnstorableText(group.Name) {
+			return nil, "Seçenek listesi geçersiz."
+		}
 		name := strings.TrimSpace(group.Name)
 		if name == "" {
 			return nil, "Seçenek grubunun adı zorunludur."
@@ -596,6 +771,9 @@ func sanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
 		}
 
 		for _, item := range group.Items {
+			if UnstorableText(item.Name) {
+				return nil, "Seçenek listesi geçersiz."
+			}
 			itemName := strings.TrimSpace(item.Name)
 			if itemName == "" {
 				return nil, "Seçenek adı zorunludur."

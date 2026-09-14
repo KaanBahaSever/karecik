@@ -246,7 +246,7 @@ func (r Resolver) Resolve(h Header, remoteAddr string) Addr {
 	// Neither value is necessarily the visitor — behind Cloudflare, X-Real-IP
 	// is a Cloudflare egress address — but neither is CHOSEN by the caller,
 	// and not-chosen is the property a rate-limit key actually requires.
-	edgeIP, edgeOK := normalizeIP(h.Get(HeaderXRealIP))
+	edgeIP, edgeOK := NormalizeIP(h.Get(HeaderXRealIP))
 	peerIP, peerPort, peerOK := splitAddr(remoteAddr)
 
 	keyIP := ""
@@ -257,7 +257,7 @@ func (r Resolver) Resolve(h Header, remoteAddr string) Addr {
 		keyIP = peerIP
 	}
 
-	cfIP, cfOK := normalizeIP(h.Get(HeaderCFConnectingIP))
+	cfIP, cfOK := NormalizeIP(h.Get(HeaderCFConnectingIP))
 
 	// 1 & 2: Cloudflare.
 	if cfOK {
@@ -305,7 +305,7 @@ func (r Resolver) Resolve(h Header, remoteAddr string) Addr {
 	// 4: X-Forwarded-For, opt-in only. Reported, never keyed on: the platform
 	// does not document sanitising it, so it may be verbatim client input.
 	if r.TrustForwarded {
-		if ip, ok := rightmostForwarded(h.Get(HeaderXForwardedFor)); ok {
+		if ip, ok := RightmostForwarded(h.Get(HeaderXForwardedFor)); ok {
 			return Addr{IP: ip, KeyIP: keyIP, Port: PortUnknown, Source: SourceForwarded}
 		}
 	}
@@ -340,7 +340,7 @@ func (r Resolver) port(h Header) string {
 	if r.PortHeader == "" {
 		return PortUnknown
 	}
-	if p, ok := normalizePort(h.Get(r.PortHeader)); ok {
+	if p, ok := NormalizePort(h.Get(r.PortHeader)); ok {
 		return p
 	}
 	return PortUnknown
@@ -398,7 +398,7 @@ func hasControl(s string) bool {
 	return false
 }
 
-// normalizeIP validates and canonicalises one address.
+// NormalizeIP validates and canonicalises one address.
 //
 // Accepts a bare address or a host:port pair, because these headers are written
 // by many different proxies and some include the port. Returns ok=false for
@@ -411,7 +411,7 @@ func hasControl(s string) bool {
 //	"fe80::1%eth0"    -> "fe80::1"   the zone is a local interface name and
 //	                                 means nothing outside this host
 //	"[2001:db8::1]:9" -> "2001:db8::1"
-func normalizeIP(raw string) (string, bool) {
+func NormalizeIP(raw string) (string, bool) {
 	raw = trimHorizontal(raw)
 	if hasControl(raw) {
 		return "", false
@@ -452,12 +452,12 @@ func normalizeIP(raw string) (string, bool) {
 	return addr.String(), true
 }
 
-// normalizePort validates a port and returns it in canonical decimal form.
+// NormalizePort validates a port and returns it in canonical decimal form.
 //
 // Port 0 is rejected: it is what a kernel is asked for when any port will do,
 // never what a live connection reports, so its presence means the value was
 // invented somewhere upstream.
-func normalizePort(raw string) (string, bool) {
+func NormalizePort(raw string) (string, bool) {
 	raw = trimHorizontal(raw)
 	if hasControl(raw) {
 		return "", false
@@ -483,23 +483,23 @@ func splitAddr(raw string) (ip, port string, ok bool) {
 	}
 
 	if host, p, err := net.SplitHostPort(raw); err == nil {
-		normIP, ipOK := normalizeIP(host)
+		normIP, ipOK := NormalizeIP(host)
 		if !ipOK {
 			return "", "", false
 		}
-		if normPort, portOK := normalizePort(p); portOK {
+		if normPort, portOK := NormalizePort(p); portOK {
 			return normIP, normPort, true
 		}
 		return normIP, PortUnknown, true
 	}
 
-	if normIP, ipOK := normalizeIP(raw); ipOK {
+	if normIP, ipOK := NormalizeIP(raw); ipOK {
 		return normIP, PortUnknown, true
 	}
 	return "", "", false
 }
 
-// rightmostForwarded takes the LAST entry of an X-Forwarded-For chain.
+// RightmostForwarded takes the LAST entry of an X-Forwarded-For chain.
 //
 // The last entry is the one the nearest proxy appended, and every entry to its
 // left was supplied by whoever came before — which, at the far end, is the
@@ -510,13 +510,13 @@ func splitAddr(raw string) (ip, port string, ok bool) {
 // The rightmost entry is only as good as the proxy that appended it, which is
 // why the caller has to opt in with TrustForwarded and why the result is still
 // labelled untrusted.
-func rightmostForwarded(raw string) (string, bool) {
+func RightmostForwarded(raw string) (string, bool) {
 	if trimHorizontal(raw) == "" {
 		return "", false
 	}
 	parts := strings.Split(raw, ",")
 	for i := len(parts) - 1; i >= 0; i-- {
-		if ip, ok := normalizeIP(parts[i]); ok {
+		if ip, ok := NormalizeIP(parts[i]); ok {
 			return ip, true
 		}
 	}

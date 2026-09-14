@@ -190,9 +190,10 @@ var SplashEasings = []SplashEasing{
 	{ID: "linear", Label: "Sabit hız"},
 }
 
-// DisplayMode is one logo / text combination of a screen area. The splash
-// screen and the customer menu header share the shape but not the ids, so
-// they keep separate catalogues below.
+// DisplayMode is one id / label pair of a screen-area setting. The splash
+// screen and the customer menu header use it for their logo / text
+// combinations, and the contact block for where it is drawn. They share the
+// shape but not the ids, so each keeps a separate catalogue below.
 type DisplayMode struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -213,6 +214,49 @@ var HeaderDisplayModes = []DisplayMode{
 	{ID: "logo", Label: "Sadece logo"},
 	{ID: "name", Label: "Sadece işletme adı"},
 }
+
+// The contact display mode ids. Unlike the other catalogues in this file these
+// are named, because code branches on one of them: in ContactDisplayHidden mode
+// the public menu payload leaves the contact details out altogether (see
+// repository.ToPublicBusiness), and a bare "hidden" there could drift from the
+// catalogue below without the compiler noticing.
+const (
+	ContactDisplayInline = "inline"
+	ContactDisplayList   = "list"
+	ContactDisplayFooter = "footer"
+	ContactDisplayHidden = "hidden"
+)
+
+// ContactDisplayModes lists where the customer menu draws the contact block —
+// the Wi-Fi, Instagram and phone entries followed by the menu's own links.
+// The ids match the menus.contact_display CHECK constraint of migration 011.
+//
+//	inline  one row of chips on the home view; a chip opens its details
+//	list    the same entries as an always-open list on the home view
+//	footer  nothing on the home view, the entries only in the footer
+//	hidden  the entries nowhere at all
+//
+// inline, list and footer all keep the compact list in the footer of the
+// product screens; hidden drops that too.
+var ContactDisplayModes = []DisplayMode{
+	{ID: ContactDisplayInline, Label: "Yan yana"},
+	{ID: ContactDisplayList, Label: "Açık liste"},
+	{ID: ContactDisplayFooter, Label: "Sadece alt bilgi"},
+	{ID: ContactDisplayHidden, Label: "Hiç gösterme"},
+}
+
+// Limits of the custom links of a menu. handlers/menu.go enforces them next to
+// its Turkish messages; the database only checks that menus.links holds an
+// array, the same split products.badges and products.options use — the
+// element shape lives in Go.
+//
+// The label is measured in runes, so "ş" counts as one character and not two.
+// The address is measured in bytes, as the API contract specifies.
+const (
+	MaxMenuLinks          = 8
+	MaxMenuLinkLabelRunes = 40
+	MaxMenuLinkURLBytes   = 500
+)
 
 // SlideFadeMode labels one of the two slide styles of the splash exit.
 type SlideFadeMode struct {
@@ -353,6 +397,17 @@ func IsValidSplashDisplay(id string) bool {
 // the catalogue.
 func IsValidHeaderDisplay(id string) bool {
 	for _, mode := range HeaderDisplayModes {
+		if mode.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidContactDisplay reports whether a contact display mode id exists in
+// the catalogue.
+func IsValidContactDisplay(id string) bool {
+	for _, mode := range ContactDisplayModes {
 		if mode.ID == id {
 			return true
 		}
