@@ -74,7 +74,7 @@ export default function MenuEditor() {
   // The bar at the top of the page decides which menu is edited here. Until it
   // has resolved one, nothing is fetched: an unscoped request would list every
   // category of the business and be thrown away a moment later.
-  const { activeMenu, loading: menusLoading } = useActiveMenu()
+  const { activeMenu, loading: menusLoading, refreshMenu } = useActiveMenu()
   const activeMenuID = activeMenu?.id || null
 
   // A business may own no menus at all. Neither the categories nor the forms
@@ -314,6 +314,12 @@ export default function MenuEditor() {
     setProductModalOpen(false)
     setEditingProduct(null)
 
+    // A save can change the price, the compare price or an option surcharge,
+    // and any of those may move the menu's price date. Refetching that one menu
+    // keeps the date on the settings page current without a page reload; it
+    // never throws and never puts the editor behind a spinner.
+    refreshMenu(activeMenuID)
+
     if (!product || !product.id) {
       loadData()
       refreshPreview()
@@ -352,6 +358,8 @@ export default function MenuEditor() {
       const updated = await api.updateProductPrice(productId, nextPrice)
       if (updated && updated.id) patchProductLocally(productId, updated)
       toast.success('Fiyat güncellendi.')
+      // The new price may have moved the menu's price date; see onProductSaved.
+      refreshMenu(activeMenuID)
     } catch (err) {
       patchProductLocally(productId, { price: previousPrice })
       refreshPreview()
@@ -430,6 +438,8 @@ export default function MenuEditor() {
     setBulkPriceOpen(false)
     loadData()
     refreshPreview()
+    // A bulk apply moves the menu's price date; see onProductSaved.
+    refreshMenu(activeMenuID)
   }
 
   /* --------------------------------------------------------------- render */

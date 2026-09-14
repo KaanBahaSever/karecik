@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { ImagePlus, Loader2, Trash2 } from 'lucide-react'
 
 import api from '../../lib/api'
+import { useImageFallback } from '../../lib/useImageFallback'
 import { useToast } from './Toast.jsx'
 
 /**
@@ -23,6 +24,11 @@ export default function ImageUploader({
   const [uploading, setUploading] = useState(false)
   const inputRef = useRef(null)
   const toast = useToast()
+
+  // The preview of a URL that no longer loads — an upload whose file is gone —
+  // falls back to the placeholder and says so, instead of an empty square the
+  // owner has no reason to question. The failure resets when `value` changes.
+  const preview = useImageFallback(value)
 
   async function onFileSelected(event) {
     const file = event.target.files?.[0]
@@ -55,9 +61,14 @@ export default function ImageUploader({
             round ? 'rounded-full' : 'rounded-lg'
           }`}
         >
-          {value ? (
+          {preview.src ? (
             /* Never crop: wide (horizontal) logos are explicitly supported. */
-            <img src={value} alt="" className="max-h-full max-w-full object-contain" />
+            <img
+              src={preview.src}
+              alt=""
+              onError={preview.onError}
+              className="max-h-full max-w-full object-contain"
+            />
           ) : (
             <ImagePlus className="h-5 w-5 text-gray-300" aria-hidden="true" />
           )}
@@ -91,6 +102,10 @@ export default function ImageUploader({
               </button>
             ) : null}
           </div>
+
+          {preview.failed ? (
+            <p className="text-xs text-red-600">Görsel yüklenemedi. Lütfen yeniden yükleyin.</p>
+          ) : null}
 
           <p className="text-xs text-gray-400">{hint}</p>
         </div>

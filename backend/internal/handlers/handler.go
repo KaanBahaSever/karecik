@@ -212,3 +212,13 @@ func strPtr(s string) *string {
 	}
 	return &s
 }
+
+// optionalStrPtr is strPtr for a field a create body may leave out: nil stays
+// nil, and a present value is trimmed with a blank result becoming NULL — the
+// same value decodeNullableString gives the update paths.
+func optionalStrPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	return strPtr(*s)
+}

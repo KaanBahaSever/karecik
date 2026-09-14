@@ -199,6 +199,39 @@ export function MenuProvider({ children }) {
     [activeMenuId],
   )
 
+  /**
+   * Refetches ONE menu and merges it into the list.
+   *
+   * Price edits in the menu editor can move `price_updated_at` on the server,
+   * and the settings page prints that date from this list — without a refetch
+   * it would stay stale until a full reload. `category_count` is kept from
+   * state for the same reason saveActiveMenu keeps it.
+   *
+   * `loading` is deliberately left alone. MenuEditor waits for that flag before
+   * it loads, so toggling it would reload the whole editor behind a spinner
+   * after every price edit.
+   *
+   * Nothing is thrown. The edit that asked for the refresh has already
+   * succeeded, so a failure here is worth a console warning, not a toast that
+   * would read as if the edit itself had failed.
+   */
+  const refreshMenu = useCallback(async (id) => {
+    if (!id) return
+
+    try {
+      const fresh = await api.getMenu(id)
+      if (!fresh?.id) return
+
+      setMenus((current) =>
+        current.map((menu) =>
+          menu.id === fresh.id ? { ...menu, ...fresh, category_count: menu.category_count } : menu,
+        ),
+      )
+    } catch (err) {
+      console.warn('[karecik] Could not refresh the menu after a price change:', err)
+    }
+  }, [])
+
   const value = useMemo(
     () => ({
       menus,
@@ -212,6 +245,7 @@ export function MenuProvider({ children }) {
       createMenu,
       deleteMenu,
       saveActiveMenu,
+      refreshMenu,
     }),
     [
       menus,
@@ -225,6 +259,7 @@ export function MenuProvider({ children }) {
       createMenu,
       deleteMenu,
       saveActiveMenu,
+      refreshMenu,
     ],
   )
 

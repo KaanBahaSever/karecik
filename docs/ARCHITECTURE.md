@@ -221,12 +221,13 @@ a product to another category and reordering it share a single endpoint.
 
 `POST /api/products/bulk-price`
 
-1. The selected products are read (`ListPriceRows`).
+1. The selected products of one menu (`menu_id`) are read (`ListPriceRows`).
 2. For each price: `new = old × (1 + percentage/100)` → `RoundPrice(new, mode)` → `max(0, …)`.
 3. With `apply: false` only a preview is returned; the database is untouched.
-4. With `apply: true` the changed prices are written in a single transaction,
-   `businesses.price_updated_at` is set to `now()` and a row is added to
-   `price_update_logs`.
+4. With `apply: true` the changed prices are written in one set-based `UPDATE`
+   (`ApplyPrices`), the menu's `menus.price_updated_at` is read back into the
+   response, and a row is added to `price_update_logs`. The handler does not
+   write the date itself — see below.
 
 Rounding modes (`internal/utils/pricing.go`):
 
@@ -240,9 +241,49 @@ Rounding modes (`internal/utils/pricing.go`):
 | `ends_95` | 147.95 |
 | `ends_99` | 147.99 |
 
-`price_updated_at` feeds the
+### The price date
+
+`menus.price_updated_at` feeds the
 **"Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."** line in the
 customer menu — the owner never has to type a date by hand.
+
+No handler writes it. The `products_touch_menu_price_date` trigger (migration
+`010_price_change_date.sql`) moves it to `now()` after every `UPDATE` of a
+product that is a **price change** — one where at least one of these differs
+(`IS DISTINCT FROM`) between the old and the new row:
+
+- `price`
+- `compare_price`
+- the ordered list of option surcharges,
+  `jsonb_path_query_array(options, '$[*].items[*].price')`
+
+The menu it moves is the one the product's **new** category belongs to, so a
+product moved into another menu with a new price dates that menu. Creating or
+deleting a product, reordering, moving a product without a new price, toggling
+`is_active` / `is_featured`, and editing translations, allergens, badges, the
+image, calories or an option's name are not price changes. Surcharges compare
+as jsonb, which compares numbers numerically: `10` and `10.0` are the same.
+
+The product dialog (`PUT /api/products/:id`, which sends every field on every
+save), the inline quick edit (`PATCH /api/products/:id/price`) and the bulk
+update therefore all follow one rule, and a bulk apply that changes no price
+leaves the date alone.
+
+Two details keep the trigger cheap and its locking in one order everywhere:
+
+- `now()` is constant inside a transaction, and the function only writes a menu
+  whose date is not already `now()`. An N-row bulk `UPDATE` writes the menu row
+  once, not N times.
+- `ApplyPrices` is one statement, not a loop of single-row updates. Row-level
+  AFTER trigger events fire at the end of the statement, so the bulk update
+  holds all of its product row locks before the trigger locks the menu row —
+  the order a single-product edit uses. A loop inside one transaction would lock
+  the menu after its first product and could deadlock against a concurrent
+  inline edit of a later one.
+
+The footer formats the date on the Europe/Istanbul calendar (`utils.Istanbul`),
+never in the server's own time zone. The binary embeds the zone database
+(`time/tzdata`), so that does not depend on the container image.
 
 ---
 

@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import api from '../../lib/api'
 import { getSubdomain } from '../../lib/subdomain'
 import { t } from '../../locales/index.js'
+import ErrorBoundary from '../../components/ui/ErrorBoundary.jsx'
 import Loading from '../../components/ui/Loading.jsx'
 import MenuContent from '../../components/menu/MenuContent.jsx'
 import MenuDirectory from '../../components/menu/MenuDirectory.jsx'
@@ -113,6 +114,53 @@ function useImagesReady(urls, capMs) {
   }, [key, capMs])
 
   return readyFor === key
+}
+
+/**
+ * Drawn in place of the menu when MenuContent throws while rendering.
+ *
+ * Plain Tailwind greys on purpose — no --menu-* variables, no theme helper. The
+ * menu's own theme data may be exactly what broke, and a fallback that leaned
+ * on it could fail the same way. "Yeniden dene" renders the same payload once
+ * more; "Sayfayı yenile" reloads the page and fetches everything again.
+ *
+ * @param {boolean}  embedded - Fill the iframe instead of the screen
+ * @param {Function} onRetry  - Resets the error boundary
+ */
+function MenuRenderError({ embedded, onRetry }) {
+  return (
+    <div
+      className={`flex items-center justify-center bg-white px-6 ${
+        embedded ? 'h-full' : 'min-h-screen'
+      }`}
+    >
+      <div
+        role="alert"
+        className="w-full max-w-sm rounded-2xl border border-gray-200 p-8 text-center"
+      >
+        <p className="text-base font-semibold text-gray-900">
+          Menü görüntülenirken bir sorun oluştu.
+        </p>
+
+        <div className="mt-6 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={onRetry}
+            className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+          >
+            Yeniden dene
+          </button>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Sayfayı yenile
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -403,17 +451,26 @@ export default function CustomerMenu({
         />
       ) : null}
 
-      {/* A URL that names a menu is a request for that one menu, so the in-menu
-          switcher — a list of the tenant's other menus — is dropped there. The
-          bare tenant address keeps it: nothing was chosen yet, and the backend
-          resolved a single menu on the visitor's behalf. */}
-      <MenuContent
-        menu={menu}
-        language={activeLanguage}
-        onLanguageChange={(next) => setSelectedLanguage(next)}
-        embedded={embedded}
-        showMenuSwitcher={!menuSlug}
-      />
+      {/* The last line of defence. MenuContent already isolates every category
+          card and every product row, but anything else it throws would unmount
+          the whole tree and leave the visitor a blank white page. A new payload
+          gets a fresh try as well. */}
+      <ErrorBoundary
+        resetKeys={[menu]}
+        fallback={(_error, reset) => <MenuRenderError embedded={embedded} onRetry={reset} />}
+      >
+        {/* A URL that names a menu is a request for that one menu, so the in-menu
+            switcher — a list of the tenant's other menus — is dropped there. The
+            bare tenant address keeps it: nothing was chosen yet, and the backend
+            resolved a single menu on the visitor's behalf. */}
+        <MenuContent
+          menu={menu}
+          language={activeLanguage}
+          onLanguageChange={(next) => setSelectedLanguage(next)}
+          embedded={embedded}
+          showMenuSwitcher={!menuSlug}
+        />
+      </ErrorBoundary>
     </>
   )
 

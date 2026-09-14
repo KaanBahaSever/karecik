@@ -6,6 +6,7 @@ import { currencySymbol } from '../../lib/format'
 import { loadFont } from '../../themes/fonts'
 import { backgroundStyles, findTheme } from '../../themes/themes'
 import { findLanguage } from '../../locales/index.js'
+import ErrorBoundary from '../ui/ErrorBoundary.jsx'
 import Loading from '../ui/Loading.jsx'
 import MenuContent from '../menu/MenuContent.jsx'
 import SplashScreen from '../menu/SplashScreen.jsx'
@@ -392,12 +393,31 @@ export default function LivePreview({
                   </div>
                 </div>
               ) : previewMenu ? (
-                <MenuContent
-                  menu={previewMenu}
-                  language={language}
-                  onLanguageChange={(next) => setLanguage(next)}
-                  embedded
-                />
+                /* The preview draws records the owner is editing at this very
+                   moment, so one that cannot be rendered must not unmount the
+                   whole dashboard with it. A fresh payload, or the refresh that
+                   follows the next edit, gives MenuContent another try. */
+                <ErrorBoundary
+                  resetKeys={[menu, refresh]}
+                  fallback={
+                    <div className="flex h-full items-center justify-center p-6">
+                      <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-left">
+                        <AlertCircle
+                          className="mt-0.5 h-4 w-4 shrink-0 text-red-600"
+                          aria-hidden="true"
+                        />
+                        <p className="text-xs font-medium text-red-800">Önizleme görüntülenemedi</p>
+                      </div>
+                    </div>
+                  }
+                >
+                  <MenuContent
+                    menu={previewMenu}
+                    language={language}
+                    onLanguageChange={(next) => setLanguage(next)}
+                    embedded
+                  />
+                </ErrorBoundary>
               ) : null}
             </div>
 

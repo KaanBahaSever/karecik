@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Eye, EyeOff, GripVertical, Image as ImageIcon, Pencil, Star, Trash2 } from 'lucide-react'
 
 import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
+import { useImageFallback } from '../../lib/useImageFallback'
 import { allergenLabel, findAllergen } from '../../locales/index.js'
 import { BadgeIcon, DEFAULT_BADGE } from '../../themes/badges.js'
 
@@ -53,6 +54,10 @@ export default function ProductRow({
     product.translations?.[language]?.name || product.translations?.tr?.name || 'İsimsiz ürün'
   const description =
     product.translations?.[language]?.description || product.translations?.tr?.description || ''
+
+  // A URL that no longer loads falls back to the same placeholder as a product
+  // without an image, instead of a broken picture in the 40 px square.
+  const image = useImageFallback(product.image_url)
 
   const allergens = Array.isArray(product.allergens) ? product.allergens : []
   const hidden = product.is_active === false
@@ -116,8 +121,13 @@ export default function ProductRow({
 
       {/* ------------------------------------------------------------ image */}
       <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-gray-100">
-        {product.image_url ? (
-          <img src={product.image_url} alt={name} className="h-full w-full object-cover" />
+        {image.src ? (
+          <img
+            src={image.src}
+            alt={name}
+            onError={image.onError}
+            className="h-full w-full object-cover"
+          />
         ) : (
           <div className="flex h-full w-full items-center justify-center">
             <ImageIcon className="h-4 w-4 text-gray-400" aria-hidden="true" />

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowRight, Info, Loader2, Percent } from 'lucide-react'
 
 import api from '../../lib/api'
+import { categoryEmoji } from '../../lib/category'
 import { formatPrice } from '../../lib/format'
 import Modal from '../ui/Modal.jsx'
 import { useToast } from '../ui/Toast.jsx'
@@ -344,8 +345,10 @@ export default function BulkPriceModal({
                       onChange={() => toggleCategory(category.id)}
                     />
                     <span className="min-w-0 flex-1 truncate text-sm text-gray-700">
-                      {category.icon ? `${category.icon} ` : ''}
-                      {categoryName(category)}
+                      {/* A legacy icon code ("coffee") or a blank icon adds nothing. */}
+                      {[categoryEmoji(category.icon), categoryName(category)]
+                        .filter(Boolean)
+                        .join(' ')}
                     </span>
                     {typeof category.product_count === 'number' ? (
                       <span className="shrink-0 text-xs text-gray-400">

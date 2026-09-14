@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, Copy, Eye, EyeOff, Search, Star, Wifi } from 'lucide-react'
 
+import { normalizeCategories } from '../../lib/category'
 import { formatPrice } from '../../lib/format'
 import { getSubdomain } from '../../lib/subdomain'
+import { useImageFallback } from '../../lib/useImageFallback'
 import { backgroundStyles, themeVariables } from '../../themes/themes'
 import { BadgeIcon } from '../../themes/badges'
 import { fontStack, loadFont } from '../../themes/fonts'
 import { findAllergen, findLanguage, isRtl, t } from '../../locales/index.js'
+import ErrorBoundary from '../ui/ErrorBoundary.jsx'
+import CategoryThumb from './CategoryThumb.jsx'
 import ProductDetailModal from './ProductDetailModal.jsx'
 import MenuFooter from './MenuFooter.jsx'
 
@@ -142,6 +146,240 @@ const TWO_LINES = {
 /** How long the "Kopyalandı" confirmation stays on the button. */
 const COPY_FEEDBACK_MS = 1600
 
+/** A value as display text: a string trimmed, anything else ''. */
+function plainText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * React key for a product: its id when it has one, otherwise its position in
+ * the category, which only has to stay stable while the same payload is shown.
+ */
+function productKey(product, index) {
+  const { id } = product
+  if ((typeof id === 'string' && id !== '') || (typeof id === 'number' && Number.isFinite(id))) {
+    return id
+  }
+  return `product-index-${index}`
+}
+
+/**
+ * What a per-record error boundary draws instead of a card or a row it could
+ * not render: the record's name as plain text on the card surface.
+ *
+ * The name arrives already extracted as a string, so nothing in here can throw
+ * a second time — a boundary cannot catch an error in its own fallback. With no
+ * name at all nothing is drawn rather than an empty box; the error itself is in
+ * the console.
+ */
+function RecordFallback({ text, centered = false }) {
+  if (!text) return null
+
+  return (
+    <div
+      className={`px-3 py-2.5 text-sm font-medium ${centered ? 'text-center' : ''}`.trim()}
+      style={{
+        backgroundColor: 'var(--menu-surface)',
+        border: '1px solid var(--menu-border)',
+        borderRadius: 'var(--menu-radius)',
+        color: 'var(--menu-text)',
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {text}
+    </div>
+  )
+}
+
+/**
+ * The 72 px product thumbnail. No image, or one the browser could not load,
+ * draws nothing at all: the row then looks exactly like a product that never
+ * had a picture, instead of keeping an empty box beside the text.
+ */
+function ProductThumb({ url }) {
+  const image = useImageFallback(url)
+  if (!image.src) return null
+
+  return (
+    <img
+      src={image.src}
+      alt=""
+      onError={image.onError}
+      className="h-[72px] w-[72px] shrink-0 object-cover"
+      style={{ borderRadius: 'calc(var(--menu-radius) * 0.7)' }}
+    />
+  )
+}
+
+/**
+ * One product card of the customer menu.
+ *
+ * It is declared here, at module level, and no longer inside MenuContent. A
+ * component declared inside a render body is a new type on every render, so
+ * React remounted every row on each keystroke in the search box, on the tap
+ * that opens the detail sheet and on each copy confirmation. That was harmless
+ * while a row held no state. ProductThumb now does — whether its image failed —
+ * and a remount would forget it, retrying the broken image and shifting the
+ * row's text on every one of those renders.
+ *
+ * @param {object}   product
+ * @param {string}   categoryName - Shown under the name; search results only
+ * @param {string}   currency     - business.currency
+ * @param {string}   language     - Active language code
+ * @param {string}   onAccentText - Text colour that reads on the accent colour
+ * @param {Function} onSelect     - Opens the detail sheet for this product
+ */
+function ProductRow({ product, categoryName, currency, language, onAccentText, onSelect }) {
+  const allergens = Array.isArray(product.allergens) ? product.allergens : []
+  const badges = Array.isArray(product.badges) ? product.badges.filter((b) => b?.text) : []
+  /* The chip states a fact, so anything that is not a positive number — null,
+     a zero, a stray string — reads as "unknown" and the chip stays away. The
+     detail sheet applies exactly the same rule, so a product can never carry
+     a calorie chip on the card and none in the sheet. */
+  const caloriesNumber = Number(product.calories)
+  const calories =
+    Number.isFinite(caloriesNumber) && caloriesNumber > 0 ? caloriesNumber : null
+  // Only that the product HAS options is shown here; the groups themselves
+  // belong to the detail sheet, which is where a choice can be made.
+  const hasOptions = Array.isArray(product.options) && product.options.length > 0
+  const hasMeta =
+    badges.length > 0 ||
+    calories != null ||
+    hasOptions ||
+    allergens.length > 0 ||
+    product.is_featured ||
+    product.is_active === false
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(product)}
+      className="flex w-full items-start gap-3 p-3 text-left"
+      style={{
+        backgroundColor: 'var(--menu-surface)',
+        borderRadius: 'var(--menu-radius)',
+        border: '1px solid var(--menu-border)',
+        boxShadow: 'var(--menu-shadow)',
+        opacity: product.is_active === false ? 0.5 : 1,
+      }}
+    >
+      <ProductThumb url={product.image_url} />
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-medium leading-snug" style={{ color: 'var(--menu-text)' }}>
+              {product.name}
+            </p>
+            {categoryName ? (
+              <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
+                {categoryName}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="shrink-0 text-right">
+            {product.compare_price ? (
+              <p className="text-[11px] line-through" style={{ color: 'var(--menu-muted)' }}>
+                {formatPrice(product.compare_price, currency)}
+              </p>
+            ) : null}
+            <p className="font-semibold" style={{ color: 'var(--menu-primary)' }}>
+              {formatPrice(product.price, currency)}
+            </p>
+          </div>
+        </div>
+
+        {product.description ? (
+          <p
+            className="mt-1 text-xs leading-relaxed"
+            style={{ ...TWO_LINES, color: 'var(--menu-muted)' }}
+          >
+            {product.description}
+          </p>
+        ) : null}
+
+        {/* One wrapping meta row: pills stay small so the card keeps its height */}
+        {hasMeta && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {product.is_featured ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: 'var(--menu-primary)',
+                  color: onAccentText,
+                }}
+              >
+                <Star className="h-2.5 w-2.5" aria-hidden="true" />
+                {t('featured', language)}
+              </span>
+            ) : null}
+
+            {product.is_active === false ? (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+              >
+                Gizli
+              </span>
+            ) : null}
+
+            {badges.map((badge, index) => (
+              <span
+                key={badge.id || `${badge.text}-${index}`}
+                className="inline-flex max-w-[9rem] items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: badge.bg_color || 'var(--menu-primary)',
+                  color: badge.text_color || '#ffffff',
+                }}
+              >
+                <BadgeIcon id={badge.icon} className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{badge.text}</span>
+              </span>
+            ))}
+
+            {calories != null ? (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px]"
+                style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+              >
+                {calories} {t('kcal', language)}
+              </span>
+            ) : null}
+
+            {/* Quiet like the calorie chip on purpose: it is a hint that the
+                detail sheet has choices, not a badge competing with them.
+                It joins the existing wrapping row, so the card keeps its
+                height. */}
+            {hasOptions ? (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px]"
+                style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
+              >
+                + Seçenekler
+              </span>
+            ) : null}
+
+            {allergens.map((code) => {
+              const allergen = findAllergen(code)
+              if (!allergen) return null
+              return (
+                <span
+                  key={code}
+                  title={language === 'tr' ? allergen.tr : allergen.en}
+                  className="text-xs"
+                >
+                  {allergen.emoji}
+                </span>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </button>
+  )
+}
+
 export default function MenuContent({
   menu,
   language = 'tr',
@@ -150,7 +388,19 @@ export default function MenuContent({
   showMenuSwitcher = true,
 }) {
   const business = menu?.business || {}
-  const categories = useMemo(() => menu?.categories || [], [menu])
+  /* Every field of a category is optional — icon, image, description, even its
+     products — and a payload may predate today's rules. normalizeCategories
+     turns whatever arrived into one shape (see lib/category.js), so nothing
+     below guards a category field again.
+
+     Keyed on the categories array rather than on `menu`: the dashboard preview
+     hands over a new menu object on every render but the same categories, and
+     stable category objects are what keep each card boundary's resetKeys from
+     changing on every render. */
+  const categories = useMemo(
+    () => normalizeCategories(menu?.categories, language),
+    [menu?.categories, language],
+  )
   const menus = useMemo(() => (Array.isArray(menu?.menus) ? menu.menus : []), [menu])
 
   const [selectedCategoryId, setSelectedCategoryId] = useState(null)
@@ -237,8 +487,6 @@ export default function MenuContent({
   const searchTerm = search.trim()
   const searching = searchTerm.length > 0
 
-  const productCountLabel = (count) => (language === 'tr' ? `${count} ürün` : `${count} items`)
-
   /* ------------------------------------------------------------------ wifi */
 
   const wifiSsid = String(business.wifi_ssid || '').trim()
@@ -283,19 +531,39 @@ export default function MenuContent({
     if (!searching) return []
     const needle = lower(searchTerm)
 
+    // The key is taken BEFORE filtering. A position taken after it would give a
+    // product without an id a different key on every keystroke, remounting its
+    // row each time.
     return categories.flatMap((category) =>
-      (category.products || [])
-        .filter((product) =>
+      category.products
+        .map((product, index) => ({
+          product,
+          categoryName: category.name,
+          key: `${category.key}:${productKey(product, index)}`,
+        }))
+        .filter(({ product }) =>
           [product.name, product.description, product.ingredients].some((field) =>
             lower(field).includes(needle),
           ),
-        )
-        .map((product) => ({ product, categoryName: category.name })),
+        ),
     )
   }, [searching, searchTerm, categories])
 
-  const selectedCategory = categories.find((category) => category.id === selectedCategoryId) || null
+  // A null selection selects nothing. Without the guard a record that arrived
+  // with `id: null` would match the empty selection and open on its own.
+  const selectedCategory =
+    selectedCategoryId == null
+      ? null
+      : categories.find((category) => category.id === selectedCategoryId) || null
   const isHome = !searching && !selectedCategory
+
+  /* Categories are selected by id. One that arrived without an id still gets
+     its card, but opening it does nothing: its fallback `key` is a position,
+     not an identity, and could point at another record after a refetch. */
+  function openCategory(category) {
+    if (category.id === undefined || category.id === null || category.id === '') return
+    setSelectedCategoryId(category.id)
+  }
 
   /* --------------------------------------------------------- menu switching */
 
@@ -325,161 +593,29 @@ export default function MenuContent({
 
   /* ------------------------------------------------------------- fragments */
 
-  function ProductRow({ product, categoryName }) {
-    const allergens = Array.isArray(product.allergens) ? product.allergens : []
-    const badges = Array.isArray(product.badges) ? product.badges.filter((b) => b?.text) : []
-    /* The chip states a fact, so anything that is not a positive number — null,
-       a zero, a stray string — reads as "unknown" and the chip stays away. The
-       detail sheet applies exactly the same rule, so a product can never carry
-       a calorie chip on the card and none in the sheet. */
-    const caloriesNumber = Number(product.calories)
-    const calories =
-      Number.isFinite(caloriesNumber) && caloriesNumber > 0 ? caloriesNumber : null
-    // Only that the product HAS options is shown here; the groups themselves
-    // belong to the detail sheet, which is where a choice can be made.
-    const hasOptions = Array.isArray(product.options) && product.options.length > 0
-    const hasMeta =
-      badges.length > 0 ||
-      calories != null ||
-      hasOptions ||
-      allergens.length > 0 ||
-      product.is_featured ||
-      product.is_active === false
+  /* ProductRow is not among these fragments any more — see its comment at the
+     top of this file. The ones below hold no React state of their own.
 
+     Rows go through this helper, which is a plain function rather than a
+     component: every element it returns has a module-level type, so calling it
+     on each render remounts nothing. Each row gets its own boundary, so one
+     malformed product cannot take the rest of the list down with it. */
+  function renderProductRow(product, key, categoryName) {
     return (
-      <button
-        type="button"
-        onClick={() => setSelectedProduct(product)}
-        className="flex w-full items-start gap-3 p-3 text-left"
-        style={{
-          backgroundColor: 'var(--menu-surface)',
-          borderRadius: 'var(--menu-radius)',
-          border: '1px solid var(--menu-border)',
-          boxShadow: 'var(--menu-shadow)',
-          opacity: product.is_active === false ? 0.5 : 1,
-        }}
+      <ErrorBoundary
+        key={key}
+        resetKeys={[product]}
+        fallback={<RecordFallback text={plainText(product.name)} />}
       >
-        {product.image_url ? (
-          <img
-            src={product.image_url}
-            alt=""
-            className="h-[72px] w-[72px] shrink-0 object-cover"
-            style={{ borderRadius: 'calc(var(--menu-radius) * 0.7)' }}
-          />
-        ) : null}
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-medium leading-snug" style={{ color: 'var(--menu-text)' }}>
-                {product.name}
-              </p>
-              {categoryName ? (
-                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
-                  {categoryName}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="shrink-0 text-right">
-              {product.compare_price ? (
-                <p className="text-[11px] line-through" style={{ color: 'var(--menu-muted)' }}>
-                  {formatPrice(product.compare_price, business.currency)}
-                </p>
-              ) : null}
-              <p className="font-semibold" style={{ color: 'var(--menu-primary)' }}>
-                {formatPrice(product.price, business.currency)}
-              </p>
-            </div>
-          </div>
-
-          {product.description ? (
-            <p
-              className="mt-1 text-xs leading-relaxed"
-              style={{ ...TWO_LINES, color: 'var(--menu-muted)' }}
-            >
-              {product.description}
-            </p>
-          ) : null}
-
-          {/* One wrapping meta row: pills stay small so the card keeps its height */}
-          {hasMeta && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {product.is_featured ? (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                  style={{
-                    backgroundColor: 'var(--menu-primary)',
-                    color: onAccentText,
-                  }}
-                >
-                  <Star className="h-2.5 w-2.5" aria-hidden="true" />
-                  {t('featured', language)}
-                </span>
-              ) : null}
-
-              {product.is_active === false ? (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-                  style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
-                >
-                  Gizli
-                </span>
-              ) : null}
-
-              {badges.map((badge, index) => (
-                <span
-                  key={badge.id || `${badge.text}-${index}`}
-                  className="inline-flex max-w-[9rem] items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                  style={{
-                    backgroundColor: badge.bg_color || 'var(--menu-primary)',
-                    color: badge.text_color || '#ffffff',
-                  }}
-                >
-                  <BadgeIcon id={badge.icon} className="h-2.5 w-2.5 shrink-0" />
-                  <span className="truncate">{badge.text}</span>
-                </span>
-              ))}
-
-              {calories != null ? (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[10px]"
-                  style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
-                >
-                  {calories} {t('kcal', language)}
-                </span>
-              ) : null}
-
-              {/* Quiet like the calorie chip on purpose: it is a hint that the
-                  detail sheet has choices, not a badge competing with them.
-                  It joins the existing wrapping row, so the card keeps its
-                  height. */}
-              {hasOptions ? (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[10px]"
-                  style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
-                >
-                  + Seçenekler
-                </span>
-              ) : null}
-
-              {allergens.map((code) => {
-                const allergen = findAllergen(code)
-                if (!allergen) return null
-                return (
-                  <span
-                    key={code}
-                    title={language === 'tr' ? allergen.tr : allergen.en}
-                    className="text-xs"
-                  >
-                    {allergen.emoji}
-                  </span>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </button>
+        <ProductRow
+          product={product}
+          categoryName={categoryName}
+          currency={business.currency}
+          language={language}
+          onAccentText={onAccentText}
+          onSelect={setSelectedProduct}
+        />
+      </ErrorBoundary>
     )
   }
 
@@ -487,12 +623,12 @@ export default function MenuContent({
     return (
       <div className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
         {categories.map((category) => {
-          const isSelected = category.id === selectedCategoryId
+          const isSelected = category === selectedCategory
           return (
             <button
-              key={category.id}
+              key={category.key}
               type="button"
-              onClick={() => setSelectedCategoryId(category.id)}
+              onClick={() => openCategory(category)}
               className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm"
               style={
                 isSelected
@@ -504,7 +640,7 @@ export default function MenuContent({
                     }
               }
             >
-              {category.icon ? `${category.icon} ` : ''}
+              {category.emoji ? `${category.emoji} ` : ''}
               {category.name}
             </button>
           )
@@ -815,9 +951,9 @@ export default function MenuContent({
               <EmptyLine text={t('noResults', language)} />
             ) : (
               <div className="flex flex-col gap-2.5">
-                {searchResults.map(({ product, categoryName }) => (
-                  <ProductRow key={product.id} product={product} categoryName={categoryName} />
-                ))}
+                {searchResults.map(({ product, categoryName, key }) =>
+                  renderProductRow(product, key, categoryName),
+                )}
               </div>
             )
           ) : selectedCategory ? (
@@ -846,7 +982,7 @@ export default function MenuContent({
                   className="truncate text-base font-semibold"
                   style={{ color: 'var(--menu-text)' }}
                 >
-                  {selectedCategory.icon ? `${selectedCategory.icon} ` : ''}
+                  {selectedCategory.emoji ? `${selectedCategory.emoji} ` : ''}
                   {selectedCategory.name}
                 </h2>
               </div>
@@ -859,13 +995,13 @@ export default function MenuContent({
                 </p>
               ) : null}
 
-              {(selectedCategory.products || []).length === 0 ? (
+              {selectedCategory.products.length === 0 ? (
                 <EmptyLine text={t('emptyCategory', language)} />
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  {selectedCategory.products.map((product) => (
-                    <ProductRow key={product.id} product={product} />
-                  ))}
+                  {selectedCategory.products.map((product, index) =>
+                    renderProductRow(product, productKey(product, index)),
+                  )}
                 </div>
               )}
             </>
@@ -874,49 +1010,55 @@ export default function MenuContent({
             <EmptyLine text={t('emptyMenu', language)} />
           ) : (
             /* --------------------------------------------- 4) category grid */
+            /* Every card sits in its own boundary, so a record the card cannot
+               draw costs that card only — its fallback is the name as plain
+               text — and never the whole grid. */
             <div className="grid grid-cols-2 gap-3">
               {categories.map((category) => (
-                <button
-                  key={category.id}
-                  type="button"
-                  onClick={() => setSelectedCategoryId(category.id)}
-                  className="flex flex-col overflow-hidden text-left"
-                  style={{
-                    backgroundColor: 'var(--menu-surface)',
-                    border: '1px solid var(--menu-border)',
-                    borderRadius: 'var(--menu-radius)',
-                    boxShadow: 'var(--menu-shadow)',
-                    opacity: category.is_active === false ? 0.5 : 1,
-                  }}
+                <ErrorBoundary
+                  key={category.key}
+                  resetKeys={[category]}
+                  fallback={<RecordFallback text={category.name} centered />}
                 >
-                  {category.image_url ? (
-                    <img
-                      src={category.image_url}
-                      alt=""
-                      className={embedded ? 'h-20 w-full object-cover' : 'h-24 w-full object-cover'}
+                  <button
+                    type="button"
+                    onClick={() => openCategory(category)}
+                    className="flex flex-col overflow-hidden text-center"
+                    style={{
+                      backgroundColor: 'var(--menu-surface)',
+                      border: '1px solid var(--menu-border)',
+                      borderRadius: 'var(--menu-radius)',
+                      boxShadow: 'var(--menu-shadow)',
+                      opacity: category.is_active === false ? 0.5 : 1,
+                    }}
+                  >
+                    {/* Image, then emoji, then 🍽️ — chosen inside, where the
+                        image's load failure is tracked. */}
+                    <CategoryThumb
+                      imageUrl={category.imageUrl}
+                      emoji={category.emoji}
+                      className={embedded ? 'h-20' : 'h-24'}
                     />
-                  ) : (
-                    <div
-                      className={`flex w-full items-center justify-center text-4xl ${
-                        embedded ? 'h-20' : 'h-24'
-                      }`}
-                    >
-                      {category.icon || '🍽️'}
-                    </div>
-                  )}
 
-                  <div className="px-3 py-2.5">
-                    <p
-                      className="truncate text-sm font-medium"
-                      style={{ color: 'var(--menu-text)' }}
-                    >
-                      {category.name}
-                    </p>
-                    <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
-                      {productCountLabel((category.products || []).length)}
-                    </p>
-                  </div>
-                </button>
+                    {/* The name alone, centred under the visual; there is no
+                        product count any more. It may take two lines, and a
+                        long word breaks inside the card instead of pushing out
+                        of it: `overflow-wrap: anywhere` where the engine knows
+                        that value, `break-words` where it does not. */}
+                    <div className="px-3 py-2.5">
+                      <p
+                        className="break-words text-sm font-medium"
+                        style={{
+                          ...TWO_LINES,
+                          overflowWrap: 'anywhere',
+                          color: 'var(--menu-text)',
+                        }}
+                      >
+                        {category.name}
+                      </p>
+                    </div>
+                  </button>
+                </ErrorBoundary>
               ))}
             </div>
           )}

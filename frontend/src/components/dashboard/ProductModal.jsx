@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Ban, Loader2, Plus, X } from 'lucide-react'
 
 import api from '../../lib/api'
+import { categoryEmoji } from '../../lib/category'
 import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
 import { ALLERGENS, findLanguage } from '../../locales/index.js'
 import {
@@ -443,8 +444,10 @@ export default function ProductModal({
             <option value="">Kategori seçin</option>
             {categoryList.map((category) => (
               <option key={category.id} value={category.id}>
-                {category.icon ? `${category.icon} ` : ''}
-                {categoryName(category, defaultLanguage)}
+                {/* One string: a legacy icon code ("coffee") or a blank icon adds nothing. */}
+                {[categoryEmoji(category.icon), categoryName(category, defaultLanguage)]
+                  .filter(Boolean)
+                  .join(' ')}
               </option>
             ))}
           </select>

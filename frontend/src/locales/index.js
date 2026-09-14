@@ -100,6 +100,7 @@ const STRINGS = {
     loading: 'Menü yükleniyor...',
     notFound: 'Menü bulunamadı',
     notFoundDetail: 'Bu adrese ait bir menü yok. Adresi kontrol edin.',
+    untitledCategory: 'Adsız kategori',
   },
   en: {
     menu: 'Menu',
@@ -128,6 +129,7 @@ const STRINGS = {
     loading: 'Loading menu...',
     notFound: 'Menu not found',
     notFoundDetail: 'There is no menu at this address. Please check the URL.',
+    untitledCategory: 'Untitled category',
   },
 }
 

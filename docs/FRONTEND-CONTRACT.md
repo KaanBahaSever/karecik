@@ -48,6 +48,7 @@ import api, { ApiError } from '../lib/api'
 | `api.reorderProducts(categoryId, ids)` | `Product[]` |
 | `api.bulkPrice({ percentage, rounding, category_ids, apply })` | `{ applied, affected, preview[], price_updated_at }` |
 | `api.upload(file)` | `{ url, size }` |
+| `api.getMenu(id)` | Menu (one menu of the caller's business) |
 | `api.previewMenu(lang)` | PublicMenu |
 | `api.publicMenu(slug, lang)` | PublicMenu |
 
@@ -83,6 +84,17 @@ PublicMenu = {
 
 > In the public menu the translations are **already resolved**: plain
 > `name` / `description` fields instead of the `translations` map.
+>
+> **A category's icon and image are optional.** Either may be `null`, empty or
+> unusable — a legacy icon code such as `"coffee"`, a whitespace-only string, an
+> image URL that no longer loads. The customer menu draws the first one that
+> works, in this order: **image → emoji → 🍽️**. `src/lib/category.js` decides
+> what counts as usable (`categoryImageUrl`, `categoryEmoji`), and
+> `normalizeCategories` hands the menu one shape it can render without guards.
+>
+> `product_count` is still returned by `/api/categories` (the dashboard's bulk
+> price dialog shows it), but the customer menu no longer shows a product count
+> on its category cards.
 
 ---
 
@@ -125,6 +137,26 @@ verifies the session, put it inside the panel, not above the router.
 
 ---
 
+## `src/lib/menuContext.jsx`
+
+```js
+import { useActiveMenu } from '../lib/menuContext.jsx'
+
+const { menus, loading, error, activeMenu, activeMenuId, hasMenus, setActiveMenuId,
+        reload, createMenu, deleteMenu, saveActiveMenu, refreshMenu } = useActiveMenu()
+```
+
+- `saveActiveMenu(payload)` persists the active menu and swaps the server's
+  response into `menus`, keeping the `category_count` already in state.
+- `refreshMenu(id)` refetches one menu (`api.getMenu`) and merges it into
+  `menus` the same way. It never touches `loading` — MenuEditor waits for that
+  flag, so toggling it would reload the whole editor — and a failure is only a
+  `console.warn`. MenuEditor calls it after every successful price change
+  (inline price edit, product save, bulk apply), so the price date on the
+  settings page is current without a page reload.
+
+---
+
 ## `src/lib/format.js`
 
 ```js
@@ -135,7 +167,23 @@ import { formatPrice, currencySymbol, formatDate, parsePrice, priceToInput,
 - `formatPrice(145, 'TRY')` → `"145,00 ₺"`
 - `parsePrice('12,50')` → `12.5`
 - `priceToInput(145)` → `"145,00"`
-- `formatDate(iso)` → `"24.08.2026"`
+- `formatDate(iso)` → `"24.08.2026"`: the calendar day in **Europe/Istanbul**,
+  whatever time zone the browser is in (the local day if `Intl` cannot do it)
+
+## `src/lib/category.js`
+
+```js
+import { normalizeCategories, categoryEmoji, categoryImageUrl } from '../lib/category'
+```
+
+- `categoryEmoji(icon)` → the trimmed icon when it is a glyph (non-empty, no
+  ASCII letters or digits, at most 32 UTF-16 code units), otherwise `null`:
+  `"coffee"`, `"   "` and `null` all give `null`
+- `categoryImageUrl(url)` → the trimmed URL, or `null`
+- `normalizeCategories(list, language)` → always an array. Entries that are
+  not objects are dropped; each remaining one keeps its fields and gains
+  `key` (React key only), `name` (never empty), `description`, `emoji`,
+  `imageUrl` and `products` (always an array)
 
 ## `src/lib/subdomain.js`
 
@@ -190,9 +238,15 @@ import EmptyState from '../ui/EmptyState.jsx'
 
 import ImageUploader from '../ui/ImageUploader.jsx'
 <ImageUploader value={url|null} onChange={(url)=>{}} label="" hint="" round={false} />
+// a URL that no longer loads shows the placeholder and "Görsel yüklenemedi. Lütfen yeniden yükleyin."
 
 import { useToast } from '../ui/Toast.jsx'
 const toast = useToast()   // toast.success(msg) / .error(msg) / .info(msg)
+
+import ErrorBoundary from '../ui/ErrorBoundary.jsx'
+<ErrorBoundary fallback={node | ((error, reset) => node)} resetKeys={[a, b]}>...</ErrorBoundary>
+// resetKeys are compared element by element, so an inline array literal is safe;
+// the fallback must not read anything that could throw again
 ```
 
 ---

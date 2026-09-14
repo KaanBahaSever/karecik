@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"karecik/backend/internal/models"
 )
@@ -256,40 +255,56 @@ func ListPriceRows(ctx context.Context, db DB, businessID, menuID uuid.UUID,
 	return out, rows.Err()
 }
 
-// ApplyPrices writes the computed new prices inside a single transaction.
-// The menu scopes the write exactly like it scopes ListPriceRows, so a product
-// id from another menu of the same business cannot slip through.
-func ApplyPrices(ctx context.Context, pool *pgxpool.Pool, businessID, menuID uuid.UUID,
+// ApplyPrices writes the computed new prices in ONE set-based UPDATE and
+// returns how many products it wrote. The menu scopes the write exactly like it
+// scopes ListPriceRows, so a product id from another menu of the same business
+// cannot slip through.
+//
+// One statement and not a loop of single-row UPDATEs, because of lock order.
+// Every changed price fires the products_touch_menu_price_date trigger of
+// migration 010, which locks the menu row to move its price date. AFTER ROW
+// triggers queued by a single statement fire at the end of that statement, so
+// this statement takes all of its product row locks before the trigger takes
+// the menu row lock — the same order a single-product edit uses. A loop inside
+// one transaction, which is what this function used to be, would take the menu
+// lock after its FIRST product and then wait on the later product rows, and
+// that deadlocks against a concurrent inline price edit on the same menu: the
+// edit holds one of those later rows and waits for the menu.
+//
+// A single statement is atomic on its own, so there is no transaction here any
+// more and the function takes a DB rather than the pool.
+//
+// The ids and the prices travel as two parallel arrays that unnest zips back
+// into pairs. pgx encodes each float64 of the numeric[] from its shortest
+// round-trip decimal (strconv.FormatFloat with precision -1), and every price
+// here has already been through utils.RoundPrice, so NUMERIC(12,2) stores
+// exactly the two-decimal value the preview showed.
+func ApplyPrices(ctx context.Context, db DB, businessID, menuID uuid.UUID,
 	newPrices map[uuid.UUID]float64) (int, error) {
 
 	if len(newPrices) == 0 {
 		return 0, nil
 	}
 
-	tx, err := pool.Begin(ctx)
+	ids := make([]uuid.UUID, 0, len(newPrices))
+	prices := make([]float64, 0, len(newPrices))
+	for id, price := range newPrices {
+		ids = append(ids, id)
+		prices = append(prices, price)
+	}
+
+	tag, err := db.Exec(ctx, `
+		UPDATE products p
+		SET price = data.price
+		FROM unnest($1::uuid[], $2::numeric[]) AS data(id, price)
+		WHERE p.id = data.id AND p.business_id = $3
+		  AND EXISTS (
+		      SELECT 1 FROM categories c
+		      WHERE c.id = p.category_id AND c.menu_id = $4
+		  )`,
+		ids, prices, businessID, menuID)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	affected := 0
-	for id, price := range newPrices {
-		tag, err := tx.Exec(ctx, `
-			UPDATE products p SET price = $1
-			WHERE p.id = $2 AND p.business_id = $3
-			  AND EXISTS (
-			      SELECT 1 FROM categories c
-			      WHERE c.id = p.category_id AND c.menu_id = $4
-			  )`,
-			price, id, businessID, menuID)
-		if err != nil {
-			return 0, err
-		}
-		affected += int(tag.RowsAffected())
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return affected, nil
+	return int(tag.RowsAffected()), nil
 }

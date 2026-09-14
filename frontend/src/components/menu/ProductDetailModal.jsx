@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { formatPrice } from '../../lib/format'
+import { useImageFallback } from '../../lib/useImageFallback'
 import { BadgeIcon } from '../../themes/badges'
 import { allergenLabel, findAllergen, t } from '../../locales/index.js'
 
@@ -181,6 +182,13 @@ export default function ProductDetailModal({ product, business, language = 'tr',
   const [footerHeight, setFooterHeight] = useState(0)
 
   const prefersReducedMotion = usePrefersReducedMotion()
+
+  /* The hero image, or null once it has failed to load. Everything below that
+     used to branch on `product.image_url` branches on this instead, so a broken
+     image lays the sheet out exactly like a product without one: no empty band
+     at the top, and the grab handle back in the flow with its muted pill. It is
+     called above the `!product` return because hooks must run on every render. */
+  const heroImage = useImageFallback(product?.image_url)
 
   if (selectionsFor !== optionGroups) {
     setSelectionsFor(optionGroups)
@@ -392,8 +400,13 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             than pushing it down, so the full-bleed treatment survives and the
             drag target is there whether or not the product has a picture. */}
         <div className="relative">
-          {product.image_url ? (
-            <img src={product.image_url} alt="" className="h-56 w-full rounded-t-2xl object-cover" />
+          {heroImage.src ? (
+            <img
+              src={heroImage.src}
+              alt=""
+              onError={heroImage.onError}
+              className="h-56 w-full rounded-t-2xl object-cover"
+            />
           ) : null}
 
           <div
@@ -402,7 +415,7 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             onPointerUp={endDrag}
             onPointerCancel={cancelDrag}
             className={
-              product.image_url
+              heroImage.src
                 ? 'absolute inset-x-0 top-0 flex justify-center pb-6 pt-3'
                 : 'flex justify-center pb-1 pt-3'
             }
@@ -412,7 +425,7 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             <span
               className="h-1.5 w-12 rounded-full"
               style={{
-                backgroundColor: product.image_url
+                backgroundColor: heroImage.src
                   ? 'rgba(255, 255, 255, 0.75)'
                   : 'var(--menu-border)',
               }}

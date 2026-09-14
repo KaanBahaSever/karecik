@@ -89,8 +89,12 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 		isActive = *req.IsActive
 	}
 
+	// icon and image_url are trimmed and a blank value is stored as NULL, which
+	// is exactly what UpdateCategory stores through decodeNullableString. Create
+	// and update therefore agree: a category saved without an emoji or an image
+	// carries NULL, never "" or a run of spaces.
 	category, err := repository.CreateCategory(c.Context(), h.DB, businessID, menu.ID,
-		translations, req.Icon, req.ImageURL, isActive)
+		translations, optionalStrPtr(req.Icon), optionalStrPtr(req.ImageURL), isActive)
 	if err != nil {
 		return utils.Internal(c, err)
 	}

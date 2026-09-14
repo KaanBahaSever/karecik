@@ -325,8 +325,16 @@ func toDirectoryBusiness(business *models.Business) models.PublicBusiness {
 }
 
 // buildFooter produces the legal notices at the bottom of the menu.
-// The price date refreshes automatically after every bulk price update of that
-// menu.
+//
+// The price date is menus.price_updated_at. Nothing in Go writes it: the
+// products_touch_menu_price_date trigger of migration 010 moves it whenever a
+// price on that menu really changes — through the product dialog, the inline
+// quick edit or a bulk update alike — and leaves it alone otherwise.
+//
+// It is formatted in utils.Istanbul and never in time.Local. The note names a
+// day on the menu's calendar, while time.Local is only the zone this process
+// runs in: on a server in UTC, a price changed between 00:00 and 03:00 Istanbul
+// time would print the previous day.
 //
 // NOTE: the wording is customer-facing and therefore Turkish on purpose.
 func buildFooter(menu *models.Menu) models.PublicFooter {
@@ -335,7 +343,7 @@ func buildFooter(menu *models.Menu) models.PublicFooter {
 	if menu.ShowPriceDate {
 		footer.PriceNote = fmt.Sprintf(
 			"Fiyatlarımız %s tarihinden itibaren geçerlidir.",
-			menu.PriceUpdatedAt.Local().Format("02.01.2006"))
+			menu.PriceUpdatedAt.In(utils.Istanbul).Format("02.01.2006"))
 	}
 	if menu.ShowVatNote {
 		footer.VatNote = menu.VatNoteText

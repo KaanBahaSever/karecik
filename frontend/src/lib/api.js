@@ -247,6 +247,10 @@ export const api = {
 
   /* menus — the primary entity: a menu owns its own branding and settings */
   listMenus: () => request('/api/menus'),
+  // One menu of the caller's business. menuContext's refreshMenu merges it
+  // into the listed menus rather than replacing one — see saveActiveMenu there
+  // for why `category_count` is kept from the list.
+  getMenu: (id) => request(`/api/menus/${id}`),
   createMenu: (payload) => request('/api/menus', { method: 'POST', body: payload }),
   updateMenu: (id, payload) => request(`/api/menus/${id}`, { method: 'PUT', body: payload }),
   deleteMenu: (id) => request(`/api/menus/${id}`, { method: 'DELETE' }),

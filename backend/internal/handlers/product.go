@@ -122,9 +122,13 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 		isFeatured = *req.IsFeatured
 	}
 
+	// image_url is trimmed and a blank value is stored as NULL — exactly what
+	// UpdateProduct stores through decodeNullableString, so a product created
+	// without an image and one whose image was later cleared look the same.
 	product, err := repository.CreateProduct(c.Context(), h.DB, businessID, req.CategoryID,
 		translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.Calories,
-		req.ImageURL, sanitizeAllergens(req.Allergens), badges, options, isActive, isFeatured)
+		optionalStrPtr(req.ImageURL), sanitizeAllergens(req.Allergens), badges, options,
+		isActive, isFeatured)
 	if err != nil {
 		return utils.Internal(c, err)
 	}
@@ -285,6 +289,10 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		}
 	}
 
+	// No timestamp code here, on purpose. When this UPDATE changes price,
+	// compare_price or an option surcharge, the products_touch_menu_price_date
+	// trigger of migration 010 moves the "prices valid from" date of the menu
+	// the product ends up in. A second mechanism in Go would only drift from it.
 	product, err := repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -311,6 +319,9 @@ func (h *Handler) PatchProductPrice(c *fiber.Ctx) error {
 		return utils.Unprocessable(c, "Fiyat sıfırdan küçük olamaz.")
 	}
 
+	// A different price moves the menu's "prices valid from" date through the
+	// trigger of migration 010, and re-sending the same price does not. No
+	// timestamp code belongs here — see UpdateProduct.
 	product, err := repository.UpdateProduct(c.Context(), h.DB, id, middleware.BusinessID(c),
 		map[string]any{"price": utils.Round2(req.Price)})
 	if err != nil {
@@ -377,6 +388,10 @@ func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 // single menu named by menu_id. That field is required: raising every price of
 // a menu the user did not pick is not a fallback worth having, so a missing one
 // is a plain 422.
+//
+// An apply moves the menu's "prices valid from" date only when it really
+// changes a price, and this handler never moves it itself: see the note after
+// ApplyPrices.
 func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 	var req bulkPriceRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -442,11 +457,16 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
-	// The "prices valid from" date belongs to the menu whose prices changed.
+	// The "prices valid from" date is not written here. The UPDATE inside
+	// ApplyPrices fired the products_touch_menu_price_date trigger of migration
+	// 010, which moved the date if at least one of those rows really changed
+	// price and left it exactly where it was otherwise — an apply with nothing
+	// to change included. The response reports the menu's current value.
+	//
 	// The business id is passed again even though ownsMenu already vouched for
-	// the menu: the repository refuses to write on a bare id, and the only way
+	// the menu: the repository never reads a menu on a bare id, and the only way
 	// this can now come back empty is the menu being deleted mid-request.
-	updatedAt, err := repository.TouchPriceUpdatedAt(c.Context(), h.DB, menu.ID, businessID)
+	updatedAt, err := repository.GetMenuPriceUpdatedAt(c.Context(), h.DB, menu.ID, businessID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Menü bulunamadı.")

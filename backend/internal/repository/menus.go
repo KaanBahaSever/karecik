@@ -125,9 +125,9 @@ func scanMenu(row pgx.Row) (*models.Menu, error) {
 // names only ever come from this allowlist, so SQL injection is impossible.
 //
 // Deliberately missing: id, business_id, created_at and updated_at, which
-// nobody may rewrite; price_updated_at, which only TouchPriceUpdatedAt moves;
-// and currency_symbol, which the repository derives itself (see
-// applyCurrencySymbol).
+// nobody may rewrite; price_updated_at, which only the products trigger of
+// migration 010 moves (see GetMenuPriceUpdatedAt); and currency_symbol, which
+// the repository derives itself (see applyCurrencySymbol).
 var menuUpdatableColumns = map[string]bool{
 	"name": true, "slug": true, "description": true,
 	"is_active": true, "position": true,
@@ -533,21 +533,23 @@ func MenuSlugTaken(ctx context.Context, db DB, businessID uuid.UUID, slug string
 	return exists, err
 }
 
-// TouchPriceUpdatedAt moves the "prices valid from" date of one menu to now
-// after a bulk price update. The customer menu footer reads this value.
+// GetMenuPriceUpdatedAt reads the "prices valid from" date of one menu — the
+// value the customer menu footer prints.
 //
-// Like every other write in this package it runs on (id, business_id) and never
-// on a bare id. Its only caller checks ownership first, so the predicate is
-// belt-and-braces today — but a mutation that trusts an id alone is one
-// careless future call site away from being a real IDOR, so the rule holds
-// here too. A menu that belongs to somebody else simply matches no row, which
-// surfaces as ErrNotFound instead of as a silent zero timestamp.
-func TouchPriceUpdatedAt(ctx context.Context, db DB, menuID, businessID uuid.UUID) (time.Time, error) {
+// Nothing in the application writes that column. The
+// products_touch_menu_price_date trigger of migration 010 moves it whenever a
+// price on the menu really changes, so the bulk price endpoint reads the date
+// back after its UPDATE instead of setting it, which is what keeps an apply
+// that changed nothing from moving it.
+//
+// Like every other menu read in this package it runs on (id, business_id) and
+// never on a bare id. A menu that belongs to somebody else simply matches no
+// row, which surfaces as ErrNotFound instead of as a silent zero timestamp.
+func GetMenuPriceUpdatedAt(ctx context.Context, db DB, menuID, businessID uuid.UUID) (time.Time, error) {
 	var updatedAt time.Time
 	err := db.QueryRow(ctx, `
-		UPDATE menus SET price_updated_at = now()
-		WHERE id = $1 AND business_id = $2
-		RETURNING price_updated_at`,
+		SELECT price_updated_at FROM menus
+		WHERE id = $1 AND business_id = $2`,
 		menuID, businessID).Scan(&updatedAt)
 	if err != nil {
 		if isNoRows(err) {

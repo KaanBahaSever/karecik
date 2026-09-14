@@ -323,6 +323,10 @@ An array ordered by `position ASC`. Each category carries `product_count`.
 Response `201`: the category object.
 An empty `name` in the default language yields `422`.
 
+`icon` and `image_url` are trimmed, and an empty or whitespace-only value is
+stored as `null` — exactly what `PUT /api/categories/:id` stores — so a category
+without an emoji or an image always reads back as `null`.
+
 ### `PUT /api/categories/:id`
 
 Partial update: `translations`, `icon`, `image_url`, `is_active`.
@@ -374,16 +378,36 @@ Ordering: `category position ASC, product position ASC`.
 `category_id` is required and must belong to the same business (otherwise `403`).
 `price >= 0` is required. Response `201`.
 
+`image_url` is trimmed and a blank value is stored as `null`, as on `PUT`.
+Creating a product does not move the menu's price date — only a changed price
+of an existing product does (see `PUT` below).
+
 ### `PUT /api/products/:id`
 
 Partial update: `category_id` (move to another category), `translations`,
-`price`, `compare_price`, `image_url`, `allergens`, `is_active`, `is_featured`.
+`price`, `compare_price`, `calories`, `image_url`, `allergens`, `badges`,
+`options`, `is_active`, `is_featured`.
+
+**Any price change moves the menu's price date** (`menus.price_updated_at`, the
+date in the customer menu's "Fiyatlarımız … tarihinden itibaren geçerlidir"
+line). A price change is a different `price`, a different `compare_price`, or a
+different list of option surcharges; the menu is the one the product sits on
+after the update, so a product moved into another menu with a new price dates
+that menu and leaves the old one alone. Re-sending identical prices together
+with other edits (the dashboard dialog sends every field on every save),
+toggling `is_active` / `is_featured`, renaming an option, or moving a product
+without a new price does not move the date. Surcharges compare numerically:
+`10` and `10.0` are the same. The date is moved by a database trigger
+(migration `010_price_change_date.sql`), not by the handler.
 
 ### `PATCH /api/products/:id/price`
 
 Quick price change (the inline editing in the menu editor).
 
 Request: `{ "price": 155.50 }` → Response: the updated product.
+
+A different price moves the menu's `price_updated_at` exactly like `PUT` does;
+sending the price the product already has leaves it alone.
 
 ### `DELETE /api/products/:id`
 
@@ -403,7 +427,8 @@ product array of that category.
 ### `POST /api/products/bulk-price` — bulk price update
 
 ```json
-{ "percentage": 10,
+{ "menu_id": "uuid",
+  "percentage": 10,
   "rounding": "nearest_5",
   "category_ids": ["uuid-1"],
   "apply": true }
@@ -411,9 +436,10 @@ product array of that category.
 
 | Field | Meaning |
 |---|---|
+| `menu_id` | **Required** (`422` when missing). The one menu whose prices change; a menu of another business is `403` |
 | `percentage` | −90 … +1000. `10` → +10%, `-15` → −15% |
 | `rounding` | `none`, `integer`, `nearest_5`, `nearest_10`, `ends_99`, `ends_95`, `ends_50` |
-| `category_ids` | Empty or missing → **every** product |
+| `category_ids` | Empty or missing → **every** product of the menu |
 | `apply` | `false` → preview only, nothing is written |
 
 Order of operations: `new = old * (1 + percentage/100)` → rounding → `max(0, result)`.
@@ -425,8 +451,12 @@ Response:
   "price_updated_at": "2026-08-24T12:30:00Z" }
 ```
 
-When `apply: true`, `businesses.price_updated_at` is set to now, which feeds the
-"Fiyatlarımız … tarihinden itibaren geçerlidir" line in the customer menu.
+The price date lives on the menu, in `menus.price_updated_at`, and feeds the
+"Fiyatlarımız … tarihinden itibaren geçerlidir" line in the customer menu. With
+`apply: true` it moves to now **only when at least one price actually
+changed** — an apply that leaves every price where it was (`affected: 0`) keeps
+the old date, and a preview never touches it. `price_updated_at` is present
+when `apply: true` and carries the menu's value after the update, moved or not.
 
 ---
 
@@ -490,8 +520,11 @@ payload carries plain `name` / `description` fields instead of the
 `translations` map. Categories and products with `is_active = false` are
 **omitted entirely**. Both lists are ordered by `position ASC`.
 
-`footer.price_note` is generated on the backend from `price_updated_at` in
-`dd.MM.yyyy` format.
+`footer.price_note` is generated on the backend from the menu's
+`price_updated_at` in `dd.MM.yyyy` format, **on the Europe/Istanbul calendar** —
+never in the server's own time zone, so a price changed at 01:30 Istanbul time
+names that day and not the previous one. The server binary embeds its own copy
+of the zone database, so this does not depend on the host having one installed.
 
 ### `GET /api/preview/menu` 🔒
 

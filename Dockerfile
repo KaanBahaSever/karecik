@@ -106,8 +106,12 @@ FROM alpine:3.20
 WORKDIR /app
 
 # ca-certificates: outbound HTTPS needs a trust store (the Postgres connection
-# uses TLS). tzdata is NOT installed: nothing on the Go side loads a time zone —
-# the menu's date is formatted in the browser, which uses the visitor's own.
+# uses TLS). tzdata is NOT installed, even though the server does format a date
+# in a named zone: the customer menu's "Fiyatlarımız … tarihinden itibaren
+# geçerlidir." note is written by the backend in Europe/Istanbul. The binary
+# carries its own copy of the zone database — internal/utils imports
+# time/tzdata — and Go falls back to that copy when the system has no zone
+# files, so the image needs no tzdata package for it.
 RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 karecik \
     && mkdir -p /data/uploads \

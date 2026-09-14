@@ -37,11 +37,47 @@ export function currencySymbol(currencyCode = 'TRY') {
   return (CURRENCIES[currencyCode] || CURRENCIES.TRY).symbol
 }
 
-/** ISO date -> "24.08.2026" */
+/** The zone the price date is shown in; see formatDate. */
+const PRICE_DATE_TIME_ZONE = 'Europe/Istanbul'
+
+/**
+ * ISO date -> "24.08.2026", as the calendar day in Europe/Istanbul.
+ *
+ * The zone is pinned instead of taken from the browser, so the day an owner
+ * sees does not depend on the time zone their computer is set to: 22:30 UTC on
+ * 23 August is already 24.08 in Istanbul, while a browser in London would have
+ * printed 23.08. The same date is printed on the customer menu by the backend
+ * (repository/menu.go -> buildFooter), and the two must agree on the zone.
+ *
+ * The parts are joined by hand rather than taken from format(), so the order
+ * and the separator stay "dd.mm.yyyy" whatever pattern the browser's locale
+ * data prescribes. Should Intl or the zone be unavailable altogether, the
+ * browser's local calendar day is the fallback — what this function always did.
+ */
 export function formatDate(isoDate) {
   if (!isoDate) return ''
   const date = new Date(isoDate)
   if (Number.isNaN(date.getTime())) return ''
+
+  try {
+    const parts = {}
+    new Intl.DateTimeFormat('tr-TR', {
+      timeZone: PRICE_DATE_TIME_ZONE,
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    })
+      .formatToParts(date)
+      .forEach((part) => {
+        parts[part.type] = part.value
+      })
+
+    if (parts.day && parts.month && parts.year) {
+      return `${parts.day}.${parts.month}.${parts.year}`
+    }
+  } catch {
+    /* no usable Intl time zone support: the local day below */
+  }
 
   const day = String(date.getDate()).padStart(2, '0')
   const month = String(date.getMonth() + 1).padStart(2, '0')

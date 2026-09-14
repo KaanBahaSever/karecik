@@ -2,6 +2,8 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ChevronDown, ChevronRight, GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 
+import { categoryEmoji } from '../../lib/category'
+
 /**
  * Draggable category card (accordion) in the menu editor.
  *
@@ -40,14 +42,9 @@ export default function CategoryRow({
     category.translations?.tr?.name ||
     'İsimsiz kategori'
 
-  // The icon field may hold either a code such as "coffee" or an emoji.
-  // Only emoji are rendered in the header.
-  const iconEmoji =
-    typeof category.icon === 'string' &&
-    category.icon.trim() !== '' &&
-    (category.icon.codePointAt(0) || 0) > 127
-      ? category.icon
-      : null
+  // The icon field may hold a legacy code such as "coffee" instead of an emoji.
+  // Only a real glyph is drawn, by the same rule the customer menu applies.
+  const iconEmoji = categoryEmoji(category.icon)
 
   const ToggleIcon = open ? ChevronDown : ChevronRight
 
