@@ -1,7 +1,7 @@
 // Package clientip resolves the visitor's public address and source port from
 // an inbound request, for audit logging.
 //
-// WHY THIS IS NOT ONE LINE
+// # WHY THIS IS NOT ONE LINE
 //
 // Every candidate header is attacker-controlled unless something proves
 // otherwise. The origin behind this app is reachable directly — Railway serves
@@ -42,7 +42,7 @@
 // are consequently present on some requests and absent on others, and the
 // package must be correct either way rather than assuming a uniform edge.
 //
-// THE SOURCE PORT
+// # THE SOURCE PORT
 //
 // Under carrier-grade NAT many subscribers share one public address, so the
 // address alone does not identify anyone; the source port is what makes an

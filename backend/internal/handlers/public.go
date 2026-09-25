@@ -51,11 +51,24 @@ func (h *Handler) PublicMenuByPath(c *fiber.Ctx) error {
 //  3. otherwise take the only active menu when there is exactly one;
 //  4. with zero or two-plus active menus and no slug, answer 200 with
 //     menu_resolved false, an empty category list and the menu list.
+//
+// The language is negotiated, not just read: an explicit ?lang= the menu offers
+// wins, otherwise the first language of the visitor's Accept-Language header
+// the menu offers, otherwise the menu's default (utils.NegotiateLanguage). The
+// payload says which one it used in its "language" field.
 func (h *Handler) servePublicMenu(c *fiber.Ctx, businessSlug, menuSlug string) error {
 	opts := repository.PublicMenuOptions{
 		Lang:            strings.TrimSpace(c.Query("lang")),
+		AcceptLanguage:  c.Get(fiber.HeaderAcceptLanguage),
 		IncludeInactive: false,
 	}
+
+	// The same address answers in different languages depending on a request
+	// header, so every cache between here and the phone has to key on that
+	// header as well — without Vary, a shared cache could hand a German
+	// visitor the Turkish copy it stored for the previous one. Set before any
+	// answer is written, so it rides on the 404s and the 304s too.
+	c.Vary(fiber.HeaderAcceptLanguage)
 
 	business, err := middleware.ResolveBusiness(c.Context(), h.DB, businessSlug)
 	if err != nil {
@@ -130,6 +143,10 @@ func (h *Handler) PreviewMenu(c *fiber.Ctx) error {
 		return h.businessError(c, err)
 	}
 
+	// No AcceptLanguage: the owner previews the language they pick in the
+	// dashboard, or the menu's default — never whatever their own browser
+	// prefers, which would make the preview disagree with the language switch
+	// next to it. The payload still reports the language it used.
 	opts := repository.PublicMenuOptions{
 		Lang:            strings.TrimSpace(c.Query("lang")),
 		IncludeInactive: true,

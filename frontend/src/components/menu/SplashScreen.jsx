@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { isSvgUrl } from '../../lib/category'
+import { languageDir, t, textDir } from '../../locales/index.js'
 import { DEFAULT_SPLASH_EXIT, SPLASH_DISPLAY_MODES, isValidSplashEasing } from '../../themes/splash'
 
 /**
@@ -16,7 +18,8 @@ import { DEFAULT_SPLASH_EXIT, SPLASH_DISPLAY_MODES, isValidSplashEasing } from '
  * The prop signature is therefore fixed for both callers: existing props may not
  * change meaning, and anything added has to default to the old behaviour so the
  * caller that does not pass it is unaffected. `ready` is such an addition —
- * LivePreview omits it, gets `true`, and behaves exactly as before.
+ * LivePreview omits it, gets `true`, and behaves exactly as before — and so is
+ * `language`, which defaults to the Turkish the dashboard reads.
  *
  * @param {object}   business  - PublicMenu.business (logo_url, name, splash_*)
  * @param {function} onDone    - Called once the exit animation has finished
@@ -27,6 +30,8 @@ import { DEFAULT_SPLASH_EXIT, SPLASH_DISPLAY_MODES, isValidSplashEasing } from '
  *                               revealed. The exit waits for it, but never
  *                               starts earlier than splash_duration and never
  *                               later than the caller's own cap. Default true.
+ * @param {string}   language  - Active language code: the "skip" label and the
+ *                               screen's direction. Default 'tr'.
  */
 
 /* A very short, one-off opening animation — no library involved. */
@@ -154,6 +159,7 @@ export default function SplashScreen({
   replayKey = 0,
   contained = false,
   ready = true,
+  language = 'tr',
 }) {
   const background = business?.splash_bg_color || '#0f172a'
   const textColor = readableTextColor(background)
@@ -285,7 +291,9 @@ export default function SplashScreen({
     <div
       role="button"
       tabIndex={0}
-      aria-label="Karşılama ekranını geç"
+      aria-label={t('skipSplash', language)}
+      dir={languageDir(language)}
+      lang={language}
       onClick={skip}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') skip()
@@ -321,11 +329,22 @@ export default function SplashScreen({
         {/* Every child below is either rendered or `null`, so the gap-4 above
             never leaves a hole where a hidden element used to be. */}
         {showLogo && logoUrl ? (
-          /* Wide logos are common — never crop them into a square. */
+          /* Wide logos are common — never crop them into a square.
+
+             A raster logo keeps its own size up to the cap. An SVG gets an
+             explicit height instead: one saved without width/height has no
+             intrinsic size, and `h-auto w-auto` then leaves its box to the
+             engine — 300 x 150 in one, next to nothing in another. With the
+             height fixed the width follows from the viewBox, `max-w-full`
+             bounds a wide one, and `object-contain` keeps it whole. */
           <img
             src={logoUrl}
             alt=""
-            className="h-auto max-h-32 w-auto max-w-full object-contain"
+            className={
+              isSvgUrl(logoUrl)
+                ? 'h-32 w-auto max-w-full object-contain'
+                : 'h-auto max-h-32 w-auto max-w-full object-contain'
+            }
           />
         ) : null}
 
@@ -342,10 +361,17 @@ export default function SplashScreen({
           </div>
         ) : null}
 
-        {showText && headline ? <h1 className="text-2xl font-semibold">{headline}</h1> : null}
+        {/* The owner's own words, typed once for every language: textDir
+            gives them the direction of their own script, not the menu's —
+            'auto', or right to left for Arabic text in the Arabic menu. */}
+        {showText && headline ? (
+          <h1 className="text-2xl font-semibold" dir={textDir(headline, language)}>
+            {headline}
+          </h1>
+        ) : null}
 
         {showText && tagline ? (
-          <p className="max-w-xs text-sm" style={{ opacity: 0.8 }}>
+          <p className="max-w-xs text-sm" style={{ opacity: 0.8 }} dir={textDir(tagline, language)}>
             {tagline}
           </p>
         ) : null}

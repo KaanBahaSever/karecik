@@ -23,8 +23,9 @@ import (
 // next to header_display and primary_color: 006 appended all four to the table.
 // slogan and splash_entrance follow them for the same reason — 007 appends
 // both after all four, slogan first and splash_entrance second — and
-// contact_display and links close the list because 011 appends them after
-// those, contact_display first. splash_entrance therefore scans right after
+// contact_display and links follow because 011 appends them after those,
+// contact_display first, and contact_in_footer closes the list because 012
+// appends it after links. splash_entrance therefore scans right after
 // slogan, NOT next to splash_exit_animation where models.Menu declares it: the
 // list follows the table, never the struct.
 //
@@ -42,7 +43,7 @@ const menuColumns = `id, business_id, name, slug, description, is_active,
 	currency, currency_symbol, show_vat_note, vat_note_text, show_price_date,
 	price_updated_at, header_display, default_language, languages, logo_fade_in,
 	text_color, show_yerli_uretim, yerli_uretim_logo_url, slogan,
-	splash_entrance, contact_display, links`
+	splash_entrance, contact_display, links, contact_in_footer`
 
 // menuColumnsM is menuColumns qualified with the m alias, needed wherever menus
 // is joined against categories: id, business_id, position, is_active,
@@ -107,6 +108,10 @@ func menuScanTargets(menu *models.Menu) []any {
 		// a plain string and links scans from jsonb straight into the slice.
 		&menu.ContactDisplay,
 		&menu.Links,
+
+		// Appended by migration 012, after links. NOT NULL DEFAULT false, so a
+		// plain bool.
+		&menu.ContactInFooter,
 	}
 }
 
@@ -115,12 +120,22 @@ func menuScanTargets(menu *models.Menu) []any {
 // links is NOT NULL and CHECKed to be an array, and '[]' scans into an empty
 // slice rather than nil, so the Links branch is a guarantee rather than a
 // repair: the payload says [] in every case, exactly as it does for languages.
+//
+// A stored contact_display of 'footer' is read as the pair it always meant —
+// nothing on the home view, the list in the footer — exactly as migration 012
+// rewrote the rows it found. This release never stores that value, but the
+// release before it does, and it keeps serving while this one starts; see the
+// note in 012 on why the constraint still admits it.
 func normalizeMenu(menu *models.Menu) {
 	if menu.Languages == nil {
 		menu.Languages = []string{menu.DefaultLanguage}
 	}
 	if menu.Links == nil {
 		menu.Links = models.MenuLinks{}
+	}
+	if menu.ContactDisplay == utils.ContactDisplayFooter {
+		menu.ContactDisplay = utils.ContactDisplayHidden
+		menu.ContactInFooter = true
 	}
 }
 
@@ -168,7 +183,7 @@ var menuUpdatableColumns = map[string]bool{
 	"text_color": true, "show_yerli_uretim": true,
 	"yerli_uretim_logo_url": true,
 
-	"contact_display": true, "links": true,
+	"contact_display": true, "links": true, "contact_in_footer": true,
 }
 
 // applyLinksArray makes sure a links write stores a JSON array. The handler
@@ -291,6 +306,14 @@ func ListActiveMenus(ctx context.Context, db DB, businessID uuid.UUID) ([]models
 func GetMenu(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.Menu, error) {
 	return scanMenu(db.QueryRow(ctx,
 		`SELECT `+menuColumns+` FROM menus WHERE id = $1 AND business_id = $2`,
+		id, businessID))
+}
+
+// lockedMenu is the before-read of a menu write (see "The before-read" in
+// audit.go): GetMenu under the given row lock.
+func lockedMenu(ctx context.Context, db DB, id, businessID uuid.UUID, lock string) (*models.Menu, error) {
+	return scanMenu(db.QueryRow(ctx,
+		`SELECT `+menuColumns+` FROM menus WHERE id = $1 AND business_id = $2 `+lock,
 		id, businessID))
 }
 
@@ -456,8 +479,13 @@ func insertMenu(ctx context.Context, db DB, values map[string]any) (*models.Menu
 // already-suffixed candidate can produce "kahvalti-2-2". That needs two writers
 // inside the same business in the same instant and is preferred over silently
 // handing the loser a slug from a family it never asked for.
-func CreateMenu(ctx context.Context, db DB, businessID uuid.UUID,
-	fields map[string]any) (*models.Menu, error) {
+//
+// hooks run after the INSERT with the created menu, each attempt in a
+// transaction of its own (see writeWithHooks): an attempt that loses the slug
+// race rolls its hook rows back with it, so only the menu that is really
+// created is recorded.
+func CreateMenu(ctx context.Context, db TxDB, businessID uuid.UUID,
+	fields map[string]any, hooks ...WriteHook[*models.Menu]) (*models.Menu, error) {
 
 	// The next position is computed as a bigint and capped at the largest
 	// INTEGER. A request may set menus.position to that largest value itself,
@@ -489,7 +517,9 @@ func CreateMenu(ctx context.Context, db DB, businessID uuid.UUID,
 		}
 		values["slug"] = slug
 
-		menu, err := insertMenu(ctx, db, values)
+		menu, err := writeWithHooks(ctx, db, hooks, func(db DB) (*models.Menu, error) {
+			return insertMenu(ctx, db, values)
+		})
 		if err == nil {
 			return menu, nil
 		}
@@ -505,8 +535,16 @@ func CreateMenu(ctx context.Context, db DB, businessID uuid.UUID,
 // itself, so rewriting a menu with its own slug is a no-op rather than a bump
 // to -2 — and the write is retried on a unique violation exactly like
 // CreateMenu's.
-func UpdateMenu(ctx context.Context, db DB, id, businessID uuid.UUID,
-	fields map[string]any) (*models.Menu, error) {
+//
+// hooks run after the UPDATE, each attempt in a transaction of its own like
+// CreateMenu's, with the menu as it was and as it is now. The "before" is read
+// in that transaction as the statement right before the UPDATE (see "The
+// before-read" in audit.go), FOR UPDATE when the slug is written — a column of
+// the unique key (business_id, slug), whose change makes the UPDATE take that
+// lock — and FOR NO KEY UPDATE otherwise. An update that names no updatable
+// column writes nothing and runs none.
+func UpdateMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID,
+	fields map[string]any, hooks ...WriteHook[Update[*models.Menu]]) (*models.Menu, error) {
 
 	values := updatableFields(fields)
 	if len(values) == 0 {
@@ -514,6 +552,13 @@ func UpdateMenu(ctx context.Context, db DB, id, businessID uuid.UUID,
 	}
 
 	baseSlug, hasSlug := values["slug"].(string)
+	lock := lockForNoKeyUpdate
+	if _, writesSlug := values["slug"]; writesSlug {
+		lock = lockForUpdate
+	}
+	before := func(db DB) (*models.Menu, error) {
+		return lockedMenu(ctx, db, id, businessID, lock)
+	}
 
 	for attempt := 0; attempt < menuWriteAttempts; attempt++ {
 		if hasSlug {
@@ -537,7 +582,9 @@ func UpdateMenu(ctx context.Context, db DB, id, businessID uuid.UUID,
 			fmt.Sprintf(` WHERE id = $%d AND business_id = $%d RETURNING `, len(args)-1, len(args)) +
 			menuColumns
 
-		menu, err := scanMenu(db.QueryRow(ctx, query, args...))
+		menu, err := updateWithHooks(ctx, db, hooks, before, func(db DB) (*models.Menu, error) {
+			return scanMenu(db.QueryRow(ctx, query, args...))
+		})
 		if err == nil {
 			return menu, nil
 		}
@@ -613,7 +660,13 @@ func UpdateMenu(ctx context.Context, db DB, id, businessID uuid.UUID,
 // The ownership check and both SELECTs are scoped to the business exactly like
 // the DELETE, so a request naming another tenant's menu takes no lock at all,
 // deletes nothing and comes back as ErrNotFound.
-func DeleteMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID) error {
+//
+// With hooks, one more statement runs between steps 3 and 4: the menu's
+// before-read, FOR UPDATE — the lock the DELETE takes on it anyway, so the menu
+// row is still locked last (see "The before-read" in audit.go). The hooks run
+// after the DELETE, inside the transaction, with that copy of the menu.
+func DeleteMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID,
+	hooks ...WriteHook[*models.Menu]) error {
 	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		owned, err := menuOwned(ctx, tx, id, businessID)
 		if err != nil {
@@ -648,6 +701,13 @@ func DeleteMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID) error {
 			return err
 		}
 
+		var removed *models.Menu
+		if len(hooks) > 0 {
+			if removed, err = lockedMenu(ctx, tx, id, businessID, lockForUpdate); err != nil {
+				return err
+			}
+		}
+
 		tag, err := tx.Exec(ctx,
 			`DELETE FROM menus WHERE id = $1 AND business_id = $2`, id, businessID)
 		if err != nil {
@@ -656,7 +716,7 @@ func DeleteMenu(ctx context.Context, db TxDB, id, businessID uuid.UUID) error {
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return nil
+		return runHooks(ctx, tx, removed, hooks)
 	})
 }
 

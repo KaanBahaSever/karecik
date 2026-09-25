@@ -2,7 +2,8 @@
 
 Base URL (development): `http://localhost:8080`
 
-Every response is JSON. Errors share one shape:
+Every response is JSON — except `204 No Content`, which `POST /api/public/events`
+answers with and which has no body. Errors share one shape:
 
 ```json
 { "error": "Human readable message", "code": "VALIDATION_ERROR" }
@@ -641,20 +642,111 @@ when `apply: true` and carries the menu's value after the update, moved or not.
 
 ### `POST /api/uploads`
 
-`multipart/form-data`, field name: `file`.
-Accepted types: `image/jpeg`, `image/png`, `image/webp`, `image/gif`. Max **5 MB**.
+`multipart/form-data`, field name: `file`. Max **5 MB** (`MAX_UPLOAD_BYTES`).
+Accepted: JPEG, PNG, WebP, GIF and **SVG** (`image/svg+xml`).
 
-Response `201`: `{ "url": "/uploads/1724500000-a1b2c3.webp", "size": 84213 }`
+Response `201`: `{ "url": "/uploads/1724500000-a1b2c3.webp", "size": 84213 }` —
+`size` is the number of bytes stored.
+
+The part's `Content-Type` (or, when it is empty or generic such as
+`application/octet-stream`, the file name's extension — `.jpg`, `.jpeg`, `.png`,
+`.webp`, `.gif`, `.svg`) only says which check the file goes through. Nothing is
+written to disk until the check passes, so a refused file is never served.
+
+**Raster images** are verified by their first bytes (Go's
+`http.DetectContentType`). A file whose bytes are not a JPEG, PNG, GIF or WebP
+image — an HTML page renamed `logo.png`, an SVG sent as `image/png`, an empty
+file — is `422` `Dosyanın içeriği geçerli bir JPG, PNG, WEBP veya GIF görseli
+değil.` A real image sent under the wrong image type is stored under the
+extension of what it really is (a JPEG sent as `image/png` becomes `.jpg`).
+
+**SVG** is parsed as XML (`internal/svgsafe`) and refused with `422`
+`SVG dosyası betik, dış bağlantı veya gömülü içerik barındıramaz. Lütfen
+sadeleştirilmiş bir SVG yükleyin.` when:
+
+- it is not well-formed XML with an `<svg>` root in the SVG namespace (or none
+  — but not an explicit `xmlns=""`), or has anything but an `<?xml?>`
+  declaration, comments and whitespace outside that root; a charset other than
+  UTF-8 is refused too;
+- it uses a namespace prefix that nothing in scope declares (`sodipodi:` with
+  no `xmlns:sodipodi`, …) — no browser draws such a file. `xlink:` is the
+  exception, see below;
+- it has a `<!DOCTYPE>` / `<!ENTITY>` or any other declaration, or a processing
+  instruction other than the XML declaration (`<?xml-stylesheet?>`);
+- it contains `script`, `foreignObject`, `iframe`, `embed`, `object`, `handler`
+  or `listener` in any namespace, or any element of the XHTML namespace;
+- any attribute's name starts with `on`;
+- an `href`, `xlink:href` or `src` is anything but a same-document fragment
+  (`#logo`) or a `data:image/(png|jpeg|gif|webp)` URI;
+- an `animate`, `set`, `animateTransform` or `animateMotion` targets `href`,
+  `xlink:href` or an `on*` attribute;
+- any attribute value or stylesheet contains `javascript:`, `vbscript:` or
+  `data:text` — entities are decoded, and whitespace and control characters
+  inside the scheme are ignored, first;
+- a stylesheet (`<style>` or a `style` attribute) uses `@import`,
+  `expression(`, `behavior`, `-moz-binding` or a backslash escape, or any
+  `url(...)` — in a stylesheet or a presentation attribute such as `fill` — is
+  not a fragment or an image `data:` URI.
+
+The rule that failed is written to the server log, not to the response. A clean
+SVG is stored byte for byte, except that its `<svg>` root is given what a
+browser needs to draw it as an image:
+
+- a root with no namespace gets `xmlns="http://www.w3.org/2000/svg"`, and an
+  `xlink:` prefix used without a declaration gets
+  `xmlns:xlink="http://www.w3.org/1999/xlink"` — an HTML page supplies both
+  implicitly, so SVG copied out of one often has neither, and without them the
+  stored file draws nothing;
+- a root that has a numeric (or `px`) `width` and `height` but no `viewBox`
+  gets `viewBox="0 0 <width> <height>"`, so it scales inside an `<img>` instead
+  of being cropped.
 
 Files are written under `UPLOAD_DIR` and served statically at `GET /uploads/*`.
+**Every** response for a stored file — `GET`, `HEAD`, a range (`206`) and a
+revalidation (`304`) alike, however the address is spelled — carries
+`X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox`,
+so opening an uploaded file's URL directly as a page can never run script or
+fetch anything; inside an `<img>` the policy changes nothing, and a raster
+image opened directly still displays. The policy is not limited to `.svg`
+addresses because an address can name the same file in more than one spelling
+(percent-encoding, repeated slashes, letter case). An SVG is served as
+`Content-Type: image/svg+xml`, decided by the file actually served.
+
+Every accepted upload is recorded in the audit trail as `upload.create`
+(section 11).
 
 ---
 
 ## 7. Public menu — no token required
 
-### `GET /api/public/menu/:slug`
+### `GET /api/public/menu/:businessSlug[/:menuSlug]`
 
-Query: `?lang=tr` (optional, defaults to the business' `default_language`).
+Query: `?lang=tr` (optional).
+
+#### Language
+
+The language of every text in the payload is **negotiated**, in this order:
+
+1. `?lang=` when the menu's `languages` contains it (compared trimmed and
+   lowercased) — the visitor's own choice in the language picker always wins;
+2. otherwise the first language of the request's `Accept-Language` header, in
+   quality order, that the menu's `languages` contains — regions and scripts are
+   stripped (`de-DE` → `de`), `q=0` entries and the `*` wildcard are ignored, and
+   a malformed entry drops only itself;
+3. otherwise the menu's `default_language`.
+
+A `?lang=` the menu does not offer (or an empty one) is treated as absent, so it
+falls through to the header rather than pinning the visitor to the default.
+
+The payload says which language it used in a top-level `"language"` field. A
+directory payload (`menu_resolved: false`) carries it too, negotiated the same
+way against every supported language (`tr`, `en`, `de`, `ru`, `ar`, `fr`) with
+`tr` as the fallback, so the page can render its own strings in it.
+
+Every answer of these endpoints — `200`, `304` and `404` alike — carries
+`Vary: Accept-Language`, and because the `ETag` is computed from the body, a copy
+cached for one language is never revalidated for another.
 
 ### `GET /api/public/menu` (via subdomain)
 
@@ -677,6 +769,7 @@ Both endpoints return the same body:
     "show_price_date": true, "price_updated_at": "2026-08-24T10:00:00Z",
     "phone": "...", "address": "...", "instagram": "...", "wifi_password": "...",
     "contact_display": "inline",
+    "contact_in_footer": false,
     "links": [ { "id": "rezervasyon", "label": "Rezervasyon", "url": "https://rezervasyon.example/masa" } ]
   },
   "categories": [
@@ -688,9 +781,11 @@ Both endpoints return the same body:
           "allergens": ["sut"], "is_featured": false } ] } ],
   "footer": {
     "price_note": "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir.",
+    "price_date": "2026-08-24",
     "vat_note": "Fiyatlarımıza KDV dahildir.",
     "powered_by": "Karecik ile hazırlandı"
-  }
+  },
+  "language": "tr"
 }
 ```
 
@@ -701,25 +796,29 @@ product: each carries its `name` in the requested language, falling back to the
 menu's default language, and no `translations` key. Categories and products with `is_active = false` are
 **omitted entirely**. Both lists are ordered by `position ASC`.
 
-`footer.price_note` is generated on the backend from the menu's
-`price_updated_at` in `dd.MM.yyyy` format, **on the Europe/Istanbul calendar** —
-never in the server's own time zone, so a price changed at 01:30 Istanbul time
-names that day and not the previous one. The server binary embeds its own copy
-of the zone database, so this does not depend on the host having one installed.
+`footer.price_date` is the menu's `price_updated_at` as a bare `YYYY-MM-DD`
+day, and `footer.price_note` the same day as a finished Turkish sentence in
+`dd.MM.yyyy` format — both **on the Europe/Istanbul calendar**, never in the
+server's own time zone, so a price changed at 01:30 Istanbul time names that day
+and not the previous one. The customer menu builds its own, translated sentence
+from `price_date`; `price_note` stays for older clients. Both are `""` when the
+menu's `show_price_date` is `false`. The server binary embeds its own copy of the
+zone database, so this does not depend on the host having one installed.
 
 `footer.vat_note` is filled when the menu's `show_vat_note` is `true`: it is the
 trimmed `vat_note_text`, or `Fiyatlarımıza KDV dahildir.` when that text is
 blank — the sentence the dashboard's settings page shows as the placeholder of
 an empty field. With `show_vat_note` off it is `""`.
 
-`business.contact_display` and `business.links` carry the menu's contact block
-settings — see section 8. When `contact_display` is `hidden`, the payload
-itself leaves the block out: `business.phone`, `business.instagram`,
-`business.wifi_ssid` and `business.wifi_password` are `null` and
-`business.links` is `[]`, whatever the menu stores. The owner still reads the
-stored values through `GET /api/menus/:id`. `business.address` is not part of
-the contact block and is sent in every mode, and the other three modes send
-everything — they only change where the block is drawn.
+`business.contact_display`, `business.contact_in_footer` and `business.links`
+carry the menu's contact block settings — see section 8. When the block is drawn
+**nowhere** — `contact_display` is `hidden` **and** `contact_in_footer` is
+`false` — the payload itself leaves it out: `business.phone`,
+`business.instagram`, `business.wifi_ssid` and `business.wifi_password` are
+`null` and `business.links` is `[]`, whatever the menu stores. The owner still
+reads the stored values through `GET /api/menus/:id`. `business.address` is not
+part of the contact block and is sent in every mode, and every other combination
+sends everything — it only changes where the block is drawn.
 
 `business.links` is not a copy of the stored list. Every stored entry is checked
 against the link rules of section 8 again, and an entry that breaks one is left
@@ -747,7 +846,8 @@ to ask before reusing it: an unchanged menu comes back as `304 Not Modified`
 with no body, and a changed one as a full `200` — so a category or a price saved
 in the dashboard shows up on the very next load of the customer menu, where a
 `max-age` would let a browser show a menu that is minutes old without asking. A
-`404` for an unknown business or menu carries neither header.
+`404` for an unknown business or menu carries neither header (it does carry
+`Vary: Accept-Language`).
 
 ### `GET /api/preview/menu` 🔒
 
@@ -756,8 +856,13 @@ the public menu, with one difference: it uses the business from the token and
 also includes inactive records, flagged with `"is_active": false` so the
 dashboard can dim them.
 
-The preview is built by the same code as the public menu, so a menu in `hidden`
-contact mode comes back redacted here too.
+The preview is built by the same code as the public menu, so a menu whose
+contact block is drawn nowhere comes back redacted here too.
+
+The preview reports its `"language"` too, but does **not** negotiate the owner's
+`Accept-Language`: it is `?lang=` when the menu offers it, else the menu's
+`default_language` — the preview follows the dashboard's language switch, not
+the owner's browser.
 
 ---
 
@@ -765,32 +870,52 @@ contact mode comes back redacted here too.
 
 Every menu the dashboard API returns — `GET /api/menus`, `GET /api/menus/:id`,
 and the menu in the response of `POST /api/menus` and `PUT /api/menus/:id` —
-carries the two settings of the customer menu's contact block: the Wi-Fi,
+carries the three settings of the customer menu's contact block: the Wi-Fi,
 Instagram and phone entries, followed by the owner's own links.
 
 ```json
 { "contact_display": "inline",
+  "contact_in_footer": false,
   "links": [ { "id": "rezervasyon", "label": "Rezervasyon", "url": "https://rezervasyon.example/masa" } ] }
 ```
 
 `links` is always an array — `[]` for a menu without links, never `null`. A new
-menu starts with `"contact_display": "inline"` and `"links": []`, and every menu
-that already existed received the same two values when migration
-`011_menu_contact_links.sql` added the columns.
+menu starts with `"contact_display": "inline"`, `"contact_in_footer": false` and
+`"links": []`.
 
 ### `contact_display`
 
-| Id | Label | Home view of the customer menu | Footer of the product screens |
-|---|---|---|---|
-| `inline` | Yan yana | one row of chips — Wi-Fi, Instagram, Telefon, then each link; tapping a chip opens its details | the compact list |
-| `list` | Açık liste | the same entries as an always-open list | the compact list |
-| `footer` | Sadece alt bilgi | nothing | the compact list |
-| `hidden` | Hiç gösterme | nothing | nothing |
+Where the **home view** of the customer menu draws the block — and nothing else:
 
-`POST` and `PUT` accept exactly these four ids. Anything else — another word, a
-different case, surrounding spaces, a number, `null` — is `422`
-`Geçersiz iletişim görünümü.` In `hidden` mode the public payload does not carry
-the block at all (see section 7).
+| Id | Label | Home view of the customer menu |
+|---|---|---|
+| `inline` | Yan yana | one row of chips — Wi-Fi, Instagram, Telefon, then each link; tapping a chip opens its details |
+| `list` | Açık liste | the same entries as an always-open list |
+| `hidden` | Ana sayfada gösterme | nothing |
+
+`POST` and `PUT` accept these three ids, plus the **legacy** `footer`, which is
+stored as the pair it always meant: `"contact_display": "hidden"` **and**
+`"contact_in_footer": true` — also when the same body sends
+`contact_in_footer: false`. Migration `012_menu_contact_in_footer.sql` converted
+every stored `footer` row the same way. The database constraint still admits
+`footer` for now — the previous release keeps serving, and writing it, while a
+deploy starts this one — and a stored `footer` is read and answered as
+`hidden` with `contact_in_footer: true`. A later migration narrows the
+constraint once no release that writes it can still be running.
+Anything else — another word, a different case, surrounding spaces, a number,
+`null` — is `422` `Geçersiz iletişim görünümü.`
+
+### `contact_in_footer`
+
+`true` repeats the compact contact list in the footer of the product screens;
+`false` — the default — leaves that footer to its standard content (the legal
+notices, the "Yerli Üretim" badge, the price date and the credit). A boolean;
+anything else is `422` `contact_in_footer alanı true/false olmalıdır.` (`null`
+reads as `false`, like every other switch of a menu).
+
+When `contact_display` is `hidden` and `contact_in_footer` is `false`, the block
+is drawn nowhere and the public payload does not carry it at all (see
+section 7).
 
 ### `links`
 
@@ -892,16 +1017,197 @@ Public. The fixed catalogues the dashboard builds its pickers from:
 `splash_display_modes`, `slide_fade_modes`, `header_display_modes`,
 `contact_display_modes`, `languages` and `rounding_modes`.
 
-`contact_display_modes` lists the ids `contact_display` accepts, with their
-Turkish labels, in this order:
+`contact_display_modes` lists the ids `contact_display` stores, with their
+Turkish labels, in this order (the legacy `footer` is accepted on write but not
+listed — see section 8):
 
 ```json
 { "contact_display_modes": [
     { "id": "inline", "label": "Yan yana" },
     { "id": "list",   "label": "Açık liste" },
-    { "id": "footer", "label": "Sadece alt bilgi" },
-    { "id": "hidden", "label": "Hiç gösterme" } ] }
+    { "id": "hidden", "label": "Ana sayfada gösterme" } ] }
 ```
+
+---
+
+## 10. Visitor analytics
+
+### `POST /api/public/events`
+
+Public, no session. The customer menu reports what a visitor looks at — usually
+through `navigator.sendBeacon`, so the body is read as JSON **whatever the
+`Content-Type`** (`text/plain` included). At most 2048 bytes (`413` above).
+
+```json
+{ "business_slug": "melly-coffee", "menu_slug": "ana-menu",
+  "type": "product_view",
+  "category_id": "uuid", "product_id": "uuid",
+  "visitor_id": "k3J9x_2a", "language": "en" }
+```
+
+| Field | Rule |
+|---|---|
+| `business_slug`, `menu_slug` | required; must name a **published** menu of that business |
+| `type` | `menu_view`, `category_view` or `product_view` |
+| `category_id` | a uuid; required for `category_view`; must be a category of that menu |
+| `product_id` | a uuid; required for `product_view`; must be a product in a category of that menu — and in `category_id`, when both are sent. Sent without `category_id`, the event is stored with the product's category |
+| `visitor_id` | optional; 1–64 characters of `[A-Za-z0-9_-]` — a random id the page keeps in the browser |
+| `language` | optional; one of the supported language codes |
+
+Success is **`204 No Content`** with no body. A body that is not a JSON object
+of strings is `400`; every other refusal — an unknown type, a missing or
+malformed id, a menu that is not published, a category or product of another
+menu or tenant, a bad `visitor_id` or `language` — is `422` and stores nothing.
+
+`204` means **accepted**, not necessarily stored. A valid event is answered
+`204` and **not** stored when:
+
+- it **repeats** an event of the same visitor (`visitor_id`, or address and
+  user agent without one), type, menu, category and product sent less than
+  **10 seconds** earlier — a double tap or a dialog opened twice is one look;
+- its business has already stored **`ANALYTICS_DAILY_EVENT_CAP`** events
+  (default `10000`; `0` = no cap) that Europe/Istanbul calendar day. The first
+  such event of the day writes one line to the server log naming the business;
+  the count survives a restart, because it starts from what the table holds.
+
+Neither is signalled to the page, which has nothing to do differently.
+
+Stored with each event: the visitor's address, **source port** and how the
+address was established (`ip`, `port`, `ip_source` — the same resolver as the
+request log line, see `CLIENT_PORT_HEADER` / `EDGE_SECRET`), the `User-Agent`
+cut to 300 characters, the `language` and the time. Unique visitors are counted
+by `visitor_id` when sent, otherwise by a hash of address and user agent.
+
+Rate limited per client (`middleware.ClientIPKey`), with two budgets:
+
+| Address | Budget | Why |
+|---|---|---|
+| proven (`EDGE_SECRET` matched) — the key is the visitor's own address | **120 a minute** | one person tapping as fast as they can read sends ~20; 120 is six of them behind one Wi-Fi or carrier NAT |
+| anything else — the key may be a shared edge address | **600 a minute** | sized for a crowd behind one Cloudflare egress address |
+
+Over it: `429` `RATE_LIMITED`. The budgets bound a rate; what bounds the
+table is the repeat rule and the daily cap above.
+
+**Retention.** These rows hold IP addresses and ports, which are personal data
+under KVKK. Events older than `ANALYTICS_RETENTION_DAYS` (default `90`; `0`
+keeps them forever; at most `3650` — a larger value is lowered to it) are
+deleted at start-up and every 24 hours. Deleting a menu deletes its events.
+
+### `GET /api/analytics/summary` 🔒
+
+Query: `menu_id` (optional), `from`, `to` (optional, `YYYY-MM-DD`, inclusive,
+**Europe/Istanbul** calendar days). With neither date the window is the last 30
+days, today included; with only `from` it runs to today, with only `to` it is
+the 30 days ending then. `from` after `to`, a window longer than 366 days, a
+malformed date or a year outside 2000–9999 is `422`
+(`Başlangıç tarihi YYYY-AA-GG biçiminde olmalıdır.` /
+`Bitiş tarihi YYYY-AA-GG biçiminde olmalıdır.`); a malformed `menu_id` is
+`400` and a menu of another business `404`.
+
+```json
+{ "from": "2026-08-27", "to": "2026-09-25",
+  "total_visits": 412, "unique_visitors": 268,
+  "menu_views": 412, "category_views": 903, "product_views": 1377,
+  "daily": [ { "date": "2026-08-27", "visits": 12, "unique_visitors": 9,
+               "category_views": 30, "product_views": 41 }, … ],
+  "top_categories": [ { "id": "uuid", "name": "Kahveler", "views": 210 } ],
+  "top_products": [ { "id": "uuid", "name": "Latte", "category_name": "Kahveler", "views": 96 } ] }
+```
+
+- `total_visits` = `menu_views` = the number of `menu_view` events.
+- `unique_visitors` counts distinct visitors over **all** events of the window.
+- `daily` has one entry per day of the window, empty days included (zeros).
+- `top_categories` / `top_products`: at most 10 each, most viewed first, among
+  the records that still exist; names are in the default language of the menu
+  the record is on. A deleted record's views still count in the totals.
+
+### `GET /api/analytics/events` 🔒
+
+Query (all optional): `menu_id`, `type`, `from`, `to` (as above, either may be
+left out; the same 2000–9999 year range), `ip` (a prefix of hex digits, `.`
+and `:` — `85.105.` matches a whole block), `limit` (default 50, at most 200 —
+a larger value is lowered), `offset` (default 0). Anything malformed is `422`;
+another business's `menu_id` is `404`.
+
+```json
+{ "items": [
+    { "id": "uuid", "created_at": "2026-09-25T14:03:11.52+03:00",
+      "type": "product_view",
+      "menu_id": "uuid", "menu_name": "Ana Menü",
+      "category_id": "uuid", "category_name": "Kahveler",
+      "product_id": "uuid", "product_name": "Latte",
+      "ip": "85.105.12.34", "port": 51234, "ip_source": "cloudflare",
+      "visitor_id": "k3J9x_2a", "language": "en",
+      "user_agent": "Mozilla/5.0 (iPhone; …)" } ],
+  "total": 1377, "limit": 50, "offset": 0 }
+```
+
+Newest first. `ip` and `port` are `null` when they could not be established
+(`port` is known only for requests proven to come through Cloudflare — see
+`EDGE_SECRET`). `category_name` / `product_name` are `null` when that record has
+been deleted since; the ids stay.
+
+Both dashboard reads answer `Cache-Control: no-store` and only ever read the
+session's own business.
+
+---
+
+## 11. Audit trail 🔒
+
+### `GET /api/audit-logs`
+
+Query (all optional): `entity_type`, `action`, `limit` (default 50, at most
+200), `offset`. An unknown `entity_type` or `action` is `422`
+`Geçersiz kayıt türü.` / `Geçersiz işlem türü.`
+
+```json
+{ "items": [
+    { "id": "uuid", "created_at": "2026-09-25T14:03:11.52+03:00",
+      "user_id": "uuid", "user_email": "owner@example.com",
+      "action": "menu.update", "entity_type": "menu",
+      "entity_id": "uuid", "entity_label": "Ana Menü",
+      "changes": {
+        "phone": { "old": "+90 555 000 00 00", "new": "+90 555 111 11 11" },
+        "wifi_password": { "old": "••••", "new": "••••" },
+        "logo_url": { "old": null, "new": "/uploads/1790000000-ab12cd34.svg" } },
+      "ip": "85.105.12.34", "port": 51234, "ip_source": "cloudflare" } ],
+  "total": 214, "limit": 50, "offset": 0 }
+```
+
+Newest first, the session's business only. One row per successful write:
+
+| `action` | `entity_type` | `entity_id` / `entity_label` | `changes` |
+|---|---|---|---|
+| `product.create` | product | the product / its name | every field the product carries, `old: null` |
+| `product.update` | product | the product / its name | only the fields that changed; translations as `translations.<lang>.<field>` |
+| `product.price` | product | the product / its name | `price` (the inline quick edit) |
+| `product.delete` | product | the product / its name | a snapshot of the product, `new: null` |
+| `product.bulk_price` | product | `null` / the menu's name | `percentage`, `rounding`, `affected`, `category_ids` (when narrowed) and `prices`: `old` and `new` lists of `{id, name, price}` for every product whose price moved |
+| `product.reorder` | product | the target category / its name | `order`: the product names in their new order |
+| `category.create` / `category.update` / `category.delete` | category | the category / its name | as for products; a delete adds `deleted_products` |
+| `category.reorder` | category | `null` / `""` | `order`: the category names in their new order |
+| `menu.create` | menu | the menu / its name | the settings the request named |
+| `menu.update` | menu | the menu / its name | **every** setting that changed — logo, cover, phone, address, Instagram, Wi-Fi, links, `contact_display`, `contact_in_footer`, theme, font, colours, languages, splash, header, VAT / price-date / Yerli Üretim switches, slug, publication, … |
+| `menu.delete` | menu | the menu / its name | `name`, `slug` |
+| `business.update` | business | the business / its name | `name`, `slug` |
+| `account.password_change` | account | the user / the e-mail | `method`: `dashboard` or `reset_link` |
+| `upload.create` | upload | the stored file name / the uploaded file's own name | `url`, `size`, `content_type` |
+
+A save that changes nothing, a re-sent identical price and a bulk update that
+moves no price record nothing; a refused request records nothing. A Wi-Fi
+password is always stored as `"••••"` (`null` when there is none), and an
+account password is never stored in any form — not the old one, not the new
+one, not a hash.
+
+`user_email` and `entity_label` are snapshots taken when the row was written.
+`ip`, `port` and `ip_source` come from the same resolver as the request log
+line. Every row except `upload.create` is written **inside the transaction of
+the write it describes**, so a write and its row commit or roll back together
+and a write retried after a lock conflict is recorded once. The `old` side of
+an update, and a delete's snapshot, are read in that same transaction under
+the write's own row lock, so a change another request committed a moment
+earlier is never reported as this one's, and a change that puts back what
+another request had just changed is still recorded.
 
 ---
 
@@ -911,11 +1217,13 @@ Turkish labels, in this order:
 |---|---|
 | 200 | Success |
 | 201 | Created |
+| 204 | Event accepted (`POST /api/public/events`) — no body; a repeat or an event past the daily cap is accepted without being stored |
 | 400 | Malformed request body |
 | 401 | Missing or invalid token |
 | 403 | A menu of another business named as the target of a write — the `menu_id` of a category create or move, or of a bulk price update |
 | 404 | Record or business not found — including a category of another business named by a product write, and a menu or category deleted while a write into it was running |
 | 409 | Email or slug collision |
-| 413 | File too large |
-| 422 | Validation error (required field, invalid price, …) |
+| 413 | File too large, or an event body over 2048 bytes |
+| 422 | Validation error (required field, invalid price, an unsafe SVG, a raster file whose bytes are not an image, …) |
+| 429 | Rate limited (`RATE_LIMITED`) — password reset, events |
 | 500 | Server error |

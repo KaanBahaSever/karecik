@@ -1,8 +1,8 @@
 import { ChevronRight, UtensilsCrossed } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 
 import { getSubdomain } from '../../lib/subdomain'
-import { isRtl } from '../../locales/index.js'
+import { isRtl, languageDir, t, textDir } from '../../locales/index.js'
 import { themeVariables } from '../../themes/themes'
 import MenuFooter from './MenuFooter.jsx'
 
@@ -36,25 +36,6 @@ const TWO_LINES = {
   overflow: 'hidden',
 }
 
-// Turkish is the product language; every other language falls back to English,
-// exactly as the inline strings in MenuContent do.
-const COPY = {
-  tr: {
-    choose: 'Bir menü seçin',
-    empty: 'Yayında menü yok',
-    emptyDetail: 'Bu işletmenin şu anda yayında bir menüsü bulunmuyor.',
-  },
-  en: {
-    choose: 'Choose a menu',
-    empty: 'No active menus',
-    emptyDetail: 'This business has no published menu right now.',
-  },
-}
-
-function copyFor(language) {
-  return COPY[language] || COPY.en
-}
-
 /**
  * Where a card points.
  *
@@ -62,9 +43,19 @@ function copyFor(language) {
  * single path segment away; on the path fallback both segments are needed.
  * Both forms are routes of this same app, so <Link> keeps it a client-side
  * navigation instead of a full page load.
+ *
+ * The directory's own query string travels along, as it does on CustomerMenu's
+ * single-menu redirect: the ?lang= this list was opened with is the language
+ * the chosen menu must open in too, and without it the menu would fall back to
+ * a remembered pick or the browser's language one tap later.
+ *
+ * @param {string} businessSlug
+ * @param {string} menuSlug
+ * @param {string} search - location.search: '' or '?…'
  */
-function menuPath(businessSlug, menuSlug) {
-  return getSubdomain() ? `/${menuSlug}` : `/m/${businessSlug}/${menuSlug}`
+function menuPath(businessSlug, menuSlug, search = '') {
+  const path = getSubdomain() ? `/${menuSlug}` : `/m/${businessSlug}/${menuSlug}`
+  return `${path}${search}`
 }
 
 /**
@@ -74,10 +65,10 @@ function menuPath(businessSlug, menuSlug) {
  * @param {boolean} embedded - Rendered inside an iframe / narrow container
  */
 export default function MenuDirectory({ business, menus, language = 'tr', embedded = false }) {
+  const { search } = useLocation()
   const tenant = business || {}
   const entries = Array.isArray(menus) ? menus.filter((entry) => entry?.slug) : []
   const businessSlug = tenant.business_slug || ''
-  const text = copyFor(language)
 
   // `business_name` is the tenant; `name` is a menu name and is absent on an
   // unresolved payload. The slug is the last resort — it is at least the thing
@@ -88,7 +79,8 @@ export default function MenuDirectory({ business, menus, language = 'tr', embedd
     <div
       className={embedded ? 'min-h-full w-full' : 'min-h-screen w-full'}
       style={NEUTRAL_THEME}
-      dir={isRtl(language) ? 'rtl' : 'ltr'}
+      dir={languageDir(language)}
+      lang={language}
     >
       <div className="mx-auto max-w-lg px-4 py-5">
         <header className="pt-2">
@@ -96,11 +88,11 @@ export default function MenuDirectory({ business, menus, language = 'tr', embedd
             className="text-xl font-semibold leading-tight"
             style={{ color: 'var(--menu-text)' }}
           >
-            {heading}
+            <bdi dir={textDir(heading, language)}>{heading}</bdi>
           </h1>
           {entries.length > 0 ? (
             <p className="mt-1 text-sm" style={{ color: 'var(--menu-muted)' }}>
-              {text.choose}
+              {t('chooseMenu', language)}
             </p>
           ) : null}
         </header>
@@ -123,19 +115,19 @@ export default function MenuDirectory({ business, menus, language = 'tr', embedd
             </div>
 
             <h2 className="mt-4 text-base font-semibold" style={{ color: 'var(--menu-text)' }}>
-              {text.empty}
+              {t('noActiveMenus', language)}
             </h2>
             <p className="mt-1.5 text-sm" style={{ color: 'var(--menu-muted)' }}>
-              {text.emptyDetail}
+              {t('noActiveMenusDetail', language)}
             </p>
           </div>
         ) : (
           /* ------------------------------------------------- menu cards */
-          <nav className="mt-5 flex flex-col gap-2.5" aria-label={text.choose}>
+          <nav className="mt-5 flex flex-col gap-2.5" aria-label={t('chooseMenu', language)}>
             {entries.map((entry) => (
               <Link
                 key={entry.slug}
-                to={menuPath(businessSlug, entry.slug)}
+                to={menuPath(businessSlug, entry.slug, search)}
                 className="flex items-center gap-3 px-4 py-3.5"
                 style={{
                   backgroundColor: 'var(--menu-surface)',
@@ -149,14 +141,16 @@ export default function MenuDirectory({ business, menus, language = 'tr', embedd
                     className="truncate text-sm font-medium"
                     style={{ color: 'var(--menu-text)' }}
                   >
-                    {entry.name || entry.slug}
+                    <bdi dir={textDir(entry.name || entry.slug, language)}>
+                      {entry.name || entry.slug}
+                    </bdi>
                   </p>
                   {entry.description ? (
                     <p
                       className="mt-0.5 text-xs"
                       style={{ color: 'var(--menu-muted)', ...TWO_LINES }}
                     >
-                      {entry.description}
+                      <bdi dir={textDir(entry.description, language)}>{entry.description}</bdi>
                     </p>
                   ) : null}
                 </div>
@@ -174,9 +168,10 @@ export default function MenuDirectory({ business, menus, language = 'tr', embedd
           </nav>
         )}
 
-        {/* No menu is resolved, so there is no footer payload — MenuFooter's
-            home scope is just the "Karecik ile hazırlandı" signature. */}
-        <MenuFooter business={tenant} footer={null} language={language} scope="home" />
+        {/* The same footer as every menu screen, minus what only a menu has:
+            no menu is resolved, so there are no prices to date, no VAT note and
+            no badge — the directory scope is the signature alone. */}
+        <MenuFooter business={tenant} footer={null} language={language} scope="directory" />
       </div>
     </div>
   )

@@ -1,4 +1,5 @@
-// Normalisation of the category records the customer menu renders.
+// Normalisation of the category records the customer menu renders, and of the
+// two free-text fields of the products inside them (see productTexts).
 //
 // Everything a category card draws is optional: the icon, the image, the
 // description, even the products. A payload can also be older than the rules the
@@ -158,6 +159,43 @@ export function categoryImageUrl(url) {
   return trimmed === '' ? null : trimmed
 }
 
+/*
+  SVG images.
+
+  Logos, category pictures and product photos may be SVG files (image/svg+xml,
+  stored under /uploads with a .svg name). The customer menu always draws them
+  through <img>, never inlined, put in an <object> or set as innerHTML: an
+  <img> renders an SVG as a plain picture with its scripts, event handlers and
+  external loads disabled, which is the one mode in which markup an owner
+  uploaded is harmless.
+
+  What differs is sizing. A photo has intrinsic pixels; an SVG may have no
+  width or height at all — only a viewBox, or not even that — and then the
+  browser invents 300 x 150 or collapses it, depending on the engine and the
+  layout around it. So an SVG gets an explicit box from its caller, and is
+  CONTAINED in that box rather than covering it: a logo or an illustration is
+  artwork whose edges matter, not a photograph that can lose a margin.
+*/
+
+/**
+ * Whether a URL points at an SVG image: a path ending in .svg or .svgz (before
+ * any query or fragment), or an image/svg+xml data URL.
+ *
+ *   '/uploads/1726-ab12cd34.svg'          -> true
+ *   'https://cdn.example.com/logo.SVG?v=2' -> true
+ *   'data:image/svg+xml;base64,PHN2Zz4='   -> true
+ *   '/uploads/photo.png', '/svg/photo.jpg' -> false
+ *
+ * @param {unknown} url
+ * @returns {boolean}
+ */
+export function isSvgUrl(url) {
+  if (typeof url !== 'string') return false
+  const trimmed = url.trim()
+  if (/^data:image\/svg\+xml[;,]/i.test(trimmed)) return true
+  return /\.svgz?$/i.test(trimmed.split(/[?#]/)[0])
+}
+
 /** True for `{...}` records; false for null, arrays, strings, numbers and the like. */
 function isPlainObject(value) {
   return Object.prototype.toString.call(value) === '[object Object]'
@@ -209,4 +247,114 @@ export function normalizeCategories(list, language = 'tr') {
   })
 
   return categories
+}
+
+/* ------------------------------------------------------ product texts */
+
+/*
+  A product has two free-text fields that are easy to fill with the same words:
+  `description`, the owner's sentence about the dish, and `ingredients`, what
+  is in it. Plenty of menus were typed with the ingredient list pasted into
+  both, and the detail sheet then printed it twice — once as the paragraph,
+  once under "Ingredients".
+
+  "The same" is decided loosely, the way a reader would: surrounding and
+  repeated white space, letter case and a closing full stop or comma make no
+  difference. Anything more than that — a reworded sentence, a different
+  order — is a different text and both are shown.
+
+  The product dialog of the dashboard warns the owner about the same overlap
+  with the same rule (lib/productText.js), so a product the dialog calls a
+  repeat is exactly one the menu collapses.
+*/
+
+/** Punctuation a text may end with without becoming a different text. */
+const TRAILING_PUNCTUATION = /[\s.,;:!?…。·،؛؟۔]+$/
+
+/**
+ * The form two product texts are compared in: Unicode-normalized, lowercased
+ * the Turkish way (so "İ" and "i" match), white space collapsed to single
+ * spaces and trimmed, trailing punctuation dropped. Anything but a string
+ * gives ''.
+ *
+ *   ' Espresso,  SÜT.  '  -> 'espresso, süt'
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function comparableText(value) {
+  if (typeof value !== 'string') return ''
+
+  let text = typeof value.normalize === 'function' ? value.normalize('NFC') : value
+  try {
+    text = text.toLocaleLowerCase('tr')
+  } catch {
+    text = text.toLowerCase()
+  }
+  return text.replace(/\s+/g, ' ').trim().replace(TRAILING_PUNCTUATION, '')
+}
+
+/**
+ * The form the menu's search compares text in: lowercased the Turkish way, so
+ * "İ" is "i", and then with the dotless "ı" folded into "i" as well.
+ *
+ * Turkish lowercasing alone turns the capital I of "Ice Latte" into "ı", and a
+ * visitor who types "ice" — in any of the six languages — finds none of the
+ * Ice drinks; lowercasing without Turkish rules breaks "İ" apart instead. With
+ * both folded into one letter "ICE", "Ice", "ıce" and "ice" all meet, at the
+ * price of "ırmak" also finding "irmak", which no menu search is poorer for.
+ * Numbers are searched as their digits; anything else that is not a string
+ * gives ''.
+ *
+ *   'Ice Latte'  -> 'ice latte'
+ *   'İÇECEK'     -> 'içecek'
+ *   'Irmak'      -> 'irmak'
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function searchFold(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : ''
+  if (typeof value !== 'string') return ''
+
+  let text = typeof value.normalize === 'function' ? value.normalize('NFC') : value
+  try {
+    text = text.toLocaleLowerCase('tr')
+  } catch {
+    // Without locale support "İ" lowercases to "i" plus a combining dot.
+    text = text.toLowerCase().replace(/i̇/g, 'i')
+  }
+  return text.replace(/ı/g, 'i')
+}
+
+/**
+ * What the customer menu prints for a product's two texts.
+ *
+ *   subtitle     the card's grey line: the description, or the ingredients
+ *                when there is no description
+ *   description  the detail sheet's paragraph — '' when it only repeats the
+ *                ingredients, which the sheet shows under their own heading
+ *   ingredients  the detail sheet's "Ingredients" section
+ *
+ * All three are trimmed strings, '' when absent. Search reads the raw fields,
+ * so a word in either one still finds the product.
+ *
+ * @param {unknown} product
+ * @returns {{subtitle: string, description: string, ingredients: string}}
+ */
+export function productTexts(product) {
+  const record = isPlainObject(product) ? product : {}
+  const description = typeof record.description === 'string' ? record.description.trim() : ''
+  const ingredients = typeof record.ingredients === 'string' ? record.ingredients.trim() : ''
+
+  const repeats =
+    description !== '' &&
+    ingredients !== '' &&
+    comparableText(description) === comparableText(ingredients)
+
+  return {
+    subtitle: description || ingredients,
+    description: repeats ? '' : description,
+    ingredients,
+  }
 }

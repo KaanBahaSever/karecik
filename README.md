@@ -20,12 +20,15 @@
 
 - **Menu editor** — categories and products with drag-and-drop ordering, inline price editing and bulk percentage updates with rounding rules.
 - **Multi-branch, multi-menu** — several branches per business, menus shared across branches or scoped to one, with per-branch price and availability overrides.
-- **Multilingual** — six languages per menu, stored as JSONB translations and resolved server-side.
+- **Multilingual** — six languages per menu, stored as JSONB translations and resolved server-side; a visitor who has not picked one gets the first language of their browser's `Accept-Language` the menu offers, else the menu's default.
 - **Product detail** — images, ingredients, allergen warnings, calorie counts and custom badges (free text, icon, colours).
 - **Branding** — 6 themes, 8 typefaces, accent colour, solid or image background with an overlay, and a configurable splash screen with exit animations.
 - **Live preview** — a true 390×844 mobile viewport in the dashboard, with on-demand splash replay.
 - **QR codes** — PNG download, printing and address copying.
 - **Customer menu** — served from `business.karecik.com/menu-slug` or `/m/:business/:menu`, with search, language switching, Wi-Fi credentials and automatic legal notices.
+- **Visitor analytics** — total and unique visitors, menu, category and product views per day, top lists, and a drill-down of every view with the visitor's address and source port (panel → **Analitik**, `/panel/analitik`); kept for `ANALYTICS_RETENTION_DAYS`.
+- **Audit trail** — every administrative write (products, prices, categories, menu settings, logos, contact details, account) recorded with who, from where and which fields changed (panel → **Değişiklik Geçmişi**, `/panel/gecmis`).
+- **Safe SVG logos** — uploaded SVGs are parsed and refused when they carry script or external references, and served under a sandboxing Content-Security-Policy.
 
 > The codebase is English; the shipped product is Turkish, with menus publishable in English, German, Russian, Arabic and French.
 
@@ -39,7 +42,7 @@
 | Tenancy | Wildcard subdomain resolution with a path-based fallback |
 
 ```text
-backend/    cmd/{api,resetpw} · internal/{config,database,mailer,models,repository,handlers,middleware,router,session,utils}
+backend/    cmd/{api,resetpw} · internal/{audit,clientip,config,database,eventgate,mailer,models,repository,handlers,middleware,router,session,svgsafe,utils}
 frontend/   src/{lib,themes,locales,components,pages}
 docs/       SETUP · API · ARCHITECTURE · FRONTEND-CONTRACT
 ```
@@ -98,6 +101,8 @@ the API has to run as a single instance — see [DEPLOY](docs/DEPLOY.md).
 | `MAX_UPLOAD_BYTES` | `5242880` | Largest accepted upload |
 | `SERVE_STATIC` | `false` | Serve `frontend/dist` from the API |
 | `APP_ENV` | `development` | `development` or `production` |
+| `ANALYTICS_RETENTION_DAYS` | `90` | Days visitor events (menu/category/product views) are kept. They hold visitor IP addresses and source ports — personal data under KVKK — so older rows are deleted at start-up and every 24 h. `0` keeps them forever; a negative value falls back to `90`, one above `3650` is lowered to `3650` |
+| `ANALYTICS_DAILY_EVENT_CAP` | `10000` | Visitor events one business may store per Europe/Istanbul day. Beyond it the public endpoint still answers `204` but stores nothing, and logs the first refusal of the day once. A repeat of the same view within 10 s is never stored either. `0` disables the cap; a negative value falls back to `10000` |
 
 Deeper reference: [SETUP](docs/SETUP.md) · [API](docs/API.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [FRONTEND-CONTRACT](docs/FRONTEND-CONTRACT.md)
 

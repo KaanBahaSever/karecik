@@ -90,34 +90,68 @@ karecik/
 ├── backend/
 │   ├── cmd/api/main.go         Entry point: config → db → migrations → server
 │   ├── internal/
+│   │   ├── audit/              Audit trail vocabulary and field diffs (pure)
+│   │   ├── clientip/           Client address + source port resolution
 │   │   ├── config/             .env parsing and defaults
 │   │   ├── database/           pgxpool connection, migration runner, dev fixtures
+│   │   ├── eventgate/          Which visitor events are stored: repeats, daily cap
 │   │   ├── models/             Data structures plus the public menu DTOs
 │   │   ├── repository/         SQL layer (handlers never write SQL)
 │   │   ├── handlers/           HTTP endpoints (one Handler struct, split by file)
 │   │   ├── middleware/         Session guard, subdomain resolution
 │   │   ├── router/             Route registration, CORS, static files
 │   │   ├── session/            In-memory session store (no DB, no Redis)
-│   │   └── utils/              Session tokens, bcrypt, slug, currency, themes
-│   ├── migrations/             001_init.sql, 002_brand_color.sql + embed.go
+│   │   ├── svgsafe/            SVG upload check (XML parser, allowlists)
+│   │   └── utils/              Session tokens, bcrypt, slug, currency, themes,
+│   │                           Accept-Language negotiation
+│   ├── migrations/             001_init.sql … 014_audit_logs.sql + embed.go,
+│   │                           reverse scripts in down/ (never run automatically)
 │   └── uploads/                Uploaded logos and product images
 │
 └── frontend/
-    └── src/
-        ├── lib/                api.js, auth.jsx, format.js, subdomain.js
-        ├── themes/             themes.js (6 themes), fonts.js (8 typefaces)
-        ├── locales/            languages, allergens, customer menu copy
-        ├── components/
-        │   ├── ui/             Modal, ConfirmModal, Loading, EmptyState,
-        │   │                   Toast, ImageUploader
-        │   ├── landing/        Header, PhoneFrame, SignUpModal
-        │   ├── dashboard/      CategoryRow, ProductRow, modals, LivePreview
-        │   └── menu/           MenuContent, SplashScreen, ProductDetailModal, MenuFooter
-        └── pages/
-            ├── Landing.jsx · Login.jsx · SignUp.jsx
-            ├── dashboard/  DashboardLayout · MenuEditor · Design · Settings · QrCode
-            └── menu/        CustomerMenu.jsx
+    ├── src/
+    │   ├── lib/                api.js, auth.jsx, format.js, subdomain.js,
+    │   │                       language.js (menu language choice),
+    │   │                       analytics.js (visitor events, sendBeacon),
+    │   │                       analyticsFormat.js · auditFormat.js (panel labels),
+    │   │                       imageUpload.js (client-side upload rules)
+    │   ├── themes/             themes.js (6 themes), fonts.js (8 typefaces)
+    │   ├── locales/            index.js: languages, allergens, customer menu copy
+    │   │                       in tr/en/de/ru/ar/fr; landing.js: tr/en/de
+    │   ├── components/
+    │   │   ├── ui/             Modal, ConfirmModal, Loading, EmptyState,
+    │   │   │                   Toast, ImageUploader
+    │   │   ├── landing/        Header, PhoneFrame, SignUpModal
+    │   │   ├── dashboard/      CategoryRow, ProductRow, modals, LivePreview
+    │   │   ├── analytics/      DailyVisitsChart, DateRangeFilter, Pagination
+    │   │   └── menu/           MenuContent, SplashScreen, ProductDetailModal, MenuFooter
+    │   └── pages/
+    │       ├── Landing.jsx · Login.jsx · SignUp.jsx
+    │       ├── dashboard/  DashboardLayout · MenuEditor · MenuSettings · QrHub ·
+    │       │               Analytics (/panel/analitik) · AuditLog (/panel/gecmis) · Account
+    │       └── menu/        CustomerMenu.jsx
+    └── tests/                  plain-node suites (npm test): contact, locales,
+                                menuLanguage, menuContent, menuAnalytics,
+                                landingLocales, dashboardAnalytics, ...
 ```
+
+### Visitor analytics and the audit trail, end to end
+
+```
+customer menu ──sendBeacon──▶ POST /api/public/events ──▶ menu_events
+ (lib/analytics.js)            (validated, IP + port + ip_source      │
+                                from the request-log resolver)         │ purged after
+                                                                       │ ANALYTICS_RETENTION_DAYS
+panel /panel/analitik ◀── GET /api/analytics/summary | events ◀───────┘
+
+panel writes ──▶ handler ──▶ repository write + audit hook ──▶ audit_logs
+                              (same transaction)                  │
+panel /panel/gecmis ◀── GET /api/audit-logs ◀─────────────────────┘
+```
+
+The customer menu reports a `menu_view` once per page load, a `category_view`
+per opened category and a `product_view` per opened product sheet — never from
+the landing page's demo iframe or the dashboard's live preview.
 
 ---
 
@@ -178,10 +212,40 @@ A wildcard SSL certificate is required (Let's Encrypt DNS-01 challenge).
 ## Data model
 
 ```
-users ──1:1──▶ businesses ──1:N──▶ categories ──1:N──▶ products
-                    │
+users ──1:1──▶ businesses ──1:N──▶ menus ──1:N──▶ categories ──1:N──▶ products
+                    │                 │
+                    │                 └──1:N──▶ menu_events   (visitor analytics)
+                    ├──1:N──▶ audit_logs                      (owner's writes)
                     └──1:N──▶ price_update_logs
 ```
+
+`menu_events` (migration 013) holds one row per menu, category or product view
+the customer page reports, with the visitor's address, source port and how the
+address was established — the same resolver the request log line uses. Its
+`category_id` and `product_id` deliberately have no foreign key: a cascade or a
+SET NULL would make every category or product delete touch an unbounded number
+of event rows inside a transaction whose lock order is pinned down below, and
+would rewrite the traffic history. The handler proves the ids belong to the
+menu before inserting; readers LEFT JOIN for names. Rows older than
+`ANALYTICS_RETENTION_DAYS` are purged at start-up and every 24 h (KVKK), in
+index-driven slices. The endpoint is public, so the table is also bounded on
+the way in (`internal/eventgate`, in memory): a repeat of the same view within
+10 s is not stored, and a business stores at most `ANALYTICS_DAILY_EVENT_CAP`
+events a day — both still answered `204`.
+
+`audit_logs` (migration 014) holds one row per successful administrative
+write. The row is written by a `repository.WriteHook` **inside the transaction
+of the write it describes**, as its last statement, so the two commit or roll
+back together and a write `RetryOnConflict` runs again is recorded once. The
+hook's INSERT only adds KEY SHARE locks on the business and user rows after
+every other lock of the write, so it cannot close a cycle with the lock order
+below. Diffs are computed from the records' JSON form (`internal/audit`), so a
+new menu setting is audited without anyone listing it; the Wi-Fi password is
+masked and account passwords are never recorded. The "before" side of an
+update's diff, and a delete's snapshot, are read inside that same transaction
+by a locking SELECT that runs right before the write and takes the write's own
+row lock (`repository.Update`), so a write committing in between can never be
+reported as this one's change.
 
 ### Multilingual content: JSONB
 
@@ -196,6 +260,14 @@ Category and product texts do not live in separate tables but in a
 Why: adding a language needs no schema change, everything is read in one row,
 and there is no JOIN cost. On read, `Translations.Resolve(lang, fallback)` is
 called: requested language → default language → the first non-empty entry.
+
+Which language is "requested" is negotiated per request
+(`utils.NegotiateLanguage`): an explicit `?lang=` the menu offers, else the
+first language of the browser's `Accept-Language` header the menu offers
+(`de-DE` counts as `de`), else the menu's `default_language`. The payload names
+the result in `language`, and the public responses carry
+`Vary: Accept-Language`. The customer page (`frontend/src/lib/language.js`)
+omits `lang` until the visitor picks one, then remembers the pick per tenant.
 
 `allergens` is a JSONB array as well: `["gluten", "sut"]`.
 
@@ -572,7 +644,11 @@ The `backend/migrations/*.sql` files are embedded into the binary with
 `//go:embed` and applied in order when the server starts. Applied versions are
 tracked in `schema_migrations`, and each file runs in its own transaction.
 
-To add a migration: create `003_xxx.sql` — nothing else is required.
+To add a migration: create the next numbered file (`015_xxx.sql`) — nothing
+else is required. Never edit a file that has already been applied anywhere: the
+runner skips every recorded version, so the change would never arrive. Make it
+idempotent (`IF NOT EXISTS`, drop-then-add for constraints) like the existing
+ones, and put its hand-run reverse script in `migrations/down/`.
 
 ---
 

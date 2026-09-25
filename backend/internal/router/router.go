@@ -75,11 +75,40 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 		MaxAge:           3600,
 	}))
 
-	// Uploaded images
+	// Uploaded images.
+	//
+	// These are files anybody with a dashboard login put on OUR origin, so they
+	// are served defensively on top of being checked on the way in (see
+	// handlers.Upload and package svgsafe):
+	//
+	//   - nosniff on every file: the browser uses the Content-Type we send and
+	//     never guesses one from the bytes, so nothing is ever run as a type it
+	//     was not stored as;
+	//   - a Content-Security-Policy on every file, which applies when somebody
+	//     opens the file's URL directly as a document — which an <img> tag
+	//     never does. default-src 'none' blocks every fetch and script,
+	//     style-src 'unsafe-inline' still lets an SVG logo's own inline styles
+	//     paint it, img-src data: its embedded raster images, and sandbox gives
+	//     the document a unique opaque origin with scripts disabled, so even a
+	//     file that slipped past the upload check — or was stored before it
+	//     existed — could neither run nor read the tenant's cookies;
+	//   - an SVG is served as image/svg+xml, stated explicitly rather than left
+	//     to the platform's extension table.
+	//
+	// The policy is on EVERY file rather than on the SVGs alone because telling
+	// the two apart from the request is exactly what cannot be trusted: the
+	// address a browser asks for and the file the static handler resolves it
+	// to are not the same string (percent-encoding, repeated slashes, a
+	// trailing slash, letter case on a case-insensitive disk), so a test on the
+	// requested extension can be steered past by spelling one file's address
+	// another way. On a PNG or a JPEG the policy costs nothing — a raster image
+	// opened directly still displays, and inside an <img> the header is never
+	// consulted.
 	app.Static("/uploads", cfg.UploadDir, fiber.Static{
-		Browse:    false,
-		MaxAge:    86400,
-		ByteRange: true,
+		Browse:         false,
+		MaxAge:         86400,
+		ByteRange:      true,
+		ModifyResponse: UploadHeaders,
 	})
 
 	// ------------------------------------------------------ public endpoints
@@ -155,6 +184,50 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	app.Get("/api/public/menu/:businessSlug", publicETag, h.PublicMenuByPath)
 	app.Get("/api/public/menu/:businessSlug/:menuSlug", publicETag, h.PublicMenuByPath)
 
+	// Visitor analytics — the customer menu reports each menu, category and
+	// product view here, usually through navigator.sendBeacon.
+	//
+	// The budget is per middleware.ClientIPKey, and what that key stands for
+	// depends on whether the request's address was PROVEN, so there are two
+	// budgets and every request is counted by exactly one of them:
+	//
+	//   - proven (EDGE_SECRET matched): the key is the visitor's own address.
+	//     A person reports one view per screen — the menu once, then a
+	//     category or a product every few seconds at the very most — so twenty
+	//     a minute is somebody tapping as fast as they can read. 120 a minute
+	//     is six such people at the same moment behind one address — a table
+	//     of phones on one café Wi-Fi, or on one carrier's NAT — and one
+	//     client alone never reaches it.
+	//   - anything else: the key is coarse. Behind an unverified Cloudflare it
+	//     is Cloudflare's egress address, which a whole city's worth of
+	//     visitors can share, so the budget is sized for a crowd: 600 a minute
+	//     is sixty people browsing at ten views a minute each behind one
+	//     shared address, a full restaurant at lunch. Lowering it would drop
+	//     real visitors' views long before it slowed down anybody else.
+	//
+	// Neither budget is what bounds the table any more: a repeat of the same
+	// view within seconds and every event past ANALYTICS_DAILY_EVENT_CAP are
+	// accepted without being stored (handlers.TrackEvent), whatever the rate.
+	// Limited requests are dropped with a 429 — a beacon does not retry — and
+	// cost the visitor nothing: a lost view is a missing row in a chart, never
+	// a page that does not open.
+	provenVisitor := func(c *fiber.Ctx) bool { return middleware.ClientAddrOf(c).Verified }
+	provenEventsLimiter := limiter.New(limiter.Config{
+		Next:         func(c *fiber.Ctx) bool { return !provenVisitor(c) },
+		Max:          ProvenVisitorEventsPerMinute,
+		Expiration:   time.Minute,
+		KeyGenerator: byIP,
+		LimitReached: tooManyRequests,
+	})
+	sharedEventsLimiter := limiter.New(limiter.Config{
+		Next:         provenVisitor,
+		Max:          SharedKeyEventsPerMinute,
+		Expiration:   time.Minute,
+		KeyGenerator: byIP,
+		LimitReached: tooManyRequests,
+	})
+	app.Post("/api/public/events", provenEventsLimiter, sharedEventsLimiter, h.TrackEvent)
+
 	// --------------------------------------------------- protected endpoints
 	api := app.Group("/api", middleware.Protected(h.Sessions, cfg))
 
@@ -195,6 +268,13 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 
 	// Dashboard live preview — "?menu=<slug>" is optional
 	api.Get("/preview/menu", h.PreviewMenu)
+
+	// Visitor analytics over what /api/public/events stored, and the audit
+	// trail of the owner's own writes. All three read the session's business
+	// only.
+	api.Get("/analytics/summary", h.AnalyticsSummary)
+	api.Get("/analytics/events", h.AnalyticsEvents)
+	api.Get("/audit-logs", h.ListAuditLogs)
 
 	// ------------------------------------------------- unknown /api requests
 	app.All("/api/*", func(c *fiber.Ctx) error {
@@ -265,6 +345,45 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	}
 }
 
+// The per-minute budgets of POST /api/public/events — see the note at the
+// route. Exported so the limiter suite asserts the numbers the router uses.
+const (
+	ProvenVisitorEventsPerMinute = 120
+	SharedKeyEventsPerMinute     = 600
+)
+
+// UploadPolicy is the Content-Security-Policy of every file served from
+// /uploads — see the note at the /uploads route.
+const UploadPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+
+// UploadHeaders sets the defensive headers of a file served from /uploads. It
+// runs for every file that was found — a HEAD, a range and a 304 included — so
+// every form of a response carries the same policy.
+//
+// nosniff and the policy do not depend on the request at all. Only the
+// explicit SVG Content-Type does, and it is decided by what was actually
+// served: the path as the static handler resolved it (decoded and normalised,
+// never c.Path(), which is the address exactly as the client spelled it), or
+// the type the handler itself derived from the file it found.
+func UploadHeaders(c *fiber.Ctx) error {
+	c.Set(fiber.HeaderXContentTypeOptions, "nosniff")
+	c.Set(fiber.HeaderContentSecurityPolicy, UploadPolicy)
+	if servedSVG(c) {
+		c.Set(fiber.HeaderContentType, "image/svg+xml")
+	}
+	return nil
+}
+
+// servedSVG reports whether the file /uploads is answering with is an SVG.
+func servedSVG(c *fiber.Ctx) bool {
+	resolved := strings.TrimRight(string(c.Context().Path()), "/")
+	if strings.EqualFold(filepath.Ext(resolved), ".svg") {
+		return true
+	}
+	served := strings.ToLower(string(c.Response().Header.ContentType()))
+	return strings.HasPrefix(served, "image/svg+xml")
+}
+
 // isAllowedOrigin decides whether an origin may call the API.
 // Besides the configured list it allows every subdomain of the root domain,
 // because customer menus are served from <business>.karecik.com.
@@ -298,9 +417,10 @@ func isAllowedOrigin(origin string, cfg *config.Config) bool {
 	// karecik.com with the owner's session cookie and READ THE ANSWER — the
 	// cookie is sent because the request targets karecik.com, and SameSite=Lax
 	// does not object because the two hosts are same-site. Uploaded SVGs are
-	// served inline from those same tenant hosts, so scanSVG would be the only
-	// thing standing between one tenant and every other tenant's dashboard. That
-	// is too much weight for one regular expression to carry.
+	// served from those same tenant hosts, so the upload check (package
+	// svgsafe) and the sandboxing policy on /uploads would be all that stood
+	// between one tenant and every other tenant's dashboard. Defences that
+	// matter that much are layered, not leaned on.
 	//
 	// In production the scheme is checked too, not just the hostname. Comparing
 	// only the host would accept "http://karecik.com" — and a plaintext origin

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Search, Star } from 'lucide-react'
 
-import { normalizeCategories } from '../../lib/category'
+import { trackMenuEvent } from '../../lib/analytics'
+import { isSvgUrl, normalizeCategories, productTexts, searchFold } from '../../lib/category'
 import { buildContactItems, contactDisplayMode } from '../../lib/contact'
 import { formatPrice } from '../../lib/format'
 import { getSubdomain } from '../../lib/subdomain'
@@ -9,7 +10,15 @@ import { useImageFallback } from '../../lib/useImageFallback'
 import { backgroundStyles, themeVariables } from '../../themes/themes'
 import { BadgeIcon } from '../../themes/badges'
 import { fontStack, loadFont } from '../../themes/fonts'
-import { findAllergen, findLanguage, isRtl, t } from '../../locales/index.js'
+import {
+  allergenLabel,
+  findAllergen,
+  findLanguage,
+  isRtl,
+  languageDir,
+  t,
+  textDir,
+} from '../../locales/index.js'
 import ErrorBoundary from '../ui/ErrorBoundary.jsx'
 import CategoryThumb from './CategoryThumb.jsx'
 import { ContactBar, ContactList } from './ContactInfo.jsx'
@@ -31,6 +40,28 @@ import MenuFooter from './MenuFooter.jsx'
  * deliberately absent — the things worth showing here are the contact details
  * (Wi-Fi first among them, laid out the way `contact_display` asks) and the
  * menu itself.
+ *
+ * RIGHT TO LEFT. The container carries `dir` for the active language, so in
+ * Arabic the whole layout mirrors: the grid fills from the right, a product's
+ * picture moves to the right of its name, the back arrow points the other way.
+ * Spacing and alignment therefore use Tailwind's LOGICAL utilities — ps/pe,
+ * ms/me, start/end, text-start/text-end — which follow `dir`, and never
+ * left/right ones, which do not. Two things deliberately do NOT mirror:
+ *
+ *   the language picker  a row of codes (TR EN DE RU AR FR) is a control, not
+ *                        text; it keeps the same left-to-right order in every
+ *                        language, so it never jumps under the thumb that just
+ *                        tapped it
+ *   prices               "145,00 ₺" sits in <bdi dir="ltr">, or right-to-left
+ *                        text would reorder it into "₺ 145,00"
+ *
+ * The owner's own texts — names, descriptions, a slogan — sit in a <bdi>
+ * whose direction textDir() picks. A product with no Arabic translation
+ * arrives in Turkish, and inside a right-to-left line "Espresso, süt." would
+ * print as ".Espresso, süt"; the isolate gives the text the direction of its
+ * own script while the line keeps the menu's alignment. An Arabic text that
+ * opens with a Latin loanword ("Frozen بالفراولة") is pinned right to left, or
+ * its first-letter guess would lay it out backwards.
  *
  * @param {object}   menu             - { business, categories, footer, menus }
  * @param {string}   language         - Active language code
@@ -66,11 +97,6 @@ function readableTextColor(hex) {
 
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
   return luminance > 0.6 ? '#111827' : '#ffffff'
-}
-
-/** Turkish-aware lowercasing, used for search. */
-function lower(value) {
-  return String(value || '').toLocaleLowerCase('tr')
 }
 
 /**
@@ -112,6 +138,76 @@ const TWO_LINES = {
 /** A value as display text: a string trimmed, anything else ''. */
 function plainText(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * What scrolls the menu: `window`, an element, or null for nothing at all.
+ *
+ * Standalone, the document scrolls — `window`. Embedded, it never does: the
+ * landing page's iframe pins the document and scrolls a wrapper div
+ * (CustomerMenu), and the dashboard preview scrolls a div inside its phone
+ * frame (LivePreview). That wrapper is found by walking up from the menu to the
+ * first ancestor that actually scrolls — not merely one whose overflow computes
+ * to `auto`, which an `overflow-x-hidden` element's does too — else to the
+ * first that could. The walk stops at the body and embedded mode never answers
+ * `window`, so the dashboard page around the preview is never scrolled from in
+ * here.
+ *
+ * @param {HTMLElement|null} node     - the menu's root element
+ * @param {boolean}          embedded
+ * @returns {Window|HTMLElement|null}
+ */
+function scrollerOf(node, embedded) {
+  if (!embedded) return typeof window === 'undefined' ? null : window
+  if (!node) return null
+
+  let candidate = null
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    if (parent === document.body || parent === document.documentElement) break
+    const { overflowY } = window.getComputedStyle(parent)
+    if (overflowY !== 'auto' && overflowY !== 'scroll' && overflowY !== 'overlay') continue
+    if (parent.scrollHeight > parent.clientHeight) return parent
+    if (!candidate) candidate = parent
+  }
+  return candidate
+}
+
+/** How far the scroller is scrolled. */
+function scrollOffset(scroller) {
+  if (!scroller) return 0
+  if (scroller === window) return window.scrollY || window.pageYOffset || 0
+  return scroller.scrollTop
+}
+
+/**
+ * Jumps the scroller to `top` at once — no smooth scroll: the new screen must
+ * already be in place when it is first painted.
+ *
+ * `behavior: 'instant'` is the value that also overrides a page-wide
+ * `scroll-behavior: smooth`. Browsers from before it was standardised reject
+ * the unknown value with a TypeError, and for those the two-number form does
+ * the same jump.
+ */
+function scrollViewportTo(scroller, top) {
+  if (!scroller) return
+  if (scroller !== window) {
+    scroller.scrollTop = top
+    return
+  }
+  try {
+    window.scrollTo({ top, behavior: 'instant' })
+  } catch {
+    window.scrollTo(0, top)
+  }
+}
+
+/**
+ * A price, isolated left-to-right. In the Arabic menu the surrounding text
+ * runs right to left, and without the isolation the bidi algorithm moves a
+ * trailing currency symbol to the front: "145,00 ₺" would read "₺ 145,00".
+ */
+function Price({ value, currency }) {
+  return <bdi dir="ltr">{formatPrice(value, currency)}</bdi>
 }
 
 /**
@@ -168,8 +264,13 @@ function RecordFallback({ text, centered = false }) {
  * is what opening a category from the far end of the grid needs. Only the
  * strip's own scrollLeft moves: scrollIntoView would scroll the page too, and in
  * the dashboard preview the dashboard window along with it.
+ *
+ * That arithmetic holds in the Arabic menu as well. A right-to-left strip starts
+ * at scrollLeft 0 and scrolls into negative values, and the offset below is a
+ * screen-space distance, so adding it moves the strip the right way in both
+ * directions.
  */
-function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
+function CategoryStrip({ categories, selected, onSelect, onAccentText, label, language }) {
   const stripRef = useRef(null)
   const selectedRef = useRef(null)
 
@@ -190,7 +291,11 @@ function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
   }, [selected])
 
   return (
-    <div ref={stripRef} className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1">
+    <nav
+      ref={stripRef}
+      aria-label={label}
+      className="no-scrollbar -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1"
+    >
       {categories.map((category) => {
         const isSelected = category === selected
         return (
@@ -198,6 +303,7 @@ function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
             key={category.key}
             ref={isSelected ? selectedRef : undefined}
             type="button"
+            aria-current={isSelected ? 'true' : undefined}
             onClick={() => onSelect(category)}
             className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm"
             style={
@@ -211,11 +317,11 @@ function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
             }
           >
             {category.emoji ? `${category.emoji} ` : ''}
-            {category.name}
+            <bdi dir={textDir(category.name, language)}>{category.name}</bdi>
           </button>
         )
       })}
-    </div>
+    </nav>
   )
 }
 
@@ -223,6 +329,9 @@ function CategoryStrip({ categories, selected, onSelect, onAccentText }) {
  * The 72 px product thumbnail. No image, or one the browser could not load,
  * draws nothing at all: the row then looks exactly like a product that never
  * had a picture, instead of keeping an empty box beside the text.
+ *
+ * The box is explicit, so an SVG without width/height still fills it; a
+ * photograph covers it, an SVG is contained in it — never cropped.
  */
 function ProductThumb({ url }) {
   const image = useImageFallback(url)
@@ -233,7 +342,9 @@ function ProductThumb({ url }) {
       src={image.src}
       alt=""
       onError={image.onError}
-      className="h-[72px] w-[72px] shrink-0 object-cover"
+      className={`h-[72px] w-[72px] shrink-0 ${
+        isSvgUrl(image.src) ? 'object-contain' : 'object-cover'
+      }`}
       style={{ borderRadius: 'calc(var(--menu-radius) * 0.7)' }}
     />
   )
@@ -270,6 +381,8 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
   // Only that the product HAS options is shown here; the groups themselves
   // belong to the detail sheet, which is where a choice can be made.
   const hasOptions = Array.isArray(product.options) && product.options.length > 0
+  // The grey line under the name: the description, else the ingredients.
+  const { subtitle } = productTexts(product)
   const hasMeta =
     badges.length > 0 ||
     calories != null ||
@@ -282,7 +395,7 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
     <button
       type="button"
       onClick={() => onSelect(product)}
-      className="flex w-full items-start gap-3 p-3 text-left"
+      className="flex w-full items-start gap-3 p-3 text-start"
       style={{
         backgroundColor: 'var(--menu-surface)',
         borderRadius: 'var(--menu-radius)',
@@ -297,33 +410,33 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="font-medium leading-snug" style={{ color: 'var(--menu-text)' }}>
-              {product.name}
+              <bdi dir={textDir(product.name, language)}>{product.name}</bdi>
             </p>
             {categoryName ? (
               <p className="mt-0.5 text-[11px]" style={{ color: 'var(--menu-muted)' }}>
-                {categoryName}
+                <bdi dir={textDir(categoryName, language)}>{categoryName}</bdi>
               </p>
             ) : null}
           </div>
 
-          <div className="shrink-0 text-right">
+          <div className="shrink-0 text-end">
             {product.compare_price ? (
               <p className="text-[11px] line-through" style={{ color: 'var(--menu-muted)' }}>
-                {formatPrice(product.compare_price, currency)}
+                <Price value={product.compare_price} currency={currency} />
               </p>
             ) : null}
             <p className="font-semibold" style={{ color: 'var(--menu-primary)' }}>
-              {formatPrice(product.price, currency)}
+              <Price value={product.price} currency={currency} />
             </p>
           </div>
         </div>
 
-        {product.description ? (
+        {subtitle ? (
           <p
             className="mt-1 text-xs leading-relaxed"
             style={{ ...TWO_LINES, color: 'var(--menu-muted)' }}
           >
-            {product.description}
+            <bdi dir={textDir(subtitle, language)}>{subtitle}</bdi>
           </p>
         ) : null}
 
@@ -348,7 +461,7 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
                 className="rounded-full px-2 py-0.5 text-[10px] font-medium"
                 style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
               >
-                Gizli
+                {t('hidden', language)}
               </span>
             ) : null}
 
@@ -362,7 +475,9 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
                 }}
               >
                 <BadgeIcon id={badge.icon} className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate">{badge.text}</span>
+                <span className="truncate" dir={textDir(badge.text, language)}>
+                  {badge.text}
+                </span>
               </span>
             ))}
 
@@ -384,7 +499,7 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
                 className="rounded-full px-2 py-0.5 text-[10px]"
                 style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
               >
-                + Seçenekler
+                {t('hasOptions', language)}
               </span>
             ) : null}
 
@@ -392,9 +507,13 @@ function ProductRow({ product, categoryName, currency, language, onAccentText, o
               const allergen = findAllergen(code)
               if (!allergen) return null
               return (
+                /* The emoji alone on the card; its name is the title, and the
+                   label a screen reader announces instead of the picture. */
                 <span
                   key={code}
-                  title={language === 'tr' ? allergen.tr : allergen.en}
+                  title={allergenLabel(code, language)}
+                  role="img"
+                  aria-label={allergenLabel(code, language)}
                   className="text-xs"
                 >
                   {allergen.emoji}
@@ -434,6 +553,13 @@ export default function MenuContent({
   const [selectedCategoryId, setSelectedCategoryId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedProduct, setSelectedProduct] = useState(null)
+
+  // The root element, which is where the walk to an embedded scroller starts.
+  const rootRef = useRef(null)
+  /* How far the category grid was scrolled when a category was opened from it,
+     so going back lands where the visitor left the grid. null when there is
+     nothing to restore. */
+  const gridOffsetRef = useRef(null)
 
   // Load the selected font
   useEffect(() => {
@@ -490,7 +616,7 @@ export default function MenuContent({
   /* A tenant whose only menu is named after itself must not print the same words
      twice. Compared case-insensitively because "Melly Coffee" and "melly coffee"
      are one name to the customer reading them. */
-  const showMenuName = Boolean(menuName) && lower(menuName) !== lower(topLineName)
+  const showMenuName = Boolean(menuName) && searchFold(menuName) !== searchFold(topLineName)
 
   /* The owner's one line about the place. It arrives as a plain string — never
      null and never absent — so a trimmed emptiness test is the whole check: ''
@@ -513,10 +639,11 @@ export default function MenuContent({
   /* --------------------------------------------------------------- contact */
 
   /* Wi-Fi, Instagram, the phone number and the owner's links, each one present
-     only when its field holds something usable (lib/contact.js). Where they
-     appear is `contact_display`: on the home view as chips ('inline') or as an
-     open list ('list'). 'footer' and 'hidden' draw nothing here — the product
-     screens' footer is MenuFooter's to fill. */
+     only when its field holds something usable (lib/contact.js). Whether they
+     appear on the home view is `contact_display` alone: as chips ('inline') or
+     as an open list ('list'), and not at all for 'hidden' — the legacy
+     'footer' included, which contactDisplayMode reads as 'hidden'. The footer
+     is a separate switch, `contact_in_footer`, and MenuFooter's to read. */
   const contactMode = contactDisplayMode(business.contact_display)
   const contactItems =
     contactMode === 'inline' || contactMode === 'list' ? buildContactItems(business) : []
@@ -525,7 +652,7 @@ export default function MenuContent({
 
   const searchResults = useMemo(() => {
     if (!searching) return []
-    const needle = lower(searchTerm)
+    const needle = searchFold(searchTerm)
 
     // The key is taken BEFORE filtering. A position taken after it would give a
     // product without an id a different key on every keystroke, remounting its
@@ -539,7 +666,7 @@ export default function MenuContent({
         }))
         .filter(({ product }) =>
           [product.name, product.description, product.ingredients].some((field) =>
-            lower(field).includes(needle),
+            searchFold(field).includes(needle),
           ),
         ),
     )
@@ -553,13 +680,102 @@ export default function MenuContent({
       : categories.find((category) => category.id === selectedCategoryId) || null
   const isHome = !searching && !selectedCategory
 
+  /* ------------------------------------------------------------- analytics */
+
+  /* What the owner's dashboard counts (lib/analytics.js). Only a real visit
+     counts: the landing page's demo iframe and the dashboard's live preview
+     both render this component `embedded`, and the owner poking at their own
+     preview is not a visitor. The tenant directory never renders MenuContent,
+     but a payload that says it resolved no menu is checked all the same. The
+     slugs come from the payload, because they are what the server matches the
+     event against. */
+  const trackable =
+    !embedded &&
+    menu?.menu_resolved !== false &&
+    Boolean(business.business_slug) &&
+    Boolean(business.menu_slug)
+
+  function track(type, ids) {
+    if (!trackable) return
+    trackMenuEvent({
+      businessSlug: business.business_slug,
+      menuSlug: business.menu_slug,
+      type,
+      language,
+      ...ids,
+    })
+  }
+
   /* Categories are selected by id. One that arrived without an id still gets
      its card, but opening it does nothing: its fallback `key` is a position,
-     not an identity, and could point at another record after a refetch. */
+     not an identity, and could point at another record after a refetch.
+
+     Opening one from the GRID remembers where the grid was scrolled, for the
+     way back; a chip only moves between categories, so the grid's offset from
+     before stays the one to return to. Tapping the chip that is already
+     selected opens nothing and counts nothing. */
   function openCategory(category) {
     if (category.id === undefined || category.id === null || category.id === '') return
+    if (category.id === selectedCategoryId) return
+
+    if (selectedCategoryId == null) {
+      gridOffsetRef.current = scrollOffset(scrollerOf(rootRef.current, embedded))
+    }
     setSelectedCategoryId(category.id)
+    track('category_view', { categoryId: category.id })
   }
+
+  // A product without an id still opens; there is just nothing to count it by.
+  function openProduct(product) {
+    setSelectedProduct(product)
+    if (product?.id != null && product.id !== '') track('product_view', { productId: product.id })
+  }
+
+  /* ---------------------------------------------------------- scroll reset */
+
+  /*
+    Opening a category used to keep the grid's scroll offset: a card tapped low
+    on the grid opened the product list scrolled just as far, and the visitor
+    landed somewhere near its end. Entering a category — from a grid card or a
+    chip — now starts at the top, and going back puts the grid where it was.
+
+    A LAYOUT effect, because it runs after React has written the new screen to
+    the DOM but before the browser paints it: the listing is never seen at the
+    old offset, not even for a frame. Keyed on the selection, and compared with
+    the previous one, so the first render and a re-render with the same
+    category leave the scroll position alone.
+
+    Where "the viewport" is depends on the surface — the window standalone, a
+    wrapper div in the landing iframe and in the dashboard preview. scrollerOf
+    works that out; see there.
+  */
+  const previousCategoryRef = useRef(selectedCategoryId)
+  useLayoutEffect(() => {
+    const previous = previousCategoryRef.current
+    previousCategoryRef.current = selectedCategoryId
+    if (previous === selectedCategoryId) return
+
+    const scroller = scrollerOf(rootRef.current, embedded)
+    if (selectedCategoryId != null) {
+      scrollViewportTo(scroller, 0)
+      return
+    }
+
+    // Back on the grid. The grid is already laid out at this point — its cards
+    // have fixed image heights, so the offset still points at the same row.
+    const offset = gridOffsetRef.current
+    gridOffsetRef.current = null
+    scrollViewportTo(scroller, offset ?? 0)
+  }, [selectedCategoryId, embedded])
+
+  /* Clearing the search box leaves the results for the screen underneath, which
+     starts at its top as well. */
+  const wasSearchingRef = useRef(searching)
+  useLayoutEffect(() => {
+    const wasSearching = wasSearchingRef.current
+    wasSearchingRef.current = searching
+    if (wasSearching && !searching) scrollViewportTo(scrollerOf(rootRef.current, embedded), 0)
+  }, [searching, embedded])
 
   /* --------------------------------------------------------- menu switching */
 
@@ -575,8 +791,12 @@ export default function MenuContent({
     // too; navigating there would tear the surrounding page down.
     if (embedded) return
 
+    // The query string travels along, as on every link between the tenant's
+    // menus: a ?lang= dropped here would open the next menu in another language.
+    const search = window.location.search
+
     if (getSubdomain()) {
-      window.location.assign(`/${slug}`)
+      window.location.assign(`/${slug}${search}`)
       return
     }
 
@@ -584,7 +804,7 @@ export default function MenuContent({
     // business slug and 404s, so an unidentified tenant stays where it is.
     const tenant = business.business_slug
     if (!tenant) return
-    window.location.assign(`/m/${tenant}/${slug}`)
+    window.location.assign(`/m/${tenant}/${slug}${search}`)
   }
 
   /* ------------------------------------------------------------- fragments */
@@ -611,7 +831,7 @@ export default function MenuContent({
           currency={business.currency}
           language={language}
           onAccentText={onAccentText}
-          onSelect={setSelectedProduct}
+          onSelect={openProduct}
         />
       </ErrorBoundary>
     )
@@ -629,9 +849,11 @@ export default function MenuContent({
 
   return (
     <div
+      ref={rootRef}
       className={`relative ${embedded ? 'min-h-full w-full' : 'min-h-screen w-full'}`}
       style={style}
-      dir={isRtl(language) ? 'rtl' : 'ltr'}
+      dir={languageDir(language)}
+      lang={language}
     >
       {/* Background photo scrim; the content wrapper below sits on top of it. */}
       {overlayStyle ? (
@@ -664,11 +886,18 @@ export default function MenuContent({
                belongs to the splash screen, which is the moment the menu opens;
                replaying it in the header meant the logo faded in again on every
                language switch and every re-render. The splash owns that motion
-               through `splash_entrance`. */
+               through `splash_entrance`.
+
+               An SVG logo gets the cap as an explicit height instead. Saved
+               without width/height it has no intrinsic size, and `h-auto` then
+               leaves its height to the engine; a fixed 96 px box with the full
+               width, contained, draws every SVG whole and centred. */
             <img
               src={business.logo_url}
               alt=""
-              className="mx-auto h-auto w-full max-h-24 object-contain"
+              className={`mx-auto w-full object-contain ${
+                isSvgUrl(business.logo_url) ? 'h-24' : 'h-auto max-h-24'
+              }`}
               style={{ borderRadius: 'calc(var(--menu-radius) * 0.6)' }}
             />
           ) : showInitial ? (
@@ -694,7 +923,7 @@ export default function MenuContent({
               className={`mx-auto max-w-sm text-xl font-semibold leading-tight ${nameMargin}`.trim()}
               style={{ color: 'var(--menu-text)' }}
             >
-              {topLineName}
+              <bdi dir={textDir(topLineName, language)}>{topLineName}</bdi>
             </h1>
           ) : null}
 
@@ -705,7 +934,7 @@ export default function MenuContent({
               className={`mx-auto max-w-sm text-sm ${menuNameMargin}`.trim()}
               style={{ color: 'var(--menu-muted)' }}
             >
-              {menuName}
+              <bdi dir={textDir(menuName, language)}>{menuName}</bdi>
             </p>
           ) : null}
 
@@ -716,7 +945,7 @@ export default function MenuContent({
               className={`mx-auto max-w-sm text-xs italic ${sloganMargin}`.trim()}
               style={{ color: 'var(--menu-muted)' }}
             >
-              {slogan}
+              <bdi dir={textDir(slogan, language)}>{slogan}</bdi>
             </p>
           ) : null}
 
@@ -737,10 +966,20 @@ export default function MenuContent({
 
                `role="group"` plus `aria-pressed` is the honest markup for a set
                of toggles — this switches the page's language rather than
-               navigating, so these are buttons, not links or a listbox. */
+               navigating, so these are buttons, not links or a listbox.
+
+               `dir="ltr"` pins the order of the codes. Without it, picking
+               Arabic flipped the whole pill the moment the container turned
+               right-to-left: every code jumped to the other end, and the one
+               just tapped slid out from under the finger. The codes are Latin
+               letters in every language, so there is nothing to mirror — the
+               control reads the same way whichever language it switched to.
+               Each button names its language in that language's own script
+               and says so in `lang`, so a screen reader pronounces it right. */
             <div className="mt-4 flex justify-center">
               <div
                 role="group"
+                dir="ltr"
                 aria-label={t('language', language)}
                 className="inline-flex items-center gap-0.5 rounded-full p-0.5"
                 style={{
@@ -759,6 +998,7 @@ export default function MenuContent({
                       aria-label={info.label}
                       aria-pressed={isSelected}
                       title={info.label}
+                      lang={code}
                       className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase leading-none tracking-wide"
                       style={
                         isSelected
@@ -778,8 +1018,9 @@ export default function MenuContent({
         </header>
 
         {/* -------------------------------------------------------- contact */}
-        {/* Only on the home view — deeper screens are about the products, and
-            their footer carries the compact list instead.
+        {/* Only on the home view — deeper screens are about the products. The
+            footer carries the compact list on every screen, but only when the
+            owner switched `contact_in_footer` on; see MenuFooter.
 
             Both components render nothing without items, margin included, so
             a menu with no contact details has the search box straight under
@@ -802,10 +1043,12 @@ export default function MenuContent({
         ) : null}
 
         {/* --------------------------------------------------------- search */}
+        {/* The magnifier sits at the START of the field — left, or right in
+            Arabic — and the text makes room for it on the same side. */}
         {categories.length > 0 ? (
           <div className="relative mt-4">
             <Search
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+              className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2"
               style={{ color: 'var(--menu-muted)' }}
               aria-hidden="true"
             />
@@ -814,7 +1057,8 @@ export default function MenuContent({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t('search', language)}
-              className="w-full py-2.5 pl-9 pr-3 text-sm outline-none"
+              aria-label={t('searchLabel', language)}
+              className="w-full py-2.5 pe-3 ps-9 text-sm outline-none"
               style={{
                 backgroundColor: 'var(--menu-surface)',
                 color: 'var(--menu-text)',
@@ -853,7 +1097,7 @@ export default function MenuContent({
                         }
                   }
                 >
-                  {entry.name}
+                  <bdi dir={textDir(entry.name, language)}>{entry.name}</bdi>
                 </button>
               )
             })}
@@ -879,7 +1123,8 @@ export default function MenuContent({
                 <button
                   type="button"
                   onClick={() => setSelectedCategoryId(null)}
-                  aria-label={language === 'tr' ? 'Kategorilere dön' : 'Back to categories'}
+                  aria-label={t('backToCategories', language)}
+                  title={t('backToCategories', language)}
                   className="flex h-8 w-8 shrink-0 items-center justify-center"
                   style={{
                     backgroundColor: 'var(--menu-surface)',
@@ -891,6 +1136,7 @@ export default function MenuContent({
                   <ArrowLeft
                     className="h-4 w-4"
                     style={{ transform: isRtl(language) ? 'scaleX(-1)' : 'none' }}
+                    aria-hidden="true"
                   />
                 </button>
 
@@ -899,7 +1145,9 @@ export default function MenuContent({
                   style={{ color: 'var(--menu-text)' }}
                 >
                   {selectedCategory.emoji ? `${selectedCategory.emoji} ` : ''}
-                  {selectedCategory.name}
+                  <bdi dir={textDir(selectedCategory.name, language)}>
+                    {selectedCategory.name}
+                  </bdi>
                 </h2>
               </div>
 
@@ -908,11 +1156,15 @@ export default function MenuContent({
                 selected={selectedCategory}
                 onSelect={openCategory}
                 onAccentText={onAccentText}
+                label={t('categories', language)}
+                language={language}
               />
 
               {selectedCategory.description ? (
                 <p className="mb-3 text-xs" style={{ color: 'var(--menu-muted)' }}>
-                  {selectedCategory.description}
+                  <bdi dir={textDir(selectedCategory.description, language)}>
+                    {selectedCategory.description}
+                  </bdi>
                 </p>
               ) : null}
 
@@ -984,7 +1236,7 @@ export default function MenuContent({
                           color: 'var(--menu-text)',
                         }}
                       >
-                        {category.name}
+                        <bdi dir={textDir(category.name, language)}>{category.name}</bdi>
                       </p>
                     </div>
                   </button>
@@ -995,17 +1247,12 @@ export default function MenuContent({
         </div>
 
         {/*
-          On the home view the footer is only the "Karecik ile hazırlandı"
-          signature. The price date, the VAT notice and the compact contact list
-          (in every `contact_display` but 'hidden') live on the screens that
-          list products.
+          One footer, the same on the grid, a product listing and the search
+          results: the price date, the VAT note, the Yerli Üretim badge and the
+          signature — plus the compact contact list when the owner put it
+          there. See MenuFooter.
         */}
-        <MenuFooter
-          business={business}
-          footer={menu?.footer}
-          language={language}
-          scope={isHome ? 'home' : 'products'}
-        />
+        <MenuFooter business={business} footer={menu?.footer} language={language} />
       </div>
 
       <ProductDetailModal

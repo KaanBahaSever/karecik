@@ -59,6 +59,14 @@ func GetBusinessByID(ctx context.Context, db DB, id uuid.UUID) (*models.Business
 		`SELECT `+businessColumns+` FROM businesses WHERE id = $1`, id))
 }
 
+// lockedBusiness is the before-read of UpdateBusiness (see "The before-read"
+// in audit.go): GetBusinessByID under the given row lock. The business is its
+// own tenant, so its id is the whole scope.
+func lockedBusiness(ctx context.Context, db DB, id uuid.UUID, lock string) (*models.Business, error) {
+	return scanBusiness(db.QueryRow(ctx,
+		`SELECT `+businessColumns+` FROM businesses WHERE id = $1 `+lock, id))
+}
+
 // GetBusinessByUserID fetches the business that belongs to a user.
 func GetBusinessByUserID(ctx context.Context, db DB, userID uuid.UUID) (*models.Business, error) {
 	return scanBusiness(db.QueryRow(ctx,
@@ -104,9 +112,14 @@ var businessUpdatableColumns = map[string]bool{
 }
 
 // UpdateBusiness applies a partial update to the given columns and returns the
-// updated record.
-func UpdateBusiness(ctx context.Context, db DB, id uuid.UUID,
-	fields map[string]any) (*models.Business, error) {
+// updated record. hooks run after the UPDATE, in a transaction opened for
+// them, with the record as it was and as it is now; the "before" is read in
+// that transaction as the statement right before the UPDATE (see "The
+// before-read" in audit.go), FOR UPDATE when the slug — a unique key — is
+// written and FOR NO KEY UPDATE otherwise. An update that names no updatable
+// column writes nothing and runs none.
+func UpdateBusiness(ctx context.Context, db TxDB, id uuid.UUID,
+	fields map[string]any, hooks ...WriteHook[Update[*models.Business]]) (*models.Business, error) {
 
 	columns := make([]string, 0, len(fields))
 	for column := range fields {
@@ -130,7 +143,16 @@ func UpdateBusiness(ctx context.Context, db DB, id uuid.UUID,
 	query := `UPDATE businesses SET ` + strings.Join(setParts, ", ") +
 		fmt.Sprintf(` WHERE id = $%d RETURNING `, len(args)) + businessColumns
 
-	business, err := scanBusiness(db.QueryRow(ctx, query, args...))
+	lock := lockForNoKeyUpdate
+	if _, writesSlug := fields["slug"]; writesSlug {
+		lock = lockForUpdate
+	}
+	before := func(db DB) (*models.Business, error) {
+		return lockedBusiness(ctx, db, id, lock)
+	}
+	business, err := updateWithHooks(ctx, db, hooks, before, func(db DB) (*models.Business, error) {
+		return scanBusiness(db.QueryRow(ctx, query, args...))
+	})
 	if err != nil {
 		if IsUniqueViolation(err) {
 			return nil, ErrDuplicate

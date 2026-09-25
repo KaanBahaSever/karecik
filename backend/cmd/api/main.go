@@ -100,6 +100,50 @@ func main() {
 		}
 	}()
 
+	// --- visitor analytics retention
+	//
+	// menu_events rows carry visitor IP addresses and source ports — personal
+	// data under KVKK — so they are deleted once they are older than
+	// ANALYTICS_RETENTION_DAYS. Once now, and then every 24 hours: the cutoff
+	// moves a day at a time, so a daily sweep removes one day's worth of rows
+	// and a more frequent one would find nothing.
+	//
+	// The first sweep runs in the background rather than before the listener
+	// starts: after a long pause — or right after the retention was shortened
+	// — it may have a backlog to work through, and a health check waiting on
+	// it would fail a deploy for the sake of housekeeping.
+	if days := cfg.AnalyticsRetentionDays; days > 0 {
+		purge := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			// config.Load already bounds the day count; this refuses, once
+			// more and at the point of use, any cutoff that is not safely in
+			// the past, because a wrong one here deletes irreversibly.
+			cutoff, ok := config.AnalyticsCutoff(time.Now(), days)
+			if !ok {
+				log.Printf("[karecik] analytics retention sweep skipped: %d days gives no usable cutoff", days)
+				return
+			}
+			removed, err := repository.PurgeMenuEvents(ctx, pool, cutoff)
+			if err != nil {
+				log.Printf("[karecik] analytics retention sweep failed after %d row(s): %v", removed, err)
+				return
+			}
+			if removed > 0 {
+				log.Printf("[karecik] analytics retention sweep: %d event(s) older than %d days removed",
+					removed, days)
+			}
+		}
+		analyticsSweeper := time.NewTicker(24 * time.Hour)
+		defer analyticsSweeper.Stop()
+		go func() {
+			purge()
+			for range analyticsSweeper.C {
+				purge()
+			}
+		}()
+	}
+
 	// --- upload directory
 	// The hint is not padding. In a container this path is a mounted volume, and
 	// platforms mount volumes as root while this image runs as an unprivileged
@@ -165,6 +209,22 @@ func main() {
 	// any more, and will not be after the next deploy either.
 	log.Printf("[karecik] sessions           -> in memory, single instance only "+
 		"(a restart signs everyone out; janitor every %s)", session.DefaultJanitorInterval)
+	// Said on every boot for the same reason: how long visitor addresses are
+	// kept is a legal question, and the answer should be visible in the log
+	// rather than only in an environment variable.
+	if cfg.AnalyticsRetentionDays > 0 {
+		log.Printf("[karecik] visitor analytics  -> events kept %d days (ANALYTICS_RETENTION_DAYS), swept every 24h",
+			cfg.AnalyticsRetentionDays)
+	} else {
+		log.Printf("[karecik] visitor analytics  -> events kept FOREVER (ANALYTICS_RETENTION_DAYS=0) — " +
+			"they hold visitor IP addresses")
+	}
+	if cfg.AnalyticsDailyEventCap > 0 {
+		log.Printf("[karecik] visitor analytics  -> at most %d events stored per business per day "+
+			"(ANALYTICS_DAILY_EVENT_CAP)", cfg.AnalyticsDailyEventCap)
+	} else {
+		log.Printf("[karecik] visitor analytics  -> NO daily cap on stored events (ANALYTICS_DAILY_EVENT_CAP=0)")
+	}
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("[karecik] could not start the server: %v", err)
 	}

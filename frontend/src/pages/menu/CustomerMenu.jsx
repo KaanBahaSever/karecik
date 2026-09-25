@@ -1,13 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Loader2 } from 'lucide-react'
 
 import api from '../../lib/api'
+import { trackMenuEvent } from '../../lib/analytics'
+import {
+  browserLanguages,
+  readRememberedLanguage,
+  rememberLanguage,
+  resolveMenuLanguage,
+} from '../../lib/language'
 import { getSubdomain } from '../../lib/subdomain'
-import { t } from '../../locales/index.js'
+import { LANGUAGE_CODES, languageDir, t } from '../../locales/index.js'
+import { themeVariables } from '../../themes/themes'
 import ErrorBoundary from '../../components/ui/ErrorBoundary.jsx'
-import Loading from '../../components/ui/Loading.jsx'
 import MenuContent from '../../components/menu/MenuContent.jsx'
 import MenuDirectory from '../../components/menu/MenuDirectory.jsx'
+import MenuFooter from '../../components/menu/MenuFooter.jsx'
 import SplashScreen from '../../components/menu/SplashScreen.jsx'
 
 /**
@@ -19,6 +28,37 @@ import SplashScreen from '../../components/menu/SplashScreen.jsx'
  * waiting still feels like loading and starts to feel like nothing happened.
  */
 const HERO_IMAGE_CAP_MS = 2000
+
+/**
+ * The menus whose `menu_view` this page load has already reported, as
+ * "business/menu" keys.
+ *
+ * Module level on purpose: it is what "once per page load" means. The payload
+ * is fetched again on every language switch, the component may be remounted
+ * by a route change inside the same tenant, and React's development mode runs
+ * every effect twice — none of those is a second visit, and none of them
+ * outlives the page, which this Set does not either.
+ */
+const reportedMenuViews = new Set()
+
+/**
+ * Neutral --menu-* values for the footer of the status screens: the theme
+ * defaults MenuDirectory draws with too. No menu data goes into them — on those
+ * screens there is either no menu or one that failed to draw.
+ */
+const NEUTRAL_THEME = themeVariables(undefined, undefined, undefined)
+
+/**
+ * The language named by the address's `?lang=`, or '' when it names none the
+ * interface is written in. Lowercased, so `?lang=DE` works as typed.
+ *
+ * @param {string|null} raw
+ * @returns {string}
+ */
+function addressLanguage(raw) {
+  const code = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return LANGUAGE_CODES.includes(code) ? code : ''
+}
 
 /**
  * sessionStorage key for "this visitor has already seen this menu's splash".
@@ -117,30 +157,115 @@ function useImagesReady(urls, capMs) {
 }
 
 /**
- * Drawn in place of the menu when MenuContent throws while rendering.
+ * The full-screen frame of the three states drawn without a menu: loading,
+ * unavailable and the render error. Each is in the visitor's language and
+ * direction, which here is all the page has to go on (see lib/language.js).
  *
- * Plain Tailwind greys on purpose — no --menu-* variables, no theme helper. The
- * menu's own theme data may be exactly what broke, and a fallback that leaned
- * on it could fail the same way. "Yeniden dene" renders the same payload once
- * more; "Sayfayı yenile" reloads the page and fetches everything again.
- *
- * @param {boolean}  embedded - Fill the iframe instead of the screen
- * @param {Function} onRetry  - Resets the error boundary
+ * `signature` adds the standard footer at the bottom in its directory scope:
+ * "Powered by Karecik" alone, since there is no menu whose prices, VAT note or
+ * badge it could state. The two screens a visitor can be left on carry it,
+ * like every other public view; the loading screen does not, where it would
+ * only flash for a moment before the menu's own footer takes its place.
  */
-function MenuRenderError({ embedded, onRetry }) {
+function StatusFrame({ embedded, language, signature = false, children }) {
   return (
     <div
-      className={`flex items-center justify-center bg-white px-6 ${
-        embedded ? 'h-full' : 'min-h-screen'
-      }`}
+      className={`flex flex-col bg-white px-6 ${embedded ? 'h-full' : 'min-h-screen'}`}
+      dir={languageDir(language)}
+      lang={language}
     >
+      <div className="flex flex-1 items-center justify-center">{children}</div>
+      {signature ? (
+        <div className="mx-auto w-full max-w-lg" style={NEUTRAL_THEME}>
+          <MenuFooter business={null} footer={null} language={language} scope="directory" />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The loading state. Drawn here rather than with the shared Loading component,
+ * whose screen-reader text is the dashboard's Turkish: a visitor reading the
+ * menu in Arabic is told it is loading in Arabic. `role="status"` announces
+ * the one visible line, so nothing is read twice.
+ */
+function MenuLoading({ embedded, language }) {
+  return (
+    <StatusFrame embedded={embedded} language={language}>
+      <div role="status" className="flex flex-col items-center justify-center gap-3 py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-brand-600" aria-hidden="true" />
+        <p className="text-sm text-gray-500">{t('loading', language)}</p>
+      </div>
+    </StatusFrame>
+  )
+}
+
+/**
+ * No menu to show. Two different answers get two different screens:
+ *
+ *   notFound  the server looked and there is no such menu (404): the address
+ *             is wrong, and trying again would change nothing
+ *   otherwise the request failed — the venue's Wi-Fi dropped, the server was
+ *             restarting: the menu is probably fine, so the visitor gets a
+ *             button to try again
+ *
+ * The server's own error text is Turkish and written for owners; it is not
+ * shown to visitors.
+ *
+ * @param {boolean}  embedded
+ * @param {string}   language
+ * @param {boolean}  notFound
+ * @param {Function} onRetry  - Fetches the menu again
+ */
+function MenuUnavailable({ embedded, language, notFound, onRetry }) {
+  return (
+    <StatusFrame embedded={embedded} language={language} signature>
+      <div className="w-full max-w-sm rounded-2xl border border-gray-200 p-8 text-center">
+        <p className="text-4xl" aria-hidden="true">
+          🔍
+        </p>
+        <h1 className="mt-4 text-lg font-semibold text-gray-900">
+          {t(notFound ? 'notFound' : 'loadFailed', language)}
+        </h1>
+        <p className="mt-1.5 text-sm text-gray-600">
+          {t(notFound ? 'notFoundDetail' : 'loadFailedDetail', language)}
+        </p>
+        {notFound ? null : (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-6 w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+          >
+            {t('retry', language)}
+          </button>
+        )}
+      </div>
+    </StatusFrame>
+  )
+}
+
+/**
+ * Drawn in place of the menu when MenuContent throws while rendering.
+ *
+ * Plain Tailwind greys on purpose — nothing from the menu's theme. The menu's
+ * own theme data may be exactly what broke, and a fallback that leaned on it
+ * could fail the same way; the signature footer under it reads the neutral
+ * defaults only. "Try again" renders the same payload once more; "Reload page"
+ * reloads the page and fetches everything again.
+ *
+ * @param {boolean}  embedded - Fill the iframe instead of the screen
+ * @param {string}   language - Active language code
+ * @param {Function} onRetry  - Resets the error boundary
+ */
+function MenuRenderError({ embedded, language, onRetry }) {
+  return (
+    <StatusFrame embedded={embedded} language={language} signature>
       <div
         role="alert"
         className="w-full max-w-sm rounded-2xl border border-gray-200 p-8 text-center"
       >
-        <p className="text-base font-semibold text-gray-900">
-          Menü görüntülenirken bir sorun oluştu.
-        </p>
+        <p className="text-base font-semibold text-gray-900">{t('renderError', language)}</p>
 
         <div className="mt-6 flex flex-col gap-2">
           <button
@@ -148,18 +273,18 @@ function MenuRenderError({ embedded, onRetry }) {
             onClick={onRetry}
             className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
           >
-            Yeniden dene
+            {t('retry', language)}
           </button>
           <button
             type="button"
             onClick={() => window.location.reload()}
             className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            Sayfayı yenile
+            {t('reload', language)}
           </button>
         </div>
       </div>
-    </div>
+    </StatusFrame>
   )
 }
 
@@ -199,16 +324,52 @@ export default function CustomerMenu({
 }) {
   const params = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const businessSlug = businessSlugProp || params.businessSlug || getSubdomain() || ''
   const menuSlug = menuSlugProp || params.menuSlug || ''
 
-  // Stays empty until the visitor picks a language; the backend then serves the
-  // menu's own default language.
+  /* ------------------------------------------------------------- language */
+  /*
+    Which language the menu is shown in is lib/language.js's decision; see the
+    order written out there. What this component holds is its inputs:
+
+      selectedLanguage    a language the visitor tapped on this visit
+      urlLanguage         a language the ADDRESS names with ?lang= — how the
+                          landing page's demo iframe follows the language
+                          picked on the landing page, and how a shared link
+                          can open a menu in a given language. An explicit
+                          request like a tap, but never remembered: nobody
+                          chose it on this device. A tap rewrites it (see
+                          chooseLanguage), so it never outranks a later pick
+      rememberedLanguage  the one they tapped on an earlier visit to this
+                          tenant, read from localStorage — and never on an
+                          embedded surface, which stays side-effect free
+      syncLanguage        see "an older server" below; normally empty
+
+    The FIRST request carries the address's or the remembered pick when
+    there is one, and no language otherwise, which lets the server answer in
+    the browser's own language from Accept-Language. Either way the first
+    paint is already in the right language: no second request, and no flash
+    of another language.
+  */
   const [selectedLanguage, setSelectedLanguage] = useState('')
+  const urlLanguage = addressLanguage(searchParams.get('lang'))
+  const rememberedLanguage = useMemo(
+    () => (embedded ? '' : readRememberedLanguage(businessSlug)),
+    [embedded, businessSlug],
+  )
+  const [syncLanguage, setSyncLanguage] = useState('')
+  const requestLanguage = selectedLanguage || syncLanguage || urlLanguage || rememberedLanguage
+  // The browser's preferences do not change while the page is open.
+  const [preferredLanguages] = useState(() => browserLanguages())
+
   const [menu, setMenu] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  // null, or { notFound } — see MenuUnavailable.
+  const [error, setError] = useState(null)
+  // Bumped by the "try again" button to repeat the request.
+  const [reloadKey, setReloadKey] = useState(0)
 
   /* ---------------------------------------------------------- splash state */
   /*
@@ -243,7 +404,48 @@ export default function CustomerMenu({
     setSplash({ decided: true, open: shouldOpenSplash(menu, embedded, businessSlug, menuSlug) })
   }
 
-  const activeLanguage = selectedLanguage || menu?.business?.default_language || 'tr'
+  /* The directory's payload carries no languages of its own (it is not a
+     menu), so there, as on the loading and error screens, every language the
+     interface is written in is on offer. */
+  const menuLanguages = menu && menu.menu_resolved !== false ? menu.business?.languages : []
+  const activeLanguage = resolveMenuLanguage({
+    choice: selectedLanguage || urlLanguage || rememberedLanguage,
+    served: menu?.language,
+    preferred: preferredLanguages,
+    available: menuLanguages,
+    fallback: menu?.business?.default_language,
+  })
+
+  /* The tenant a pick is remembered for: the payload's own slug once there is
+     one, the address's before that. */
+  const tenantSlug = menu?.business?.business_slug || businessSlug
+
+  /* An explicit pick is remembered for the next visit — here, in the event
+     handler, never in render. Tapping the language already on screen changes
+     nothing and fetches nothing, but it is still a choice worth keeping.
+
+     An address that names a language has it replaced by the pick, in place,
+     without a new history entry. Left alone, the ?lang= of the link the
+     visitor came in on would outrank the pick they just made as soon as the
+     page is reloaded; rewritten, a reload and a copied link both keep the
+     language on screen. Embedded surfaces leave their address alone: the
+     landing page owns its iframe's ?lang=. */
+  function chooseLanguage(next) {
+    if (!embedded) {
+      rememberLanguage(tenantSlug, next)
+      if (searchParams.has('lang') && searchParams.get('lang') !== next) {
+        setSearchParams(
+          (current) => {
+            const updated = new URLSearchParams(current)
+            updated.set('lang', next)
+            return updated
+          },
+          { replace: true },
+        )
+      }
+    }
+    if (next !== activeLanguage) setSelectedLanguage(next)
+  }
 
   /* The images the splash is covering for. Waiting on these is what makes the
      handover a reveal rather than a second flash — see useImagesReady. Product
@@ -269,18 +471,19 @@ export default function CustomerMenu({
 
     async function loadMenu() {
       setLoading(true)
-      setError('')
+      setError(null)
       try {
         // With a business slug the path form is exact; without one the backend
-        // resolves the tenant from the request host itself.
+        // resolves the tenant from the request host itself. An empty language
+        // leaves the choice to the server's Accept-Language negotiation.
         const data = businessSlug
-          ? await api.publicMenu(businessSlug, menuSlug, selectedLanguage)
-          : await api.publicMenuByHost(menuSlug, selectedLanguage)
+          ? await api.publicMenu(businessSlug, menuSlug, requestLanguage)
+          : await api.publicMenuByHost(menuSlug, requestLanguage)
         if (cancelled) return
         setMenu(data)
       } catch (err) {
         if (cancelled) return
-        setError(err.message || 'Menü yüklenemedi.')
+        setError({ notFound: err?.status === 404 })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -290,7 +493,73 @@ export default function CustomerMenu({
     return () => {
       cancelled = true
     }
-  }, [businessSlug, menuSlug, selectedLanguage])
+  }, [businessSlug, menuSlug, requestLanguage, reloadKey])
+
+  /* --------------------------------------------------- an older server */
+  /* A server that does not report `language` resolved the texts in the
+     requested language when the menu offers it, else in its default one — and
+     then activeLanguage may have settled on the browser's language instead
+     (step 3 of lib/language.js). The interface and the texts would disagree,
+     so the menu is fetched once more in the language the interface chose.
+     The current server always reports `language`, and this never runs. */
+  useEffect(() => {
+    if (!menu || menu.menu_resolved === false) return
+    if (typeof menu.language === 'string' && menu.language !== '') return
+
+    const languages = Array.isArray(menu.business?.languages) ? menu.business.languages : []
+    const textLanguage = languages.includes(requestLanguage)
+      ? requestLanguage
+      : menu.business?.default_language
+    if (textLanguage && activeLanguage !== textLanguage && languages.includes(activeLanguage)) {
+      setSyncLanguage(activeLanguage)
+    }
+  }, [menu, requestLanguage, activeLanguage])
+
+  /* ------------------------------------------- the document's language */
+  /* Standalone, the page IS the menu, so the document itself takes the
+     language and its direction: the browser's own UI (scrollbars, form
+     controls, text selection handles) follows `dir`, screen readers and
+     hyphenation follow `lang`, and anything a component ever portals out of
+     the menu's tree inherits both. A layout effect, so a right-to-left menu is
+     never painted left-to-right first. The previous values come back on the
+     way out — the landing page is Turkish and left-to-right.
+
+     Embedded surfaces never touch the document: the landing iframe's menu and
+     the dashboard preview set `dir` and `lang` on their own container only. */
+  useLayoutEffect(() => {
+    if (embedded) return undefined
+
+    const root = document.documentElement
+    const previousLang = root.getAttribute('lang')
+    const previousDir = root.getAttribute('dir')
+    root.setAttribute('lang', activeLanguage)
+    root.setAttribute('dir', languageDir(activeLanguage))
+
+    return () => {
+      if (previousLang === null) root.removeAttribute('lang')
+      else root.setAttribute('lang', previousLang)
+      if (previousDir === null) root.removeAttribute('dir')
+      else root.setAttribute('dir', previousDir)
+    }
+  }, [embedded, activeLanguage])
+
+  /* ------------------------------------------------------ visitor analytics */
+  /* One `menu_view` per resolved menu per page load — see reportedMenuViews.
+     Never from an embedded surface (the landing page's demo iframe), never for
+     the tenant directory, which is not a menu. Category and product views are
+     reported by MenuContent, under the same rules. */
+  useEffect(() => {
+    if (embedded || !menu || menu.menu_resolved === false) return
+
+    const tenant = menu.business?.business_slug
+    const slug = menu.business?.menu_slug
+    if (!tenant || !slug) return
+
+    const key = `${tenant}/${slug}`
+    if (reportedMenuViews.has(key)) return
+    reportedMenuViews.add(key)
+    trackMenuEvent({ businessSlug: tenant, menuSlug: slug, type: 'menu_view', language: activeLanguage })
+  }, [embedded, menu, activeLanguage])
 
   /* ------------------------------------------ one menu: fix the address bar */
   // The bare tenant address with a single active menu is served directly, so the
@@ -311,15 +580,20 @@ export default function CustomerMenu({
     const slug = menus[0]?.slug
     if (!slug) return
 
+    // The query string travels along: a ?lang= dropped here would switch the
+    // menu back out of the language the link asked for, one render later.
+    const search = searchParams.toString()
+    const suffix = search ? `?${search}` : ''
+
     // On a tenant subdomain the host already names the business; the path form
     // has to carry the business slug, so without one there is no address to go
     // to and the menu simply stays on the address the visitor used.
     if (getSubdomain()) {
-      navigate(`/${slug}`, { replace: true })
+      navigate(`/${slug}${suffix}`, { replace: true })
     } else if (businessSlug) {
-      navigate(`/m/${businessSlug}/${slug}`, { replace: true })
+      navigate(`/m/${businessSlug}/${slug}${suffix}`, { replace: true })
     }
-  }, [embedded, menuSlug, menu, businessSlug, navigate])
+  }, [embedded, menuSlug, menu, businessSlug, navigate, searchParams])
 
   /* --------------------------------------------- scrollbar in embedded mode */
   /* The landing page renders this route inside an iframe, and a scrollbar down
@@ -375,10 +649,22 @@ export default function CustomerMenu({
   }, [splash.open, menu, businessSlug, menuSlug])
 
   /* -------------------------------------------------------------- tab title */
+  /* Until a menu is in, the tab says what the screen says, in the visitor's
+     language, rather than index.html's Turkish title, which is the landing
+     page's. Mirrors the render below: loading, then "not found" or "could not
+     load". */
+  let statusTitleKey = ''
+  if (!menu) {
+    if (loading) statusTitleKey = 'loading'
+    else statusTitleKey = error && !error.notFound ? 'loadFailed' : 'notFound'
+  }
+
   useEffect(() => {
     // `name` is the MENU name; the directory has no menu, so there the tenant
     // name is what the tab should read.
-    const title = menu?.business?.name || menu?.business?.business_name
+    const title = statusTitleKey
+      ? t(statusTitleKey, activeLanguage)
+      : menu?.business?.name || menu?.business?.business_name
     if (embedded || !title) return undefined
 
     const previousTitle = document.title
@@ -386,40 +672,22 @@ export default function CustomerMenu({
     return () => {
       document.title = previousTitle
     }
-  }, [embedded, menu])
+  }, [embedded, menu, statusTitleKey, activeLanguage])
 
   /* ----------------------------------------------------------------- render */
 
   if (loading && !menu) {
-    return (
-      <div
-        className={`flex items-center justify-center bg-white ${
-          embedded ? 'h-full' : 'min-h-screen'
-        }`}
-      >
-        <Loading text={t('loading', activeLanguage)} />
-      </div>
-    )
+    return <MenuLoading embedded={embedded} language={activeLanguage} />
   }
 
   if (!menu) {
     return (
-      <div
-        className={`flex items-center justify-center bg-white px-6 ${
-          embedded ? 'h-full' : 'min-h-screen'
-        }`}
-      >
-        <div className="w-full max-w-sm rounded-2xl border border-gray-200 p-8 text-center">
-          <p className="text-4xl" aria-hidden="true">
-            🔍
-          </p>
-          <h1 className="mt-4 text-lg font-semibold text-gray-900">
-            {t('notFound', activeLanguage)}
-          </h1>
-          <p className="mt-1.5 text-sm text-gray-600">{t('notFoundDetail', activeLanguage)}</p>
-          {error ? <p className="mt-4 text-xs text-gray-400">{error}</p> : null}
-        </div>
-      </div>
+      <MenuUnavailable
+        embedded={embedded}
+        language={activeLanguage}
+        notFound={error ? error.notFound : true}
+        onRetry={() => setReloadKey((key) => key + 1)}
+      />
     )
   }
 
@@ -447,6 +715,7 @@ export default function CustomerMenu({
         <SplashScreen
           business={menu.business}
           ready={heroReady}
+          language={activeLanguage}
           onDone={() => setSplash({ decided: true, open: false })}
         />
       ) : null}
@@ -457,7 +726,9 @@ export default function CustomerMenu({
           gets a fresh try as well. */}
       <ErrorBoundary
         resetKeys={[menu]}
-        fallback={(_error, reset) => <MenuRenderError embedded={embedded} onRetry={reset} />}
+        fallback={(_error, reset) => (
+          <MenuRenderError embedded={embedded} language={activeLanguage} onRetry={reset} />
+        )}
       >
         {/* A URL that names a menu is a request for that one menu, so the in-menu
             switcher — a list of the tenant's other menus — is dropped there. The
@@ -466,7 +737,7 @@ export default function CustomerMenu({
         <MenuContent
           menu={menu}
           language={activeLanguage}
-          onLanguageChange={(next) => setSelectedLanguage(next)}
+          onLanguageChange={chooseLanguage}
           embedded={embedded}
           showMenuSwitcher={!menuSlug}
         />

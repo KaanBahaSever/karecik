@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"karecik/backend/internal/audit"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
@@ -106,13 +109,25 @@ func (h *Handler) CreateCategory(c *fiber.Ctx) error {
 	// carries NULL, never "" or a run of spaces.
 	icon, imageURL := optionalStrPtr(req.Icon), optionalStrPtr(req.ImageURL)
 
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, created *models.Category) (*auditRecord, error) {
+			return &auditRecord{
+				action:     audit.ActionCategoryCreate,
+				entityType: audit.EntityCategory,
+				entityID:   created.ID.String(),
+				label:      created.Translations.Resolve(menu.DefaultLanguage, menu.DefaultLanguage).Name,
+				changes:    audit.DiffCategory(nil, created),
+			}, nil
+		})
+
 	// CreateCategory is one transaction of its own — the menu's advisory lock,
-	// then the INSERT — so a run PostgreSQL aborted over a lock conflict wrote
-	// nothing and is simply run again. See repository.RetryOnConflict.
+	// then the INSERT, then the audit row — so a run PostgreSQL aborted over a
+	// lock conflict wrote nothing and is simply run again. See
+	// repository.RetryOnConflict.
 	category, err := repository.RetryOnConflictValue(c.Context(), "CreateCategory",
 		func() (*models.Category, error) {
 			return repository.CreateCategory(c.Context(), h.DB, businessID, menu.ID,
-				translations, icon, imageURL, isActive)
+				translations, icon, imageURL, isActive, record)
 		})
 	if err != nil {
 		// ownsMenu vouched for the menu a moment ago, but a delete of that menu
@@ -225,12 +240,36 @@ func (h *Handler) UpdateCategory(c *fiber.Ctx) error {
 		fields["is_active"] = flag
 	}
 
-	// One UPDATE or, for a move to another menu, one transaction of its own, so
-	// a run PostgreSQL aborted over a lock conflict wrote nothing and is simply
-	// run again.
+	// The audit diff compares the category the UPDATE replaced with the one it
+	// returned, both read by the repository inside the write's transaction —
+	// the "before" under the UPDATE's own row lock, so a write committing in
+	// between cannot end up in it. A category this business does not have is
+	// ErrNotFound from that read: a 404.
+	record := recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, change repository.Update[*models.Category]) (*auditRecord, error) {
+			changes := audit.DiffCategory(change.Before, change.After)
+			if len(changes) == 0 {
+				return nil, nil
+			}
+			label, err := repository.CategoryName(ctx, tx, businessID, change.After.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &auditRecord{
+				action:     audit.ActionCategoryUpdate,
+				entityType: audit.EntityCategory,
+				entityID:   change.After.ID.String(),
+				label:      label,
+				changes:    changes,
+			}, nil
+		})
+
+	// The UPDATE and its audit row are one transaction — the move's, or one of
+	// their own — so a run PostgreSQL aborted over a lock conflict wrote
+	// nothing and is simply run again.
 	category, err := repository.RetryOnConflictValue(c.Context(), "UpdateCategory",
 		func() (*models.Category, error) {
-			return repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields)
+			return repository.UpdateCategory(c.Context(), h.DB, id, businessID, fields, record)
 		})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -258,12 +297,33 @@ func (h *Handler) DeleteCategory(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz kategori kimliği.")
 	}
 
-	// DeleteCategory is its own transaction — it takes the category's advisory
-	// lock, locks the products, then deletes the category — so a run PostgreSQL
-	// aborted over a lock conflict left nothing behind and is simply run again.
+	// The audit row snapshots the category as the delete found it — read by
+	// the repository in the delete's own transaction, under the DELETE's row
+	// lock — and names it from that copy, the row itself being gone by then.
 	businessID := middleware.BusinessID(c)
+	record := recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, deletion repository.CategoryDeletion) (*auditRecord, error) {
+			label, err := repository.RemovedCategoryName(ctx, tx, businessID, deletion.Category)
+			if err != nil {
+				return nil, err
+			}
+			changes := audit.DiffCategory(deletion.Category, nil)
+			changes["deleted_products"] = audit.Change{Old: nil, New: deletion.Products}
+			return &auditRecord{
+				action:     audit.ActionCategoryDelete,
+				entityType: audit.EntityCategory,
+				entityID:   deletion.Category.ID.String(),
+				label:      label,
+				changes:    changes,
+			}, nil
+		})
+
+	// DeleteCategory is its own transaction — it takes the category's advisory
+	// lock, locks the products, deletes the category and writes the audit row —
+	// so a run PostgreSQL aborted over a lock conflict left nothing behind and
+	// is simply run again.
 	deleted, err := repository.RetryOnConflictValue(c.Context(), "DeleteCategory", func() (int, error) {
-		return repository.DeleteCategory(c.Context(), h.DB, id, businessID)
+		return repository.DeleteCategory(c.Context(), h.DB, id, businessID, record)
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -286,12 +346,31 @@ func (h *Handler) ReorderCategories(c *fiber.Ctx) error {
 		return utils.Unprocessable(c, "Sıralanacak kategori listesi boş olamaz.")
 	}
 
-	// ReorderCategories is one transaction of its own — it locks the rows, then
-	// writes them — so a run PostgreSQL aborted over a lock conflict wrote
-	// nothing and is simply run again.
+	// One audit row for the whole drag and drop: the categories in their new
+	// order, by name.
 	businessID := middleware.BusinessID(c)
+	record := recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (*auditRecord, error) {
+			names, err := repository.CategoryNames(ctx, tx, businessID, ids)
+			if err != nil {
+				return nil, err
+			}
+			order := nonBlank(names)
+			if len(order) == 0 {
+				return nil, nil // nothing of this business was reordered
+			}
+			return &auditRecord{
+				action:     audit.ActionCategoryReorder,
+				entityType: audit.EntityCategory,
+				changes:    audit.Changes{"order": {Old: nil, New: order}},
+			}, nil
+		})
+
+	// ReorderCategories is one transaction of its own — it locks the rows,
+	// writes them and records the audit row — so a run PostgreSQL aborted over
+	// a lock conflict wrote nothing and is simply run again.
 	err := repository.RetryOnConflict(c.Context(), "ReorderCategories", func() error {
-		return repository.ReorderCategories(c.Context(), h.DB, businessID, req.IDs)
+		return repository.ReorderCategories(c.Context(), h.DB, businessID, req.IDs, record)
 	})
 	if err != nil {
 		return utils.Internal(c, err)

@@ -10,7 +10,9 @@ import assert from 'node:assert/strict'
 import {
   buildContactItems,
   completeLinkUrl,
+  CONTACT_DISPLAY_MODES,
   contactDisplayMode,
+  contactInFooter,
   instagramHandle,
   instagramUrl,
   keptLinkIds,
@@ -748,6 +750,48 @@ check('linkIcon, telHref and contactDisplayMode', () => {
   assert.equal(telHref('yok'), null)
   assert.equal(contactDisplayMode('list'), 'list')
   assert.equal(contactDisplayMode('x'), 'inline')
+})
+
+check('display modes: inline / list / hidden, legacy footer is hidden', () => {
+  assert.deepEqual(CONTACT_DISPLAY_MODES, [
+    { id: 'inline', label: 'Yan yana' },
+    { id: 'list', label: 'Açık liste' },
+    { id: 'hidden', label: 'Gösterme' },
+  ])
+  assert.equal(contactDisplayMode('inline'), 'inline')
+  assert.equal(contactDisplayMode('list'), 'list')
+  assert.equal(contactDisplayMode('hidden'), 'hidden')
+  // The legacy fourth mode drew nothing on the home view.
+  assert.equal(contactDisplayMode('footer'), 'hidden')
+  for (const value of [undefined, null, '', 'Inline', 'FOOTER', 42, {}]) {
+    assert.equal(contactDisplayMode(value), 'inline', JSON.stringify(value))
+  }
+})
+
+check('contactInFooter: the flag, or the legacy footer mode', () => {
+  assert.equal(contactInFooter({ contact_in_footer: true }), true)
+  assert.equal(contactInFooter({ contact_in_footer: true, contact_display: 'hidden' }), true)
+  assert.equal(contactInFooter({ contact_in_footer: true, contact_display: 'inline' }), true)
+  assert.equal(contactInFooter({ contact_display: 'footer' }), true)
+  assert.equal(contactInFooter({ contact_display: 'footer', contact_in_footer: false }), true)
+
+  assert.equal(contactInFooter({ contact_in_footer: false }), false)
+  assert.equal(contactInFooter({ contact_display: 'hidden' }), false)
+  assert.equal(contactInFooter({ contact_display: 'inline' }), false)
+  assert.equal(contactInFooter({}), false)
+  // Only a real boolean counts: a string from a hand-edited payload does not.
+  assert.equal(contactInFooter({ contact_in_footer: 'true' }), false)
+  assert.equal(contactInFooter({ contact_in_footer: 1 }), false)
+
+  for (const value of [null, undefined, 42, 'x', [], [{ contact_in_footer: true }]]) {
+    assert.equal(contactInFooter(value), false, JSON.stringify(value))
+  }
+  const hostile = {
+    get contact_in_footer() {
+      throw new Error('boom')
+    },
+  }
+  assert.equal(contactInFooter(hostile), false)
 })
 
 /* --------------------------------------------------------------- summary */

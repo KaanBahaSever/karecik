@@ -1,6 +1,6 @@
 // Package mailer sends the few transactional e-mails Karecik needs.
 //
-// WHY AN HTTPS API AND NOT SMTP
+// # WHY AN HTTPS API AND NOT SMTP
 //
 // The platform this runs on disables outbound SMTP on its free and hobby
 // plans to keep spam off its address space, so port 25/465/587 simply does not

@@ -1,4 +1,4 @@
-import { categoryEmoji } from '../../lib/category'
+import { categoryEmoji, isSvgUrl } from '../../lib/category'
 import { useImageFallback } from '../../lib/useImageFallback'
 
 /**
@@ -31,12 +31,18 @@ export default function CategoryThumb({ imageUrl, emoji, className = '' }) {
   const image = useImageFallback(imageUrl)
 
   if (image.src) {
+    /* The caller's height class gives every image an explicit box, which is
+       what an SVG without width/height needs to show up at all. A photograph
+       then COVERS that box, edge to edge; an SVG is an illustration or a logo,
+       so it is CONTAINED instead, with a little air around it, and never
+       cropped. See isSvgUrl in lib/category.js. */
+    const fit = isSvgUrl(image.src) ? 'object-contain p-2' : 'object-cover'
     return (
       <img
         src={image.src}
         alt=""
         onError={image.onError}
-        className={`w-full object-cover ${className}`.trim()}
+        className={`w-full ${fit} ${className}`.trim()}
       />
     )
   }

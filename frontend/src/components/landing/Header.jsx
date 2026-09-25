@@ -165,7 +165,11 @@ function LanguagePicker({ language, onLanguageChange, label }) {
                     <span className="w-6 shrink-0 text-xs font-semibold text-gray-400">
                       {option.short}
                     </span>
-                    <span>{option.name}</span>
+                    {/* Each language is named in itself ("Deutsch", not
+                        "Almanca") and never translated, so the page's own lang
+                        is the wrong one for it: a screen reader would read
+                        "Deutsch" with Turkish sounds. */}
+                    <span lang={option.code}>{option.name}</span>
                   </span>
                   {isSelected ? (
                     <Check className="h-4 w-4 shrink-0 text-brand-600" aria-hidden="true" />

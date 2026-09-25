@@ -43,6 +43,47 @@ function useLivePreview() {
   return live
 }
 
+/**
+ * Puts the landing language on the document while the page is mounted: the
+ * `lang` of <html> and the tab title. Both are restored on the way out.
+ *
+ * `lang` is not decoration. index.html ships lang="tr", and a page that says it
+ * is Turkish while showing English makes the browser offer to "translate from
+ * Turkish", makes screen readers read English words with Turkish pronunciation
+ * and hyphenates by the wrong rules.
+ *
+ * `dir` is pinned to ltr for the same span. Every landing language is written
+ * left to right, and a `dir="rtl"` left on <html> by a page visited before
+ * (an Arabic customer menu, in this single-page app) would otherwise mirror the
+ * header and send the language menu to the wrong edge.
+ *
+ * Restoring puts the attributes back exactly as they were — removed if they
+ * were absent — so the next page finds the document untouched.
+ */
+function useDocumentLanguage(language, title) {
+  useEffect(() => {
+    const root = document.documentElement
+    const previousLang = root.getAttribute('lang')
+    const previousDir = root.getAttribute('dir')
+    const previousTitle = document.title
+
+    root.setAttribute('lang', language)
+    root.setAttribute('dir', 'ltr')
+    if (title) document.title = title
+
+    return () => {
+      restoreAttribute(root, 'lang', previousLang)
+      restoreAttribute(root, 'dir', previousDir)
+      document.title = previousTitle
+    }
+  }, [language, title])
+}
+
+function restoreAttribute(element, name, value) {
+  if (value === null) element.removeAttribute(name)
+  else element.setAttribute(name, value)
+}
+
 export default function Landing() {
   const { isAuthenticated } = useAuth()
   const [signUpOpen, setSignUpOpen] = useState(false)
@@ -50,6 +91,9 @@ export default function Landing() {
   const livePreview = useLivePreview()
 
   const t = landingText(language)
+
+  // Declared before the redirect below: hooks may not sit behind an early return.
+  useDocumentLanguage(language, t.documentTitle)
 
   function changeLanguage(next) {
     setLanguage(next)
@@ -82,11 +126,13 @@ export default function Landing() {
 
             <p className="mt-6 text-lg text-gray-600">{t.description}</p>
 
+            {/* The bars are drawn separators, not words: hidden from screen
+                readers, which would otherwise announce "vertical line". */}
             <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-gray-500">
               <span>{t.badgeFree}</span>
-              <span className="text-gray-300">|</span>
+              <span className="text-gray-300" aria-hidden="true">|</span>
               <span>{t.badgeSetup}</span>
-              <span className="text-gray-300">|</span>
+              <span className="text-gray-300" aria-hidden="true">|</span>
               <span>{t.badgeMobile}</span>
             </div>
 
@@ -135,8 +181,14 @@ export default function Landing() {
                   className="h-full w-full object-cover object-top"
                 />
               ) : DEMO_BUSINESS_SLUG ? (
+                /* `?lang=` makes the sample menu follow this page's language
+                   picker (CustomerMenu reads it as an explicit choice, never
+                   remembered). Without it the menu would open in the browser's
+                   own language — German inside a Turkish landing page, or the
+                   other way round. A new language reloads the frame, which is
+                   the price of it being a real, separate page. */
                 <iframe
-                  src="/demo"
+                  src={`/demo?lang=${encodeURIComponent(language)}`}
                   title={t.demoTitle}
                   className="no-scrollbar h-full w-full border-0"
                 />
@@ -148,10 +200,8 @@ export default function Landing() {
                    the live preview back on. */
                 <div className="flex h-full flex-col items-center justify-center gap-3 bg-gray-50 px-8 text-center">
                   <Logo className="h-10 w-10 text-brand-600" title="" />
-                  <p className="text-sm font-medium text-gray-700">Menünüz burada görünür</p>
-                  <p className="text-xs leading-relaxed text-gray-500">
-                    Kategoriler, ürünler, fiyatlar ve kendi logonuz — hepsi telefonda.
-                  </p>
+                  <p className="text-sm font-medium text-gray-700">{t.demoPlaceholderTitle}</p>
+                  <p className="text-xs leading-relaxed text-gray-500">{t.demoPlaceholderText}</p>
                 </div>
               )}
             </PhoneFrame>
@@ -164,15 +214,19 @@ export default function Landing() {
           <p className="text-sm text-gray-500">{t.copyright}</p>
           <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-gray-400">
             <span>{t.footerPlatform}</span>
-            <span className="text-gray-300">|</span>
+            <span className="text-gray-300" aria-hidden="true">|</span>
             <span>{t.footerSetup}</span>
-            <span className="text-gray-300">|</span>
+            <span className="text-gray-300" aria-hidden="true">|</span>
             <span>{t.footerCard}</span>
           </div>
         </div>
       </footer>
 
-      <SignUpModal open={signUpOpen} onClose={() => setSignUpOpen(false)} />
+      <SignUpModal
+        open={signUpOpen}
+        onClose={() => setSignUpOpen(false)}
+        language={language}
+      />
     </div>
   )
 }

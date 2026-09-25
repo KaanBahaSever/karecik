@@ -141,14 +141,22 @@ func uniqueSlug(ctx context.Context, db DB, base string) (string, error) {
 // the caller makes, because "change my password" and "sign my other devices
 // out" are not always the same request — the administrative reset wants every
 // session gone, while the dashboard form spares the one being used.
-func UpdatePassword(ctx context.Context, db DB, userID uuid.UUID, passwordHash string) error {
-	tag, err := db.Exec(ctx,
-		`UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, userID)
-	if err != nil {
-		return fmt.Errorf("could not update the password: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+//
+// hooks run after the UPDATE, in a transaction opened for them, with the
+// user's id — never with the hash, which no audit record may hold in any form.
+func UpdatePassword(ctx context.Context, db TxDB, userID uuid.UUID, passwordHash string,
+	hooks ...WriteHook[uuid.UUID]) error {
+
+	_, err := writeWithHooks(ctx, db, hooks, func(db DB) (uuid.UUID, error) {
+		tag, err := db.Exec(ctx,
+			`UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, userID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("could not update the password: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return uuid.Nil, ErrNotFound
+		}
+		return userID, nil
+	})
+	return err
 }

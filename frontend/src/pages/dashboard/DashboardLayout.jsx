@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
+  BarChart3,
   ExternalLink,
+  History,
   LayoutList,
   LogOut,
   Menu,
@@ -23,6 +25,8 @@ const NAV_ITEMS = [
   { to: '/panel', label: 'Menü Yönetimi', icon: LayoutList, end: true },
   { to: '/panel/ayarlar', label: 'Görünüm ve Ayarlar', icon: Settings },
   { to: '/panel/qr', label: 'QR Kodlar', icon: QrCode },
+  { to: '/panel/analitik', label: 'Analitik', icon: BarChart3 },
+  { to: '/panel/gecmis', label: 'Değişiklik Geçmişi', icon: History },
   { to: '/panel/hesap', label: 'Hesap', icon: UserRound },
 ]
 

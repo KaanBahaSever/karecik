@@ -19,8 +19,15 @@ import (
 const poweredBy = "Karecik ile hazırlandı"
 
 // PublicMenuOptions scopes the customer menu payload.
+//
+// Lang is the explicit ?lang= of the request and AcceptLanguage its
+// Accept-Language header; utils.NegotiateLanguage turns the two into the
+// language the payload is written in. The dashboard preview leaves
+// AcceptLanguage empty on purpose: the owner previews the language they pick,
+// or the default, never whatever their own browser happens to prefer.
 type PublicMenuOptions struct {
 	Lang            string
+	AcceptLanguage  string
 	IncludeInactive bool // dashboard preview
 }
 
@@ -41,7 +48,7 @@ type PublicMenuOptions struct {
 func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 	menu *models.Menu, opts PublicMenuOptions) (*models.PublicMenu, error) {
 
-	lang := resolveLanguage(menu, opts.Lang)
+	lang := utils.NegotiateLanguage(opts.Lang, opts.AcceptLanguage, menu.Languages, menu.DefaultLanguage)
 	fallback := menu.DefaultLanguage
 
 	// categories.menu_id is NOT NULL since 005, so a category belongs to
@@ -163,6 +170,7 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 		Footer:       BuildFooter(menu),
 		Menus:        menus,
 		MenuResolved: true,
+		Language:     lang,
 	}, nil
 }
 
@@ -188,8 +196,19 @@ func BuildPublicDirectory(ctx context.Context, db DB, business *models.Business,
 		Footer:       models.PublicFooter{PoweredBy: poweredBy},
 		Menus:        menus,
 		MenuResolved: false,
+		// There is no menu to ask which languages it offers, so the visitor is
+		// matched against every supported one. The directory's own texts are
+		// the menu names, which are not translated; the field is for the page,
+		// which renders its interface strings in this language.
+		Language: utils.NegotiateLanguage(opts.Lang, opts.AcceptLanguage,
+			utils.LanguageCodes(), directoryLanguage),
 	}, nil
 }
+
+// directoryLanguage is the language of a directory payload when neither the
+// request nor the visitor's browser names a supported one. It is Turkish
+// because the column default of menus.default_language is.
+const directoryLanguage = "tr"
 
 // publicMenuRefs lists the menus of the tenant — the current one included, when
 // there is one — so the customer menu can render a switcher and the directory
@@ -223,20 +242,6 @@ func publicMenuRefs(ctx context.Context, db DB, businessID uuid.UUID,
 		})
 	}
 	return refs, nil
-}
-
-// resolveLanguage validates the requested language, falling back to the default
-// language of the menu.
-func resolveLanguage(menu *models.Menu, lang string) string {
-	if lang == "" {
-		return menu.DefaultLanguage
-	}
-	for _, supported := range menu.Languages {
-		if supported == lang {
-			return lang
-		}
-	}
-	return menu.DefaultLanguage
 }
 
 // ToPublicBusiness turns the menu into the header block of the customer
@@ -311,8 +316,9 @@ func ToPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 		WifiSSID:     menu.WifiSSID,
 		WifiPassword: menu.WifiPassword,
 
-		ContactDisplay: menu.ContactDisplay,
-		Links:          links,
+		ContactDisplay:  menu.ContactDisplay,
+		ContactInFooter: menu.ContactInFooter,
+		Links:           links,
 
 		BusinessName: business.Name,
 		BusinessSlug: business.Slug,
@@ -320,14 +326,15 @@ func ToPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 		MenuName:     &name,
 	}
 
-	// "hidden" is the owner saying the contact block is not for customers, and
-	// a customer can read this payload as easily as the page drawn from it — so
-	// in that mode the entries are left out of the payload rather than merely
-	// not drawn. The owner loses nothing: GET /api/menus/:id reads the menu, not
-	// this payload. Address is not part of the contact block and stays. The
-	// other three modes only move the block around the page, so they send it
-	// whole.
-	if menu.ContactDisplay == utils.ContactDisplayHidden {
+	// "hidden" on the home view with the footer list switched off is the owner
+	// saying the contact block is not for customers at all, and a customer can
+	// read this payload as easily as the page drawn from it — so in that case
+	// the entries are left out of the payload rather than merely not drawn. The
+	// owner loses nothing: GET /api/menus/:id reads the menu, not this payload.
+	// Address is not part of the contact block and stays. Every other
+	// combination draws the block somewhere — on the home view, in the footer,
+	// or both — so it is sent whole.
+	if ContactRedacted(menu) {
 		public.Phone = nil
 		public.Instagram = nil
 		public.WifiSSID = nil
@@ -336,6 +343,13 @@ func ToPublicBusiness(business *models.Business, menu *models.Menu) models.Publi
 	}
 
 	return public
+}
+
+// ContactRedacted reports whether the public payload of a menu leaves the
+// contact entries out: only when the block is drawn nowhere — "hidden" on the
+// home view and the footer list switched off.
+func ContactRedacted(menu *models.Menu) bool {
+	return menu.ContactDisplay == utils.ContactDisplayHidden && !menu.ContactInFooter
 }
 
 // PublicLinks is the list of links a customer receives: the stored entries that
@@ -420,6 +434,11 @@ const defaultVatNote = "Fiyatlarımıza KDV dahildir."
 
 // BuildFooter produces the legal notices at the bottom of the menu.
 //
+// The price date travels twice: as PriceDate, the bare YYYY-MM-DD the customer
+// page builds a sentence from in the visitor's own language, and as PriceNote,
+// the finished Turkish sentence older clients print. Both are empty when the
+// menu hides the date.
+//
 // The price date is menus.price_updated_at. Nothing in Go writes it: the
 // products_touch_menu_price_date trigger of migration 010 moves it whenever a
 // price on that menu really changes — through the product dialog, the inline
@@ -435,9 +454,10 @@ func BuildFooter(menu *models.Menu) models.PublicFooter {
 	footer := models.PublicFooter{PoweredBy: poweredBy}
 
 	if menu.ShowPriceDate {
+		day := menu.PriceUpdatedAt.In(utils.Istanbul)
+		footer.PriceDate = day.Format("2006-01-02")
 		footer.PriceNote = fmt.Sprintf(
-			"Fiyatlarımız %s tarihinden itibaren geçerlidir.",
-			menu.PriceUpdatedAt.In(utils.Istanbul).Format("02.01.2006"))
+			"Fiyatlarımız %s tarihinden itibaren geçerlidir.", day.Format("02.01.2006"))
 	}
 	// The VAT note is the trimmed text, or defaultVatNote when that is blank: a
 	// note that is switched on is never printed empty, and an empty field prints

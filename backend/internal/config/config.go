@@ -1,11 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -57,12 +60,47 @@ type Config struct {
 	// header, so a value in it may be verbatim client input.
 	TrustForwardedFor bool
 
+	// AnalyticsRetentionDays is how long the visitor events of the customer
+	// menu (menu_events) are kept before cmd/api deletes them. Those rows hold
+	// visitor IP addresses and source ports, which are personal data under
+	// KVKK, so they are not kept longer than the dashboard needs them. 0 keeps
+	// them forever — a deliberate choice somebody has to make, never a default.
+	AnalyticsRetentionDays int
+
+	// AnalyticsDailyEventCap is how many visitor events one business may store
+	// per Istanbul calendar day; the public endpoint accepts the ones beyond it
+	// with the usual 204 and stores nothing (see package eventgate). It is the
+	// storage guard of an endpoint anybody can call: the per-client limiter
+	// bounds a rate, not a total. 0 disables it.
+	AnalyticsDailyEventCap int
+
 	// PublicURL is the origin the reset link is built from. It has to be the
 	// address a person's browser can actually open, which is not derivable
 	// from Host/Port: those describe the interface the process binds to,
 	// behind whatever proxy terminates TLS.
 	PublicURL string
 }
+
+// defaultAnalyticsRetentionDays is ANALYTICS_RETENTION_DAYS when it is unset:
+// three months of visitor events — enough to compare this month with the last
+// two, short enough that addresses are not hoarded.
+const defaultAnalyticsRetentionDays = 90
+
+// MaxAnalyticsRetentionDays bounds ANALYTICS_RETENTION_DAYS: ten years, far
+// beyond anything the dashboard compares. The bound is not a policy but a
+// guard for the arithmetic: the sweep's cutoff is "now minus that many days",
+// and a day count in the quintillions wraps time.AddDate round to a cutoff of
+// today — which would delete every event — while one in the hundreds of
+// millions lands before any date PostgreSQL can represent, so every sweep
+// fails.
+const MaxAnalyticsRetentionDays = 3650
+
+// defaultAnalyticsDailyEventCap is ANALYTICS_DAILY_EVENT_CAP when it is unset.
+// A visit is a menu view plus a handful of category and product views — about
+// ten events — so this is roughly a thousand visits a day, more than a single
+// restaurant's menu sees. At about 350 bytes a row with its indexes it bounds
+// what one tenant's flood can store to some 3.5 MB a day.
+const defaultAnalyticsDailyEventCap = 10000
 
 // Load reads the .env file and fills in the Config.
 // A missing .env is not an error; values then come from the environment or the
@@ -99,6 +137,18 @@ func Load() *Config {
 		EdgeSecret:        env("EDGE_SECRET", ""),
 		ClientPortHeader:  env("CLIENT_PORT_HEADER", "X-Client-Port"),
 		TrustForwardedFor: envBool("TRUST_FORWARDED_FOR", false),
+	}
+
+	var warning string
+	cfg.AnalyticsRetentionDays, warning = RetentionDays(
+		envInt64("ANALYTICS_RETENTION_DAYS", defaultAnalyticsRetentionDays))
+	if warning != "" {
+		log.Printf("[karecik] WARNING: %s", warning)
+	}
+	cfg.AnalyticsDailyEventCap, warning = DailyEventCap(
+		envInt64("ANALYTICS_DAILY_EVENT_CAP", defaultAnalyticsDailyEventCap))
+	if warning != "" {
+		log.Printf("[karecik] WARNING: %s", warning)
 	}
 
 	// The default follows the deployment shape rather than being a fixed
@@ -265,6 +315,59 @@ func withoutLoopback(origins []string) []string {
 
 // IsProduction reports whether the app runs in production mode.
 func (c *Config) IsProduction() bool { return c.Env == "production" }
+
+// RetentionDays turns ANALYTICS_RETENTION_DAYS as read into the value used, and
+// says why when it had to change it.
+//
+// A negative retention has no meaning; read as a typo, it falls back to the
+// default rather than to "forever", which is the one reading that would keep
+// personal data nobody asked to keep. One above MaxAnalyticsRetentionDays is
+// lowered to it rather than reset to the default: whoever wrote a huge number
+// meant "keep them for a long time", and the default would delete exactly what
+// they meant to keep.
+func RetentionDays(value int64) (int, string) {
+	switch {
+	case value < 0:
+		return defaultAnalyticsRetentionDays, fmt.Sprintf(
+			"ANALYTICS_RETENTION_DAYS=%d is negative, using %d", value, defaultAnalyticsRetentionDays)
+	case value > MaxAnalyticsRetentionDays:
+		return MaxAnalyticsRetentionDays, fmt.Sprintf(
+			"ANALYTICS_RETENTION_DAYS=%d is above the %d-day maximum, using %d "+
+				"(0 keeps events forever)", value, MaxAnalyticsRetentionDays, MaxAnalyticsRetentionDays)
+	}
+	return int(value), ""
+}
+
+// DailyEventCap turns ANALYTICS_DAILY_EVENT_CAP as read into the value used. A
+// negative cap is a typo and takes the default — never "no cap", which has to
+// be asked for with 0. A value too large for an int is no cap in effect, and
+// is read as the largest int.
+func DailyEventCap(value int64) (int, string) {
+	switch {
+	case value < 0:
+		return defaultAnalyticsDailyEventCap, fmt.Sprintf(
+			"ANALYTICS_DAILY_EVENT_CAP=%d is negative, using %d", value, defaultAnalyticsDailyEventCap)
+	case value > math.MaxInt:
+		return math.MaxInt, ""
+	}
+	return int(value), ""
+}
+
+// AnalyticsCutoff is the instant the retention sweep deletes events before:
+// days calendar days before now. ok is false — and nothing may be deleted —
+// for a day count outside 1..MaxAnalyticsRetentionDays or a cutoff that is not
+// in the past, so that no surprise in the arithmetic can ever turn "keep them
+// for a while" into "delete everything".
+func AnalyticsCutoff(now time.Time, days int) (time.Time, bool) {
+	if days < 1 || days > MaxAnalyticsRetentionDays {
+		return time.Time{}, false
+	}
+	cutoff := now.AddDate(0, 0, -days)
+	if !cutoff.Before(now) {
+		return time.Time{}, false
+	}
+	return cutoff, true
+}
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

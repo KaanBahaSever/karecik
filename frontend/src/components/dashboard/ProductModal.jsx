@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Ban, Loader2, Plus, X } from 'lucide-react'
+import { AlertTriangle, Ban, Loader2, Plus, X } from 'lucide-react'
 
 import api from '../../lib/api'
 import { categoryEmoji } from '../../lib/category'
 import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
 import { buildOptionsPayload, optionNamesOf } from '../../lib/productOptions.js'
+import { descriptionRepeatsIngredients } from '../../lib/productText'
 import { ALLERGENS, findLanguage } from '../../locales/index.js'
 import {
   BADGE_COLOR_PRESETS,
@@ -479,6 +480,15 @@ export default function ProductModal({
   const editingPrimary = activeLanguage === primaryLanguage
   const activeLanguageLabel = findLanguage(activeLanguage).label
   const primaryLanguageLabel = findLanguage(primaryLanguage).label
+  // The same text in both fields of the language being edited. Only a hint:
+  // the save goes through either way (see lib/productText.js).
+  const textsRepeat = descriptionRepeatsIngredients(
+    activeTranslation.description,
+    activeTranslation.ingredients,
+  )
+  // The examples follow the name field's: Turkish for Turkish, English for
+  // every other language.
+  const nonTurkish = activeLanguage !== 'tr'
 
   return (
     <Modal
@@ -586,9 +596,12 @@ export default function ProductModal({
             ) : null}
           </div>
 
+          {/* Two fields with two jobs. Imported menus often put the same text
+              in both, so the labels, the examples and the help lines spell
+              out which is which. */}
           <div>
             <label className="label" htmlFor={`product-description-${activeLanguage}`}>
-              Açıklama (opsiyonel)
+              Kısa açıklama (opsiyonel)
             </label>
             <textarea
               id={`product-description-${activeLanguage}`}
@@ -596,9 +609,18 @@ export default function ProductModal({
               rows={2}
               value={activeTranslation.description}
               onChange={(event) => updateField(activeLanguage, 'description', event.target.value)}
-              placeholder="Ürünü kısaca tanıtın"
+              placeholder={
+                nonTurkish
+                  ? 'Örn. Made with freshly roasted beans, served hot.'
+                  : 'Örn. Günlük kavrulan çekirdeklerle hazırlanır, sıcak servis edilir.'
+              }
               maxLength={400}
+              aria-describedby={`product-description-help-${activeLanguage}`}
             />
+            <p id={`product-description-help-${activeLanguage}`} className="help-text">
+              Ürünü bir iki cümleyle tanıtın ya da bir servis notu yazın. Ürün kartında adın
+              altında görünür. Malzemeleri buraya değil, aşağıdaki “İçindekiler” alanına yazın.
+            </p>
           </div>
 
           <div>
@@ -611,9 +633,38 @@ export default function ProductModal({
               rows={2}
               value={activeTranslation.ingredients}
               onChange={(event) => updateField(activeLanguage, 'ingredients', event.target.value)}
-              placeholder="Örn. espresso, süt, kakao"
+              placeholder={
+                nonTurkish ? 'Örn. espresso, milk, cocoa' : 'Örn. espresso, süt, kakao'
+              }
               maxLength={400}
+              aria-describedby={`product-ingredients-help-${activeLanguage}${
+                textsRepeat ? ` product-texts-repeat-${activeLanguage}` : ''
+              }`}
             />
+            <p id={`product-ingredients-help-${activeLanguage}`} className="help-text">
+              Malzemeleri virgülle ayırarak yazın. Ürün detayında “İçindekiler” başlığı altında
+              ayrı bir liste olarak görünür.
+            </p>
+
+            {textsRepeat ? (
+              <p
+                id={`product-texts-repeat-${activeLanguage}`}
+                className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                role="status"
+              >
+                <AlertTriangle
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600"
+                  aria-hidden="true"
+                />
+                <span>
+                  Kısa açıklama ile içindekiler aynı
+                  {multiLanguage ? ` (${findLanguage(activeLanguage).label})` : ''}. Müşteri aynı
+                  metni iki kez okumasın diye ürün detayında açıklama gösterilmez. Açıklamaya
+                  kısa bir tanıtım, içindekilere yalnızca malzeme listesini yazmanızı öneririz.
+                  Bu yalnızca bir uyarıdır; ürünü yine de kaydedebilirsiniz.
+                </span>
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -1017,7 +1068,7 @@ export default function ProductModal({
                           group.names,
                           editingPrimary,
                           primaryLanguage,
-                          activeLanguage === 'tr' ? 'Örn. Süt Tercihi' : 'Örn. Milk Choice',
+                          nonTurkish ? 'Örn. Milk Choice' : 'Örn. Süt Tercihi',
                         )}
                         maxLength={MAX_OPTION_NAME}
                         autoComplete="off"
@@ -1111,7 +1162,7 @@ export default function ProductModal({
                               item.names,
                               editingPrimary,
                               primaryLanguage,
-                              activeLanguage === 'tr' ? 'Örn. Yulaf Sütü' : 'Örn. Oat Milk',
+                              nonTurkish ? 'Örn. Oat Milk' : 'Örn. Yulaf Sütü',
                             )}
                             maxLength={MAX_OPTION_NAME}
                             autoComplete="off"

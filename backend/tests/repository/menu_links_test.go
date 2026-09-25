@@ -147,4 +147,66 @@ func TestToPublicBusinessFiltersLinksAndHidesThemInHiddenMode(t *testing.T) {
 	if public.Links == nil || len(public.Links) != 0 {
 		t.Fatalf("hidden mode: public links %#v, want an empty, non-nil list", public.Links)
 	}
+
+	// Hidden on the home view but switched on for the footer still draws the
+	// block somewhere, so nothing is redacted — the legacy "footer" mode.
+	menu.ContactInFooter = true
+	public = repository.ToPublicBusiness(business, menu)
+	if got := idsOf(public.Links); strings.Join(got, "|") != "ok" {
+		t.Fatalf("hidden + contact_in_footer: public links %q, want the valid entry", got)
+	}
+	if !public.ContactInFooter {
+		t.Fatal("hidden + contact_in_footer: the payload lost contact_in_footer")
+	}
+}
+
+// The redaction rule on its own: the block is left out of the payload only
+// when it is drawn nowhere.
+func TestContactRedactedOnlyWhenTheBlockIsDrawnNowhere(t *testing.T) {
+	for _, tc := range []struct {
+		mode     string
+		inFooter bool
+		want     bool
+	}{
+		{utils.ContactDisplayInline, false, false},
+		{utils.ContactDisplayInline, true, false},
+		{utils.ContactDisplayList, false, false},
+		{utils.ContactDisplayList, true, false},
+		{utils.ContactDisplayHidden, true, false},
+		{utils.ContactDisplayHidden, false, true},
+	} {
+		menu := &models.Menu{ContactDisplay: tc.mode, ContactInFooter: tc.inFooter}
+		if got := repository.ContactRedacted(menu); got != tc.want {
+			t.Errorf("ContactRedacted(%s, in_footer=%v) = %v, want %v", tc.mode, tc.inFooter, got, tc.want)
+		}
+	}
+}
+
+// The legacy "footer" mode is accepted and resolved to the pair it always
+// meant; the three listed modes pass through; anything else is refused.
+func TestResolveContactDisplay(t *testing.T) {
+	for _, tc := range []struct {
+		in           string
+		mode         string
+		forcesFooter bool
+		ok           bool
+	}{
+		{"inline", "inline", false, true},
+		{"list", "list", false, true},
+		{"hidden", "hidden", false, true},
+		{"footer", "hidden", true, true},
+		{"Footer", "", false, false},
+		{" inline", "", false, false},
+		{"", "", false, false},
+		{"grid", "", false, false},
+	} {
+		mode, forces, ok := utils.ResolveContactDisplay(tc.in)
+		if mode != tc.mode || forces != tc.forcesFooter || ok != tc.ok {
+			t.Errorf("ResolveContactDisplay(%q) = (%q, %v, %v), want (%q, %v, %v)",
+				tc.in, mode, forces, ok, tc.mode, tc.forcesFooter, tc.ok)
+		}
+	}
+	if utils.IsValidContactDisplay(utils.ContactDisplayFooter) {
+		t.Error("the legacy footer mode is still listed as a stored mode")
+	}
 }

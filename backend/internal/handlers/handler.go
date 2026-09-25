@@ -17,11 +17,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"karecik/backend/internal/config"
+	"karecik/backend/internal/eventgate"
 	"karecik/backend/internal/mailer"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
 	"karecik/backend/internal/session"
+	"karecik/backend/internal/utils"
 )
 
 // Handler carries the dependencies shared by every HTTP endpoint.
@@ -43,6 +45,12 @@ type Handler struct {
 	// configured gets mailer.Disabled — which refuses loudly instead of
 	// pretending to deliver.
 	Mail mailer.Mailer
+
+	// Events decides which visitor events POST /api/public/events stores: it
+	// drops repeats and enforces ANALYTICS_DAILY_EVENT_CAP (package
+	// eventgate). Like Sessions it is state of this process, and it is a field
+	// so that a test can give it a clock of its own.
+	Events *eventgate.Gate
 }
 
 // New builds a Handler.
@@ -50,7 +58,11 @@ func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store, mail mai
 	if mail == nil {
 		mail = mailer.Disabled{}
 	}
-	return &Handler{DB: db, Cfg: cfg, Sessions: sessions, Mail: mail}
+	events := eventgate.New(eventgate.Config{
+		DailyCap: cfg.AnalyticsDailyEventCap,
+		Zone:     utils.Istanbul,
+	})
+	return &Handler{DB: db, Cfg: cfg, Sessions: sessions, Mail: mail, Events: events}
 }
 
 // Health reports the service and database status.

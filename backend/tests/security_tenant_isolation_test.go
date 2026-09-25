@@ -71,6 +71,13 @@ type harness struct {
 	// pool is the scratch database, exposed so a suite can assert on rows the
 	// API is not supposed to expose over HTTP — password reset tokens, for one.
 	pool *pgxpool.Pool
+	// cfg is the configuration the app was built with — the upload directory
+	// lives there.
+	cfg *config.Config
+	// handler is the app's handler set, for a suite that has to reach state
+	// the app keeps in memory — the analytics event gate, whose clock a test
+	// replaces.
+	handler *handlers.Handler
 }
 
 // newHarness brings up an isolated copy of the whole backend.
@@ -94,6 +101,15 @@ func newHarness(t *testing.T) *harness {
 // newHarnessWith is newHarness with the e-mail transport chosen by the caller.
 // The reset suite passes a recorder; everything else wants Disabled.
 func newHarnessWith(t *testing.T, mail mailer.Mailer) *harness {
+	t.Helper()
+	return newHarnessConfigured(t, mail, nil)
+}
+
+// newHarnessConfigured is newHarnessWith with a last say over the
+// configuration, applied before the router is built — for a suite that needs
+// the edge proof and the port header set, say, so the client's source port is
+// resolved at all.
+func newHarnessConfigured(t *testing.T, mail mailer.Mailer, configure func(*config.Config)) *harness {
 	t.Helper()
 
 	adminURL := strings.TrimSpace(os.Getenv(adminURLEnv))
@@ -210,9 +226,13 @@ func newHarnessWith(t *testing.T, mail mailer.Mailer) *harness {
 	sessions := session.New()
 	t.Cleanup(sessions.Stop)
 
-	router.Setup(app, handlers.New(scratchPool, cfg, sessions, mail), cfg)
+	if configure != nil {
+		configure(cfg)
+	}
+	handler := handlers.New(scratchPool, cfg, sessions, mail)
+	router.Setup(app, handler, cfg)
 
-	return &harness{t: t, app: app, dbName: dbName, pool: scratchPool}
+	return &harness{t: t, app: app, dbName: dbName, pool: scratchPool, cfg: cfg, handler: handler}
 }
 
 // poolConfig parses a connection string and optionally re-points it at another

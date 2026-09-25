@@ -196,13 +196,17 @@ type Menu struct {
 	WifiSSID     *string `json:"wifi_ssid"`
 	WifiPassword *string `json:"wifi_password"`
 
-	// ContactDisplay decides where the customer menu draws the contact block —
-	// Wi-Fi, Instagram, the phone number and Links — and is one of the ids of
-	// utils.ContactDisplayModes. Links are the owner's own entries of that
-	// block, in the owner's order. The repository never returns a nil Links,
-	// so the payload carries [] and not null.
-	ContactDisplay string    `json:"contact_display"`
-	Links          MenuLinks `json:"links"`
+	// ContactDisplay decides where the HOME view of the customer menu draws the
+	// contact block — Wi-Fi, Instagram, the phone number and Links — and is one
+	// of the ids of utils.ContactDisplayModes. ContactInFooter repeats the
+	// compact list in the footer of the product screens as well; it is off by
+	// default, which leaves that footer to its standard legal content. Links
+	// are the owner's own entries of that block, in the owner's order. The
+	// repository never returns a nil Links, so the payload carries [] and not
+	// null.
+	ContactDisplay  string    `json:"contact_display"`
+	Links           MenuLinks `json:"links"`
+	ContactInFooter bool      `json:"contact_in_footer"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -658,6 +662,14 @@ type PublicMenu struct {
 	Categories []PublicCategory `json:"categories"`
 	Footer     PublicFooter     `json:"footer"`
 
+	// Language is the language every text of this payload was actually
+	// resolved in: the explicit ?lang= when the menu offers it, else the first
+	// language of the visitor's Accept-Language header the menu offers, else
+	// the menu's default language (utils.NegotiateLanguage). A directory
+	// payload carries it too, negotiated against every supported language, so
+	// the page can pick its own interface language without guessing again.
+	Language string `json:"language"`
+
 	// Menus lists every active menu of the same business, in position order.
 	// Always non-nil; empty when the tenant publishes nothing.
 	Menus []PublicMenuRef `json:"menus"`
@@ -737,14 +749,17 @@ type PublicBusiness struct {
 	WifiSSID     *string `json:"wifi_ssid"`
 	WifiPassword *string `json:"wifi_password"`
 
-	// ContactDisplay and Links mirror the two fields on Menu, except that Links
-	// carries only the stored entries that pass the link rules, with ids unique
-	// within the payload — see repository.PublicLinks. In "hidden" mode the
-	// payload builder sends Phone, Instagram, WifiSSID and WifiPassword as null
-	// and Links as [] — see ToPublicBusiness. Address is not part of the
-	// contact block and is sent in every mode.
-	ContactDisplay string    `json:"contact_display"`
-	Links          MenuLinks `json:"links"`
+	// ContactDisplay, ContactInFooter and Links mirror the three fields on
+	// Menu, except that Links carries only the stored entries that pass the
+	// link rules, with ids unique within the payload — see
+	// repository.PublicLinks. When the block is drawn nowhere — "hidden" on the
+	// home view AND ContactInFooter false — the payload builder sends Phone,
+	// Instagram, WifiSSID and WifiPassword as null and Links as [] — see
+	// ToPublicBusiness. Address is not part of the contact block and is sent in
+	// every mode.
+	ContactDisplay  string    `json:"contact_display"`
+	ContactInFooter bool      `json:"contact_in_footer"`
+	Links           MenuLinks `json:"links"`
 
 	// The tenant, and the menu this payload was built from. BusinessName and
 	// BusinessSlug are always filled — even when no menu resolved, which is
@@ -786,8 +801,16 @@ type PublicProduct struct {
 	IsActive     bool           `json:"is_active"`
 }
 
+// PublicFooter is the legal block at the bottom of the customer menu.
+//
+// PriceDate is the "prices valid from" day as YYYY-MM-DD on the Europe/Istanbul
+// calendar, or "" when the menu hides the date. It is what the customer page
+// builds its sentence from, in whatever language the visitor reads. PriceNote
+// carries the same day as a finished Turkish sentence and stays for the
+// clients that still print it.
 type PublicFooter struct {
 	PriceNote string `json:"price_note"`
+	PriceDate string `json:"price_date"`
 	VatNote   string `json:"vat_note"`
 	PoweredBy string `json:"powered_by"`
 }
