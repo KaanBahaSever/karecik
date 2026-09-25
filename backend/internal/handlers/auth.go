@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -8,7 +9,9 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"karecik/backend/internal/audit"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
@@ -240,6 +243,19 @@ func (h *Handler) Logout(c *fiber.Ctx) error {
 	return utils.OK(c, fiber.Map{"success": true})
 }
 
+// passwordChangeRecord is the audit row of a password change. It carries the
+// way the change was made — "dashboard" or "reset_link" — and nothing about the
+// password itself: no hash, no length, no mask.
+func passwordChangeRecord(user *models.User, method string) *auditRecord {
+	return &auditRecord{
+		action:     audit.ActionPasswordChange,
+		entityType: audit.EntityAccount,
+		entityID:   user.ID.String(),
+		label:      user.Email,
+		changes:    audit.Changes{"method": {Old: nil, New: method}},
+	}
+}
+
 // ChangePassword — POST /api/auth/change-password  (authenticated)
 //
 // The current password is required even though the caller is already signed in.
@@ -290,7 +306,13 @@ func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.Internal(c, err)
 	}
-	if err := repository.UpdatePassword(c.Context(), h.DB, userID, hash); err != nil {
+	// The audit row says that the password changed, and from where — never
+	// what it changed from or to, in any form.
+	record := recordHook(auditActorOf(c),
+		func(context.Context, pgx.Tx, uuid.UUID) (*auditRecord, error) {
+			return passwordChangeRecord(user, "dashboard"), nil
+		})
+	if err := repository.UpdatePassword(c.Context(), h.DB, userID, hash, record); err != nil {
 		return utils.Internal(c, err)
 	}
 

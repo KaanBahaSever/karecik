@@ -255,6 +255,24 @@ export const api = {
   updateMenu: (id, payload) => request(`/api/menus/${id}`, { method: 'PUT', body: payload }),
   deleteMenu: (id) => request(`/api/menus/${id}`, { method: 'DELETE' }),
 
+  /* analytics — what the customer menus report through POST /api/public/events */
+  // `params` may carry { menu_id, from, to }: an empty menu_id means every menu
+  // of the business, and from/to are inclusive 'YYYY-MM-DD' days in
+  // Europe/Istanbul (the server's default is the last 30 days). Answers the
+  // totals, one row per day of the range and the ten most viewed categories
+  // and products.
+  analyticsSummary: (params) => request(`/api/analytics/summary${qs(params)}`),
+  // The raw visit log behind those totals, newest first. `params` may carry
+  // { menu_id, type, from, to, ip, limit, offset }; the server caps limit at
+  // 200 and answers { items, total, limit, offset }.
+  analyticsEvents: (params) => request(`/api/analytics/events${qs(params)}`),
+
+  /* audit trail — who changed what in the panel, newest first */
+  // `params` may carry { entity_type, action, limit, offset }. Each item's
+  // `changes` maps a field to { old, new }; a Wi-Fi password arrives masked
+  // and an account password is never there at all.
+  auditLogs: (params) => request(`/api/audit-logs${qs(params)}`),
+
   /* customer menu payloads */
   // `params` may carry { menu }: the slug of the menu to preview, scoped to the
   // caller's own business. Without it the backend resolves the single active

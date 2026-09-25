@@ -185,7 +185,19 @@ UPLOAD_DIR=./uploads
 COOKIE_DOMAIN=
 COOKIE_SAMESITE=Lax
 COOKIE_SECURE=false
+ANALYTICS_RETENTION_DAYS=90
+ANALYTICS_DAILY_EVENT_CAP=10000
 ```
+
+`ANALYTICS_RETENTION_DAYS` is how many days the customer menu's visitor events
+are kept. They carry visitor IP addresses and source ports — personal data under
+KVKK — so older rows are deleted when the server starts and every 24 hours
+after. `0` keeps them forever; values above `3650` are lowered to `3650`.
+
+`ANALYTICS_DAILY_EVENT_CAP` is how many of those events one business may store
+per Europe/Istanbul calendar day (`0` = no cap). The events endpoint is public;
+past the cap it keeps answering `204` but stores nothing, and the server log
+says so once per business per day.
 
 **Anatomy of the connection string** (`DATABASE_URL`):
 

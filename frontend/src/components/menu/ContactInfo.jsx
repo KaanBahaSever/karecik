@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 
 import { copyToClipboard } from '../../lib/clipboard'
-import { t } from '../../locales/index.js'
+import { t, textDir } from '../../locales/index.js'
 
 /**
  * The venue's contact details on the customer menu: Wi-Fi, Instagram, the phone
@@ -326,7 +326,9 @@ function CompactLine({ icon: Icon, caption, value, note, actions, valueBelowCapt
   the surrounding text runs right to left, and without the isolation a phone
   number's leading "+" or a hostname's dots are reordered around it. Free text
   the owner typed - a network name, a link label - gets a bare <bdi>, which
-  picks its direction from its own first letters.
+  picks its direction from its own first letters; a link label, which is
+  prose, goes through textDir() as the menu's other texts do, so an Arabic
+  label that opens with a Latin word still reads right to left.
 
   A value that is never truncated - the Wi-Fi password, the phone number, an
   Instagram value with no user name, and every value in the compact footer -
@@ -494,7 +496,7 @@ function ContactDetails({ item, language, compact = false }) {
   }
 
   // A custom link: its label, where it goes, and the way there.
-  const value = <bdi>{item.label}</bdi>
+  const value = <bdi dir={textDir(item.label, language)}>{item.label}</bdi>
   const note = <bdi dir="ltr">{item.hostname}</bdi>
   const actions = (
     <ActionLink href={item.url} external compact={compact}>

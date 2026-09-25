@@ -116,6 +116,14 @@ func GetProduct(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.P
 		id, businessID))
 }
 
+// lockedProduct is the before-read of a product write (see "The before-read"
+// in audit.go): GetProduct under the given row lock.
+func lockedProduct(ctx context.Context, db DB, id, businessID uuid.UUID, lock string) (*models.Product, error) {
+	return scanProduct(db.QueryRow(ctx,
+		`SELECT `+productColumns+` FROM products WHERE id = $1 AND business_id = $2 `+lock,
+		id, businessID))
+}
+
 // CreateProduct appends a product to the end of its category.
 //
 // It is a write into the category, so it runs inside writeIntoCategory: the
@@ -128,10 +136,13 @@ func GetProduct(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.P
 //
 // A run PostgreSQL aborted over a lock conflict rolled its transaction back, so
 // RetryOnConflict can run it again as it is.
+//
+// hooks run inside the same transaction after the INSERT, with the created
+// product — how the audit row of the create commits with it (see WriteHook).
 func CreateProduct(ctx context.Context, db TxDB, businessID, categoryID uuid.UUID,
 	translations models.Translations, price float64, comparePrice *float64, calories *int,
 	imageURL *string, allergens []string, badges models.Badges, options models.ProductOptions,
-	isActive, isFeatured bool) (*models.Product, error) {
+	isActive, isFeatured bool, hooks ...WriteHook[*models.Product]) (*models.Product, error) {
 
 	if allergens == nil {
 		allergens = []string{}
@@ -162,8 +173,11 @@ func CreateProduct(ctx context.Context, db TxDB, businessID, categoryID uuid.UUI
 			RETURNING `+productColumns,
 			businessID, categoryID, translations, price, comparePrice, calories,
 			imageURL, allergens, badges, options, isActive, isFeatured, nextPosition))
+		if err != nil {
+			return err
+		}
 		product = created
-		return err
+		return runHooks(ctx, tx, created, hooks)
 	})
 	if err != nil {
 		return nil, err
@@ -192,8 +206,16 @@ var productUpdatableColumns = map[string]bool{
 //
 // Either way a run PostgreSQL aborted over a lock conflict wrote nothing, so
 // RetryOnConflict can run it again as it is.
+//
+// hooks run after the UPDATE, inside the same transaction — the move's, or, for
+// an update that moves nothing, one opened for them (see updateWithHooks) —
+// with the product as it was and as it is now. The "before" is read in that
+// transaction, FOR NO KEY UPDATE, as the statement right before the UPDATE and
+// after a move's advisory locks, so it is exactly the version the UPDATE
+// replaced (see "The before-read" in audit.go). An update that names no
+// updatable column writes nothing and runs none.
 func UpdateProduct(ctx context.Context, db TxDB, id, businessID uuid.UUID,
-	fields map[string]any) (*models.Product, error) {
+	fields map[string]any, hooks ...WriteHook[Update[*models.Product]]) (*models.Product, error) {
 
 	columns := make([]string, 0, len(fields))
 	for column := range fields {
@@ -218,9 +240,16 @@ func UpdateProduct(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 		fmt.Sprintf(` WHERE id = $%d AND business_id = $%d RETURNING `, len(args)-1, len(args)) +
 		productColumns
 
+	before := func(db DB) (*models.Product, error) {
+		return lockedProduct(ctx, db, id, businessID, lockForNoKeyUpdate)
+	}
+	update := func(db DB) (*models.Product, error) {
+		return scanProduct(db.QueryRow(ctx, query, args...))
+	}
+
 	value, moves := fields["category_id"]
 	if !moves {
-		return scanProduct(db.QueryRow(ctx, query, args...))
+		return updateWithHooks(ctx, db, hooks, before, update)
 	}
 	// The locks are keyed on the id, so a move has to name its category as a
 	// uuid.UUID; anything else would move the product without them.
@@ -231,9 +260,12 @@ func UpdateProduct(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 
 	var product *models.Product
 	err := writeIntoCategory(ctx, db, businessID, target, func(tx pgx.Tx) error {
-		updated, err := scanProduct(tx.QueryRow(ctx, query, args...))
+		updated, err := updateInTx(ctx, tx, hooks, before, update)
+		if err != nil {
+			return err
+		}
 		product = updated
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -242,16 +274,38 @@ func UpdateProduct(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 }
 
 // DeleteProduct removes a product.
-func DeleteProduct(ctx context.Context, db DB, id, businessID uuid.UUID) error {
-	tag, err := db.Exec(ctx,
-		`DELETE FROM products WHERE id = $1 AND business_id = $2`, id, businessID)
-	if err != nil {
-		return err
+//
+// hooks run after the DELETE, in a transaction opened for them, with the
+// product as it was removed: read in that transaction, FOR UPDATE, as the
+// statement right before the DELETE (see "The before-read" in audit.go).
+// Without hooks the DELETE runs alone.
+func DeleteProduct(ctx context.Context, db TxDB, id, businessID uuid.UUID,
+	hooks ...WriteHook[*models.Product]) error {
+
+	remove := func(db DB) error {
+		tag, err := db.Exec(ctx,
+			`DELETE FROM products WHERE id = $1 AND business_id = $2`, id, businessID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	if len(hooks) == 0 {
+		return remove(db)
 	}
-	return nil
+	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+		removed, err := lockedProduct(ctx, tx, id, businessID, lockForUpdate)
+		if err != nil {
+			return err
+		}
+		if err := remove(tx); err != nil {
+			return err
+		}
+		return runHooks(ctx, tx, removed, hooks)
+	})
 }
 
 // ReorderProducts writes the given id order into the position column and moves
@@ -281,7 +335,11 @@ func DeleteProduct(ctx context.Context, db DB, id, businessID uuid.UUID) error {
 //
 // A run PostgreSQL aborted over a lock conflict rolled its transaction back, so
 // RetryOnConflict can run it again as it is.
-func ReorderProducts(ctx context.Context, db TxDB, businessID, categoryID uuid.UUID, ids []uuid.UUID) error {
+//
+// hooks run after the UPDATE, inside the transaction, with the ids as given.
+// An empty list writes nothing and runs none.
+func ReorderProducts(ctx context.Context, db TxDB, businessID, categoryID uuid.UUID, ids []uuid.UUID,
+	hooks ...WriteHook[[]uuid.UUID]) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -293,13 +351,15 @@ func ReorderProducts(ctx context.Context, db TxDB, businessID, categoryID uuid.U
 			FOR UPDATE`, businessID, ids); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			UPDATE products p
 			SET position = data.ord - 1, category_id = $3
 			FROM unnest($2::uuid[]) WITH ORDINALITY AS data(id, ord)
 			WHERE p.id = data.id AND p.business_id = $1`,
-			businessID, ids, categoryID)
-		return err
+			businessID, ids, categoryID); err != nil {
+			return err
+		}
+		return runHooks(ctx, tx, ids, hooks)
 	})
 }
 
@@ -327,6 +387,13 @@ type PriceChange struct {
 // price read is compared at two decimals, the precision of its column.
 func (c PriceChange) Changed() bool {
 	return c.NewPrice != utils.Round2(c.Price)
+}
+
+// PriceApplication is what an ApplyPrices hook receives: every product the
+// apply priced, in menu editor order, and how many of them it wrote.
+type PriceApplication struct {
+	Changes []PriceChange
+	Written int
 }
 
 // PlanPriceChanges prices every row, keeping their order:
@@ -491,8 +558,13 @@ func PriceLimitExceeded(changes []PriceChange) bool {
 //
 // A run PostgreSQL aborted over a lock conflict rolled its transaction back, so
 // RetryOnConflict can run it again: the next run reads the prices afresh.
+//
+// hooks run last, inside the transaction, with what the apply priced and how
+// many rows it wrote — on every successful run, one that wrote nothing
+// included, so a hook decides for itself whether that is worth recording.
 func ApplyPrices(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
-	categoryIDs []uuid.UUID, percentage float64, rounding string) ([]PriceChange, int, error) {
+	categoryIDs []uuid.UUID, percentage float64, rounding string,
+	hooks ...WriteHook[PriceApplication]) ([]PriceChange, int, error) {
 
 	var (
 		changes []PriceChange
@@ -511,7 +583,7 @@ func ApplyPrices(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
 		}
 		if len(named) == 0 {
 			changes, written = PlanPriceChanges(nil, percentage, rounding), 0
-			return nil
+			return runHooks(ctx, tx, PriceApplication{Changes: changes}, hooks)
 		}
 
 		// 2. Their row locks, taken by id alone.
@@ -552,7 +624,7 @@ func ApplyPrices(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
 		}
 		if len(ids) == 0 {
 			written = 0
-			return nil
+			return runHooks(ctx, tx, PriceApplication{Changes: changes}, hooks)
 		}
 
 		tag, err := tx.Exec(ctx, `
@@ -565,7 +637,7 @@ func ApplyPrices(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
 			return err
 		}
 		written = int(tag.RowsAffected())
-		return nil
+		return runHooks(ctx, tx, PriceApplication{Changes: changes, Written: written}, hooks)
 	})
 	if err != nil {
 		return nil, 0, err

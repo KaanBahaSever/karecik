@@ -255,6 +255,90 @@ Limiter ve oturum audit alanı Fiber'ın `c.IP()`'sini kullanıyordu. `ProxyHead
 
 Artık limiter `X-Real-IP`'ye anahtarlanıyor (`EDGE_SECRET` varsa doğrulanmış ziyaretçi adresine). Log'a yazılan adres ile limiter anahtarı **ayrı alanlar**: log en iyi tahmini gösteriyor, limiter yalnızca çağıranın seçemediği bir değeri kullanıyor.
 
+### Ziyaretçi analitiği, denetim kaydı ve saklama süresi (KVKK)
+
+Aynı çözümleyici artık iki tabloya da yazıyor:
+
+- **`menu_events`** — müşteri menüsündeki her menü, kategori ve ürün
+  görüntülemesi (`POST /api/public/events`): `ip`, `port`, `ip_source`,
+  kısaltılmış user agent, dil. Panelde analitik özeti ve IP/port'lu ayrıntı
+  tablosu bunu okuyor.
+- **`audit_logs`** — sahibin her yönetim işlemi (ürün, fiyat, kategori, menü
+  ayarları, logo, iletişim bilgileri, şifre değişikliği, yükleme): kim, nereden,
+  hangi alan neyken neye döndü. Wi-Fi şifresi `••••` olarak, hesap şifresi
+  **hiçbir biçimde** yazılmıyor.
+
+`port` sütunu yukarıdaki log satırıyla aynı kurala uyuyor: `EDGE_SECRET` ve
+transform kuralı yoksa `null`.
+
+IP ve port kişisel veri. `menu_events` satırları **`ANALYTICS_RETENTION_DAYS`**
+günden (varsayılan `90`) eski olduğunda açılışta ve her 24 saatte bir siliniyor;
+`0` sonsuza kadar saklar — bunu bilerek seçin. Açılış log'u geçerli süreyi her
+seferinde yazıyor:
+
+```
+[karecik] visitor analytics  -> events kept 90 days (ANALYTICS_RETENTION_DAYS), swept every 24h
+```
+
+Olay ucu herkese açık ve her istek bir satır yazıyor, bu yüzden tabloyu üç
+şey sınırlıyor:
+
+- **Hız sınırı.** Adresi kanıtlanmış (`EDGE_SECRET` eşleşmiş) bir ziyaretçi
+  dakikada 120 istek gönderebilir — okuyabildiği hızda dokunan biri ~20 gönderir.
+  Kanıtlanmamış anahtar kaba (bir Cloudflare çıkış adresinin arkasında çok
+  ziyaretçi olabilir), onun bütçesi bir kalabalığa göre: dakikada 600.
+- **Tekrar.** Aynı ziyaretçinin aynı görüntülemesi 10 saniye içinde tekrar
+  gelirse `204` alır ama kaydedilmez.
+- **Günlük tavan.** Bir işletme bir günde (Europe/Istanbul) en fazla
+  **`ANALYTICS_DAILY_EVENT_CAP`** (varsayılan `10000`, `0` = sınırsız) olay
+  saklar. Üstündekiler yine `204` alır, kaydedilmez; günün ilk reddi log'a bir
+  kez yazılır:
+
+```
+[karecik] analytics: business <id> reached ANALYTICS_DAILY_EVENT_CAP (10000); its further events today are accepted but not stored
+```
+
+Bu satırı gerçek trafikle görüyorsanız tavanı yükseltin; görmediğiniz halde
+tablo hızla büyüyorsa sebebi sahte trafiktir. Sayaç yeniden başlatmada
+sıfırlanmaz: açılıştan sonra her işletmenin ilk olayında o günkü satırlar
+tablodan sayılır.
+
+`ANALYTICS_RETENTION_DAYS` en fazla `3650` olabilir; daha büyük bir değer
+`3650`'ye indirilir (çok büyük bir sayı, silme sınırını hesaplayan tarih
+aritmetiğini taşırıp **bütün** olayları sildirebilirdi).
+
+### Yüklenen SVG'ler
+
+`/uploads` altındaki **her** dosya — adres nasıl yazılırsa yazılsın, `HEAD`,
+`Range` ve `304` yanıtları dahil — `X-Content-Type-Options: nosniff` ve
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox`
+ile, her SVG ise ayrıca `Content-Type: image/svg+xml` ile sunuluyor. Politika
+yalnızca `.svg` ile biten adreslere değil her dosyaya konuyor, çünkü aynı dosya
+birden fazla yazımla (yüzde kodlama, çift eğik çizgi, büyük/küçük harf)
+istenebiliyor; PNG/JPEG için zararsız. Yükleme sırasında SVG ayrıştırılıp
+betik, dış bağlantı veya gömülü HTML içeriyorsa reddediliyor
+(`internal/svgsafe`); başlıklar ikinci katman — bu kontrolden önce yüklenmiş
+dosyalar dahil, adres doğrudan açılsa bile betik çalışamıyor. Cloudflare'da bu
+başlıkları ezen bir kural eklemeyin.
+
+### Deploy sırasında iki sürüm: migration 012
+
+Railway yeni konteyner sağlıklı olana kadar **eski sürümü** çalıştırmaya devam
+ediyor; migration'lar ise yeni konteynerin açılışında koşuyor. Yani bir süre
+(saniyeler–dakikalar) eski kod yeni şemayla çalışıyor.
+
+`012_menu_contact_in_footer.sql` eski `contact_display = 'footer'` satırlarını
+`'hidden'` + `contact_in_footer = true` çiftine çeviriyor ama `CHECK`
+kısıtını **daraltmıyor**: eski sürüm örtüşme sırasında hâlâ `'footer'`
+yazıyor ve daraltılmış kısıt bu kayıtları `500` ile düşürürdü. Yeni sürüm
+saklanmış bir `'footer'`ı çiftin anlamıyla okuyor. Kısıtı üç moda indirmek,
+`'footer'` yazan hiçbir sürümün çalışmadığı **sonraki** bir deploy'un
+migration'ının işi (önce aynı `UPDATE`, sonra kısıt).
+
+Önlenemeyen tek etki: örtüşme boyunca eski sürüm, çevrilmiş bir menüyü
+`'hidden'` gördüğü için müşteri menüsünde telefon/Instagram/Wi-Fi bilgisini
+gizliyor. Eski sürüm kapanınca kendiliğinden düzeliyor.
+
 ---
 
 ## Şifre sıfırlama e-postası (Resend)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -9,8 +10,11 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"karecik/backend/internal/audit"
 	"karecik/backend/internal/middleware"
+	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
 	"karecik/backend/internal/utils"
 )
@@ -123,7 +127,24 @@ func (h *Handler) UpdateBusiness(c *fiber.Ctx) error {
 		fields["slug"] = slug
 	}
 
-	business, err := repository.UpdateBusiness(c.Context(), h.DB, businessID, fields)
+	// The audit diff compares the account the UPDATE replaced with the one it
+	// returned, both read by the repository inside the write's transaction.
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, change repository.Update[*models.Business]) (*auditRecord, error) {
+			changes := audit.DiffBusiness(change.Before, change.After)
+			if len(changes) == 0 {
+				return nil, nil
+			}
+			return &auditRecord{
+				action:     audit.ActionBusinessUpdate,
+				entityType: audit.EntityBusiness,
+				entityID:   change.After.ID.String(),
+				label:      change.After.Name,
+				changes:    changes,
+			}, nil
+		})
+
+	business, err := repository.UpdateBusiness(c.Context(), h.DB, businessID, fields, record)
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicate) {
 			return utils.Conflict(c, "Bu adres başka bir işletme tarafından kullanılıyor.")

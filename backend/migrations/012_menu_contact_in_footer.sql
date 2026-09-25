@@ -1,0 +1,72 @@
+-- Karecik — the contact block leaves the footer unless the owner asks for it
+--
+-- Until now menus.contact_display carried two decisions in one column: where
+-- the contact block sits on the HOME view, and — implicitly — whether the
+-- compact contact list is repeated in the footer of the product screens
+-- ('inline', 'list' and 'footer' all kept that list; only 'hidden' dropped it).
+-- The footer is being standardised to the legal notices, the "Yerli Üretim"
+-- badge, the price-validity sentence and the "Karecik" credit, so the second
+-- decision becomes a column of its own:
+--
+--   contact_display    'inline' | 'list' | 'hidden' — the HOME view only
+--   contact_in_footer  true draws the compact contact list in the footer of
+--                      the product screens as well; false (the default)
+--                      leaves the footer to its standard content
+--
+-- The legacy 'footer' mode meant "nothing on the home view, the entries only in
+-- the footer", which is exactly contact_display = 'hidden' plus
+-- contact_in_footer = true, so every stored 'footer' row is rewritten to that
+-- pair. The API keeps accepting 'footer' on write and stores it the same way
+-- (handlers/menu.go), so an older dashboard bundle still saves correctly.
+--
+-- 'inline' and 'list' rows keep contact_in_footer = false on purpose: the
+-- footer clean-up is the point of this change, and an owner who wants the list
+-- back in the footer switches it on in the settings.
+--
+-- Redaction follows both columns: the public payload sends phone, instagram,
+-- wifi_ssid and wifi_password as null and links as [] only when the block is
+-- drawn nowhere at all — contact_display = 'hidden' AND contact_in_footer =
+-- false (repository.ToPublicBusiness).
+--
+-- A new file, never an edit of 011: database/migrate.go skips every file
+-- already recorded in schema_migrations.
+--
+-- Idempotent: the column is IF NOT EXISTS guarded and the UPDATE matches
+-- nothing on a second pass.
+--
+-- The CHECK constraint is deliberately left as 011 defined it, admitting
+-- 'footer', although the code of this release never stores that value again.
+-- This file runs when the new container starts, and Railway keeps the previous
+-- release serving until the new one is healthy. That release still validates
+-- and stores 'footer'; a constraint refusing it would turn each of its saves in
+-- legacy footer mode into a 500 for the length of the overlap. A 'footer' row
+-- it writes then is read by this release as the pair it means
+-- (repository.normalizeMenu). Narrowing
+-- the constraint to the three home-view modes belongs to a LATER migration,
+-- shipped once no release that writes 'footer' can still be running: repeat
+-- the UPDATE below first, then swap the constraint.
+--
+-- The overlap has one effect this file cannot prevent: the previous release
+-- reads a rewritten row's 'hidden' as "the contact block nowhere", so until it
+-- stops serving, the public menus it answers for a former 'footer' menu
+-- carry no phone, Instagram or Wi-Fi entries. That lasts seconds to minutes,
+-- touches only the contact list, and ends by itself.
+--
+-- The reverse script lives in migrations/down/ and is NEVER executed
+-- automatically — see the note at the top of that file.
+
+-- ---------------------------------------------------------------- menus
+-- NOT NULL DEFAULT false, so scanMenu reads a plain bool and every menu that is
+-- not rewritten below starts with the standard footer.
+ALTER TABLE menus ADD COLUMN IF NOT EXISTS contact_in_footer BOOLEAN NOT NULL DEFAULT false;
+
+-- The legacy mode, spelled as the pair it always meant.
+UPDATE menus
+   SET contact_display = 'hidden', contact_in_footer = true
+ WHERE contact_display = 'footer';
+
+-- menus_contact_display_check is not touched — see the note above. 011's
+-- definition admits 'inline', 'list', 'footer' and 'hidden'; the three this
+-- release stores are exactly utils.ContactDisplayModes, which handlers/menu.go
+-- checks first (after mapping the legacy 'footer'), so a value the API accepts
+-- always satisfies it and a bad one earns a 422 rather than a 500.

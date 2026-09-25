@@ -1,16 +1,20 @@
 package tests
 
-// Black-box coverage of the contact block settings of a menu — contact_display
-// and the owner's own links — and of the VAT note fallback in the public
-// footer, driven over HTTP like every other suite in this package.
+// Black-box coverage of the contact block settings of a menu — contact_display,
+// contact_in_footer and the owner's own links — and of the VAT note fallback
+// and price date in the public footer, driven over HTTP like every other suite
+// in this package.
 //
-// Three properties carry the weight here, because none of them shows up on a
+// Four properties carry the weight here, because none of them shows up on a
 // happy-path click through the dashboard:
 //
 //   - the links validation is all-or-nothing: a refused list leaves the stored
 //     one exactly as it was, and an accepted list is never shortened;
-//   - "hidden" is enforced by the server and not by the page: the public
-//     payload stops carrying the entries, while the owner still reads them;
+//   - "hidden" with the footer list off is enforced by the server and not by
+//     the page: the public payload stops carrying the entries, while the owner
+//     still reads them;
+//   - the legacy "footer" mode is still accepted and stored as the pair it
+//     always meant — hidden on the home view, listed in the footer;
 //   - the footer's VAT note falls back to the default sentence instead of
 //     printing nothing when the stored text is blank.
 
@@ -29,6 +33,7 @@ import (
 // The Turkish messages of the contract, verbatim.
 const (
 	msgInvalidContactDisplay = "Geçersiz iletişim görünümü."
+	msgInvalidInFooter       = "contact_in_footer alanı true/false olmalıdır."
 	msgTooManyLinks          = "En fazla 8 link ekleyebilirsiniz."
 	msgLabelRequired         = "Link adı zorunludur."
 	msgLabelInvalidChars     = "Link adı geçersiz karakter içeriyor."
@@ -61,15 +66,16 @@ type contactLink struct {
 // contactMenu is a menu as the dashboard API returns it, reduced to the fields
 // this suite reads.
 type contactMenu struct {
-	ID             string        `json:"id"`
-	Slug           string        `json:"slug"`
-	ContactDisplay string        `json:"contact_display"`
-	Links          []contactLink `json:"links"`
-	Phone          *string       `json:"phone"`
-	Address        *string       `json:"address"`
-	Instagram      *string       `json:"instagram"`
-	WifiSSID       *string       `json:"wifi_ssid"`
-	WifiPassword   *string       `json:"wifi_password"`
+	ID              string        `json:"id"`
+	Slug            string        `json:"slug"`
+	ContactDisplay  string        `json:"contact_display"`
+	ContactInFooter bool          `json:"contact_in_footer"`
+	Links           []contactLink `json:"links"`
+	Phone           *string       `json:"phone"`
+	Address         *string       `json:"address"`
+	Instagram       *string       `json:"instagram"`
+	WifiSSID        *string       `json:"wifi_ssid"`
+	WifiPassword    *string       `json:"wifi_password"`
 }
 
 type contactSuite struct {
@@ -167,7 +173,7 @@ func (s *contactSuite) refuse(t *testing.T, what, id string, body any, message s
 	expectRefusal(t, what, resp, payload, message)
 
 	_, after := s.readMenu(t, what+" (after)", id)
-	for _, key := range []string{"contact_display", "links"} {
+	for _, key := range []string{"contact_display", "contact_in_footer", "links"} {
 		if string(before[key]) != string(after[key]) {
 			t.Errorf("%s: the refused request still changed %s from %s to %s",
 				what, key, before[key], after[key])
@@ -208,7 +214,8 @@ func (s *contactSuite) previewMenu(t *testing.T, what, menuSlug string) (map[str
 }
 
 type publicFooter struct {
-	VatNote *string `json:"vat_note"`
+	VatNote   *string `json:"vat_note"`
+	PriceDate *string `json:"price_date"`
 }
 
 // readBusinessSlug reads the tenant's subdomain slug, which the public address
@@ -269,6 +276,7 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 		created := rawObject(t, "POST /api/menus", payload)
 		requireRaw(t, "POST /api/menus response", created, "contact_display", `"inline"`)
+		requireRaw(t, "POST /api/menus response", created, "contact_in_footer", `false`)
 		requireRaw(t, "POST /api/menus response", created, "links", `[]`)
 
 		var createdID string
@@ -277,6 +285,7 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 		_, read := s.readMenu(t, "GET /api/menus/:id", createdID)
 		requireRaw(t, "GET /api/menus/:id", read, "contact_display", `"inline"`)
+		requireRaw(t, "GET /api/menus/:id", read, "contact_in_footer", `false`)
 		requireRaw(t, "GET /api/menus/:id", read, "links", `[]`)
 
 		if kind, length := storedLinksColumn(t, h, "a new menu", createdID); kind != "array" || length != 0 {
@@ -302,8 +311,8 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 	})
 
-	t.Run("2_contact_display_accepts_the_four_modes_and_refuses_anything_else", func(t *testing.T) {
-		for _, mode := range []string{"inline", "list", "footer", "hidden"} {
+	t.Run("2_contact_display_accepts_the_three_modes_and_refuses_anything_else", func(t *testing.T) {
+		for _, mode := range []string{"inline", "list", "hidden"} {
 			written, _ := s.put(t, "PUT contact_display "+mode, menu.ID, map[string]any{"contact_display": mode})
 			if written.ContactDisplay != mode {
 				t.Errorf("PUT contact_display %q answered with %q", mode, written.ContactDisplay)
@@ -314,9 +323,62 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 
 		s.put(t, "back to list", menu.ID, map[string]any{"contact_display": "list"})
-		for _, value := range []any{"grid", "", "INLINE", " inline", "gizli", 5, true, nil} {
+		for _, value := range []any{"grid", "", "INLINE", " inline", "gizli", "Footer", 5, true, nil} {
 			s.refuse(t, fmt.Sprintf("contact_display %#v", value), menu.ID,
 				map[string]any{"contact_display": value}, msgInvalidContactDisplay)
+		}
+	})
+
+	t.Run("2b_the_legacy_footer_mode_is_stored_as_hidden_with_the_footer_list", func(t *testing.T) {
+		s.put(t, "reset", menu.ID, map[string]any{"contact_display": "inline", "contact_in_footer": false})
+
+		written, _ := s.put(t, "PUT contact_display footer", menu.ID, map[string]any{"contact_display": "footer"})
+		if written.ContactDisplay != "hidden" || !written.ContactInFooter {
+			t.Errorf("PUT footer answered with (%q, in_footer=%v), want (hidden, true)",
+				written.ContactDisplay, written.ContactInFooter)
+		}
+		read, _ := s.readMenu(t, "re-read footer", menu.ID)
+		if read.ContactDisplay != "hidden" || !read.ContactInFooter {
+			t.Errorf("PUT footer stored (%q, in_footer=%v), want (hidden, true)",
+				read.ContactDisplay, read.ContactInFooter)
+		}
+
+		// "footer" always meant the footer list, so it wins over an explicit
+		// false in the same body.
+		written, _ = s.put(t, "PUT footer with in_footer false", menu.ID,
+			map[string]any{"contact_display": "footer", "contact_in_footer": false})
+		if !written.ContactInFooter {
+			t.Error("the legacy footer mode stored contact_in_footer false")
+		}
+
+		// The column itself never holds the legacy value.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var stored string
+		if err := h.pool.QueryRow(ctx, `SELECT contact_display FROM menus WHERE id = $1::text::uuid`,
+			menu.ID).Scan(&stored); err != nil {
+			t.Fatalf("could not read menus.contact_display: %v", err)
+		}
+		if stored != "hidden" {
+			t.Errorf("menus.contact_display is %q, want hidden", stored)
+		}
+		// The database still admits it, on purpose: see 9b.
+	})
+
+	t.Run("2c_contact_in_footer_is_a_plain_switch", func(t *testing.T) {
+		for _, flag := range []bool{true, false} {
+			written, raw := s.put(t, fmt.Sprintf("PUT contact_in_footer %v", flag), menu.ID,
+				map[string]any{"contact_in_footer": flag, "contact_display": "list"})
+			if written.ContactInFooter != flag {
+				t.Errorf("PUT contact_in_footer %v answered with %v", flag, written.ContactInFooter)
+			}
+			requireRaw(t, "PUT contact_in_footer", raw, "contact_in_footer", fmt.Sprint(flag))
+		}
+		// null reads as false, as it does for every other switch of a menu;
+		// anything that is not a boolean at all is refused.
+		for _, value := range []any{"true", 1, []any{}, map[string]any{}} {
+			s.refuse(t, fmt.Sprintf("contact_in_footer %#v", value), menu.ID,
+				map[string]any{"contact_in_footer": value}, msgInvalidInFooter)
 		}
 	})
 
@@ -598,7 +660,7 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 	})
 
-	t.Run("6_create_accepts_both_fields", func(t *testing.T) {
+	t.Run("6_create_accepts_the_contact_fields", func(t *testing.T) {
 		resp, payload := h.do(http.MethodPost, "/api/menus", owner.session, map[string]any{
 			"name":            "Bar Menüsü",
 			"contact_display": "footer",
@@ -609,8 +671,9 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 		var created contactMenu
 		decodeInto(t, "POST /api/menus with contact settings", payload, &created)
-		if created.ContactDisplay != "footer" {
-			t.Errorf("the created menu has contact_display %q, want footer", created.ContactDisplay)
+		if created.ContactDisplay != "hidden" || !created.ContactInFooter {
+			t.Errorf("the created menu has (%q, in_footer=%v), want the legacy footer mode stored as (hidden, true)",
+				created.ContactDisplay, created.ContactInFooter)
 		}
 		if len(created.Links) != 1 || created.Links[0].Label != "Rezervasyon" ||
 			created.Links[0].URL != "https://bar.example" {
@@ -620,9 +683,11 @@ func TestMenuContactSettings(t *testing.T) {
 		}
 	})
 
-	// From here on the menu carries one link and every contact detail.
+	// From here on the menu carries one link and every contact detail, and the
+	// footer list starts switched off.
 	s.put(t, "fixture public payload", menu.ID, map[string]any{
-		"links": []map[string]any{{"id": "rezervasyon", "label": "Rezervasyon", "url": contactLinkURL}},
+		"links":             []map[string]any{{"id": "rezervasyon", "label": "Rezervasyon", "url": contactLinkURL}},
+		"contact_in_footer": false,
 	})
 
 	t.Run("7_the_public_payload_carries_contact_display_and_links", func(t *testing.T) {
@@ -630,6 +695,7 @@ func TestMenuContactSettings(t *testing.T) {
 
 		business, _, _ := s.publicMenu(t, "public payload in list mode", menu.Slug)
 		requireRaw(t, "public payload in list mode", business, "contact_display", `"list"`)
+		requireRaw(t, "public payload in list mode", business, "contact_in_footer", `false`)
 
 		var links []contactLink
 		if err := json.Unmarshal(business["links"], &links); err != nil {
@@ -666,7 +732,8 @@ func TestMenuContactSettings(t *testing.T) {
 	})
 
 	t.Run("8_hidden_redacts_the_public_payload_but_never_the_owner", func(t *testing.T) {
-		s.put(t, "contact_display hidden", menu.ID, map[string]any{"contact_display": "hidden"})
+		s.put(t, "contact_display hidden", menu.ID,
+			map[string]any{"contact_display": "hidden", "contact_in_footer": false})
 
 		secrets := map[string]string{
 			"phone":         contactPhone,
@@ -731,12 +798,20 @@ func TestMenuContactSettings(t *testing.T) {
 	})
 
 	t.Run("9_the_other_modes_are_not_redacted", func(t *testing.T) {
-		for _, mode := range []string{"inline", "list", "footer"} {
-			s.put(t, "contact_display "+mode, menu.ID, map[string]any{"contact_display": mode})
+		for _, tc := range []struct {
+			mode     string
+			inFooter bool
+		}{
+			{"inline", false}, {"list", false}, {"inline", true}, {"hidden", true},
+		} {
+			mode := tc.mode
+			s.put(t, "contact_display "+mode, menu.ID,
+				map[string]any{"contact_display": mode, "contact_in_footer": tc.inFooter})
 
-			what := "public payload in " + mode + " mode"
+			what := fmt.Sprintf("public payload in %s mode (in_footer=%v)", mode, tc.inFooter)
 			business, _, _ := s.publicMenu(t, what, menu.Slug)
 			requireRaw(t, what, business, "contact_display", mustJSON(t, mode))
+			requireRaw(t, what, business, "contact_in_footer", mustJSON(t, tc.inFooter))
 			requireRaw(t, what, business, "phone", mustJSON(t, contactPhone))
 			requireRaw(t, what, business, "instagram", mustJSON(t, contactInstagram))
 			requireRaw(t, what, business, "wifi_ssid", mustJSON(t, contactWifiSSID))
@@ -746,6 +821,35 @@ func TestMenuContactSettings(t *testing.T) {
 				t.Errorf("%s: business.links is %s, want the stored link", what, business["links"])
 			}
 		}
+	})
+
+	t.Run("9b_a_stored_legacy_footer_row_reads_as_the_pair_it_means", func(t *testing.T) {
+		// During a deploy the previous release keeps serving while this one
+		// starts, and it still stores 'footer' — knowing nothing of
+		// contact_in_footer. Migration 012 therefore leaves the constraint
+		// admitting the value, and this release reads such a row as hidden on
+		// the home view with the list in the footer, never as redacted.
+		s.put(t, "reset", menu.ID, map[string]any{"contact_display": "inline", "contact_in_footer": false})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := h.pool.Exec(ctx, `UPDATE menus SET contact_display = 'footer' WHERE id = $1::text::uuid`,
+			menu.ID); err != nil {
+			t.Fatalf("the database refused the value the previous release still writes: %v", err)
+		}
+
+		owned, _ := s.readMenu(t, "the owner's view of a legacy footer row", menu.ID)
+		if owned.ContactDisplay != "hidden" || !owned.ContactInFooter {
+			t.Errorf("a stored 'footer' reads as (%q, in_footer=%v), want (hidden, true)",
+				owned.ContactDisplay, owned.ContactInFooter)
+		}
+		what := "public payload of a legacy footer row"
+		business, _, _ := s.publicMenu(t, what, menu.Slug)
+		requireRaw(t, what, business, "contact_display", `"hidden"`)
+		requireRaw(t, what, business, "contact_in_footer", `true`)
+		requireRaw(t, what, business, "phone", mustJSON(t, contactPhone))
+		requireRaw(t, what, business, "wifi_password", mustJSON(t, contactWifiPassword))
+
+		s.put(t, "back to inline", menu.ID, map[string]any{"contact_display": "inline", "contact_in_footer": false})
 	})
 
 	t.Run("10_the_vat_note_falls_back_to_the_default_sentence", func(t *testing.T) {
@@ -816,8 +920,7 @@ func TestMenuContactSettings(t *testing.T) {
 		want := []struct{ id, label string }{
 			{"inline", "Yan yana"},
 			{"list", "Açık liste"},
-			{"footer", "Sadece alt bilgi"},
-			{"hidden", "Hiç gösterme"},
+			{"hidden", "Ana sayfada gösterme"},
 		}
 		if len(meta.ContactDisplayModes) != len(want) {
 			t.Fatalf("GET /api/meta lists %d contact display modes, want %d: %s",

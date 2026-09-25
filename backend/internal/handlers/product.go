@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"karecik/backend/internal/audit"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
@@ -143,15 +146,28 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 	// without an image and one whose image was later cleared look the same.
 	imageURL, allergens := optionalStrPtr(req.ImageURL), sanitizeAllergens(req.Allergens)
 
+	// The audit row records every field the new product carries, labelled with
+	// its name in the language of its menu.
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, created *models.Product) (*auditRecord, error) {
+			return &auditRecord{
+				action:     audit.ActionProductCreate,
+				entityType: audit.EntityProduct,
+				entityID:   created.ID.String(),
+				label:      created.Translations.Resolve(lang, lang).Name,
+				changes:    audit.DiffProduct(nil, created),
+			}, nil
+		})
+
 	// CreateProduct is one transaction of its own — the advisory locks of the
-	// category's menu and of the category, then the INSERT — so a run
-	// PostgreSQL aborted over a lock conflict wrote nothing and is simply run
-	// again. See repository.RetryOnConflict.
+	// category's menu and of the category, then the INSERT, then the audit row
+	// — so a run PostgreSQL aborted over a lock conflict wrote nothing and is
+	// simply run again. See repository.RetryOnConflict.
 	product, err := repository.RetryOnConflictValue(c.Context(), "CreateProduct",
 		func() (*models.Product, error) {
 			return repository.CreateProduct(c.Context(), h.DB, businessID, req.CategoryID,
 				translations, utils.Round2(req.Price), roundPtr(req.ComparePrice), req.Calories,
-				imageURL, allergens, badges, options, isActive, isFeatured)
+				imageURL, allergens, badges, options, isActive, isFeatured, record)
 		})
 	if err != nil {
 		// The category was checked above, but a delete of it — or of its menu —
@@ -379,13 +395,17 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 	// trigger of migration 010 moves the "prices valid from" date of the menu
 	// the product ends up in. A second mechanism in Go would only drift from it.
 	//
-	// The update is one statement — the trigger runs inside it — or, when the
-	// body names a category, one transaction of its own, so a run PostgreSQL
-	// aborted over a lock conflict wrote nothing and is simply run again. See
-	// repository.RetryOnConflict.
+	// The update and its audit row are one transaction of their own — the
+	// trigger runs inside it — so a run PostgreSQL aborted over a lock conflict
+	// wrote nothing and is simply run again. See repository.RetryOnConflict.
+	// The product as it was before the write, for the audit diff, is read in
+	// that transaction under the UPDATE's own row lock — never here, where a
+	// write committing in between would end up in the diff. A product this
+	// business does not have is ErrNotFound from that read: a 404.
+	record := h.productChangeHook(c, audit.ActionProductUpdate)
 	product, err := repository.RetryOnConflictValue(c.Context(), "UpdateProduct",
 		func() (*models.Product, error) {
-			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
+			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields, record)
 		})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -421,15 +441,19 @@ func (h *Handler) PatchProductPrice(c *fiber.Ctx) error {
 		return utils.Unprocessable(c, errMessage)
 	}
 
+	businessID := middleware.BusinessID(c)
+
 	// A different price moves the menu's "prices valid from" date through the
 	// trigger of migration 010, and re-sending the same price does not. No
 	// timestamp code belongs here — see UpdateProduct, which also explains the
-	// retry.
-	businessID := middleware.BusinessID(c)
+	// retry and where the old price of the audit row is read. Re-sending the
+	// same price records nothing either: the audit hook skips a write that
+	// changed no field.
 	fields := map[string]any{"price": utils.Round2(req.Price)}
+	record := h.productChangeHook(c, audit.ActionProductPrice)
 	product, err := repository.RetryOnConflictValue(c.Context(), "PatchProductPrice",
 		func() (*models.Product, error) {
-			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields)
+			return repository.UpdateProduct(c.Context(), h.DB, id, businessID, fields, record)
 		})
 	if err != nil {
 		// A foreign key violation is mapped here as on every other product
@@ -450,11 +474,30 @@ func (h *Handler) DeleteProduct(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz ürün kimliği.")
 	}
 
-	// One self-contained DELETE, so a run PostgreSQL aborted over a lock
-	// conflict wrote nothing and is simply run again.
+	// The audit row snapshots the product as the delete found it — read by
+	// the repository in the delete's own transaction, under the DELETE's row
+	// lock — and names it from that copy, the row itself being gone by then.
 	businessID := middleware.BusinessID(c)
+	record := recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, removed *models.Product) (*auditRecord, error) {
+			label, err := repository.RemovedProductName(ctx, tx, businessID, removed)
+			if err != nil {
+				return nil, err
+			}
+			return &auditRecord{
+				action:     audit.ActionProductDelete,
+				entityType: audit.EntityProduct,
+				entityID:   removed.ID.String(),
+				label:      label,
+				changes:    audit.DiffProduct(removed, nil),
+			}, nil
+		})
+
+	// The DELETE and its audit row are one transaction of their own, so a run
+	// PostgreSQL aborted over a lock conflict wrote nothing and is simply run
+	// again.
 	err = repository.RetryOnConflict(c.Context(), "DeleteProduct", func() error {
-		return repository.DeleteProduct(c.Context(), h.DB, id, businessID)
+		return repository.DeleteProduct(c.Context(), h.DB, id, businessID, record)
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -486,11 +529,37 @@ func (h *Handler) ReorderProducts(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
+	// One audit row for the whole drag and drop: the target category, and the
+	// products in their new order, by name.
+	targetID := *req.CategoryID
+	record := recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (*auditRecord, error) {
+			label, err := repository.CategoryName(ctx, tx, businessID, targetID)
+			if err != nil {
+				return nil, err
+			}
+			names, err := repository.ProductNames(ctx, tx, businessID, ids)
+			if err != nil {
+				return nil, err
+			}
+			order := nonBlank(names)
+			if len(order) == 0 {
+				return nil, nil // nothing of this business was reordered
+			}
+			return &auditRecord{
+				action:     audit.ActionProductReorder,
+				entityType: audit.EntityProduct,
+				entityID:   targetID.String(),
+				label:      label,
+				changes:    audit.Changes{"order": {Old: nil, New: order}},
+			}, nil
+		})
+
 	// ReorderProducts is one transaction of its own — advisory locks, then the
-	// row locks, then the write — so a run PostgreSQL aborted over a lock
-	// conflict wrote nothing and is simply run again.
+	// row locks, then the write, then the audit row — so a run PostgreSQL
+	// aborted over a lock conflict wrote nothing and is simply run again.
 	err := repository.RetryOnConflict(c.Context(), "ReorderProducts", func() error {
-		return repository.ReorderProducts(c.Context(), h.DB, businessID, *req.CategoryID, req.IDs)
+		return repository.ReorderProducts(c.Context(), h.DB, businessID, *req.CategoryID, req.IDs, record)
 	})
 	if err != nil {
 		// The target category was checked above, but a delete of it — or of its
@@ -580,14 +649,18 @@ func (h *Handler) BulkPrice(c *fiber.Ctx) error {
 		return utils.OK(c, bulkPriceResult(menu, changes, affected))
 	}
 
-	// ApplyPrices is one transaction of its own, so a run PostgreSQL aborted
-	// over a lock conflict wrote nothing and is simply run again; the answer is
-	// built from the rows the last run read and wrote. See
+	// ApplyPrices is one transaction of its own, audit row included, so a run
+	// PostgreSQL aborted over a lock conflict wrote nothing and is simply run
+	// again; the answer is built from the rows the last run read and wrote. See
 	// repository.RetryOnConflict.
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, applied repository.PriceApplication) (*auditRecord, error) {
+			return bulkPriceRecord(menu, req, applied), nil
+		})
 	var changes []repository.PriceChange
 	affected, err := repository.RetryOnConflictValue(c.Context(), "BulkPrice", func() (int, error) {
 		priced, written, err := repository.ApplyPrices(c.Context(), h.DB, businessID, menu.ID,
-			req.CategoryIDs, req.Percentage, req.Rounding)
+			req.CategoryIDs, req.Percentage, req.Rounding, record)
 		changes = priced
 		return written, err
 	})
@@ -644,6 +717,99 @@ func bulkPriceResult(menu *models.Menu, changes []repository.PriceChange, affect
 		})
 	}
 	return models.BulkPriceResult{Affected: affected, Preview: preview}
+}
+
+// ------------------------------------------------------------ audit records
+
+// productChangeHook records an update of one product — the dialog's save or
+// the inline price edit, told apart by action — as the fields that differ
+// between the product the UPDATE replaced and the one it returned, both read
+// inside the write's transaction (repository.Update). The label is the
+// product's name in the language of the menu it ends up on, read through that
+// transaction too. An update that changed nothing records nothing.
+func (h *Handler) productChangeHook(c *fiber.Ctx,
+	action string) repository.WriteHook[repository.Update[*models.Product]] {
+
+	businessID := middleware.BusinessID(c)
+	return recordHook(auditActorOf(c),
+		func(ctx context.Context, tx pgx.Tx, change repository.Update[*models.Product]) (*auditRecord, error) {
+			changes := audit.DiffProduct(change.Before, change.After)
+			if len(changes) == 0 {
+				return nil, nil
+			}
+			label, err := repository.ProductName(ctx, tx, businessID, change.After.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &auditRecord{
+				action:     action,
+				entityType: audit.EntityProduct,
+				entityID:   change.After.ID.String(),
+				label:      label,
+				changes:    changes,
+			}, nil
+		})
+}
+
+// bulkPriceRecord is the one audit row of a bulk price update: the rule that
+// was applied — percentage, rounding, the categories it was narrowed to — how
+// many products it wrote, and every product whose price moved, with its name
+// and its old and new price side by side. An apply that wrote nothing records
+// nothing.
+//
+// It is filed under the product entity so that the trail's product filter
+// shows every price change, and labelled with the menu's name, because a bulk
+// update is scoped to one menu and touches many products.
+func bulkPriceRecord(menu *models.Menu, req bulkPriceRequest,
+	applied repository.PriceApplication) *auditRecord {
+
+	if applied.Written == 0 {
+		return nil
+	}
+
+	type pricedProduct struct {
+		ID    uuid.UUID `json:"id"`
+		Name  string    `json:"name"`
+		Price float64   `json:"price"`
+	}
+	oldPrices := make([]pricedProduct, 0, len(applied.Changes))
+	newPrices := make([]pricedProduct, 0, len(applied.Changes))
+	for _, change := range applied.Changes {
+		if !change.Changed() {
+			continue
+		}
+		name := change.Translations.Resolve(menu.DefaultLanguage, menu.DefaultLanguage).Name
+		oldPrices = append(oldPrices, pricedProduct{ID: change.ID, Name: name, Price: utils.Round2(change.Price)})
+		newPrices = append(newPrices, pricedProduct{ID: change.ID, Name: name, Price: change.NewPrice})
+	}
+
+	changes := audit.Changes{
+		"percentage": {Old: nil, New: req.Percentage},
+		"rounding":   {Old: nil, New: req.Rounding},
+		"affected":   {Old: nil, New: applied.Written},
+		"prices":     {Old: oldPrices, New: newPrices},
+	}
+	if len(req.CategoryIDs) > 0 {
+		changes["category_ids"] = audit.Change{Old: nil, New: req.CategoryIDs}
+	}
+	return &auditRecord{
+		action:     audit.ActionProductBulkPrice,
+		entityType: audit.EntityProduct,
+		label:      menu.Name,
+		changes:    changes,
+	}
+}
+
+// nonBlank drops the empty names of a reorder's list — ids the business does
+// not own, which the reorder itself ignored too.
+func nonBlank(names []string) []string {
+	kept := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			kept = append(kept, name)
+		}
+	}
+	return kept
 }
 
 // ------------------------------------------------------------------ helpers

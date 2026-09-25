@@ -10,6 +10,10 @@ import { X } from 'lucide-react'
  * @param {string}   description - Small caption below the title
  * @param {string}   width       - Tailwind max-w class (defaults to max-w-lg)
  * @param {node}     footer      - Buttons placed in the footer bar
+ * @param {string}   closeLabel  - Accessible name of the X button. The panel is
+ *                                 Turkish, so it defaults to "Kapat"; the landing
+ *                                 page's sign-up dialog passes the word of the
+ *                                 language the visitor picked there.
  * @param {node}     children    - Dialog body
  */
 export default function Modal({
@@ -19,6 +23,7 @@ export default function Modal({
   description,
   width = 'max-w-lg',
   footer,
+  closeLabel = 'Kapat',
   children,
 }) {
   useEffect(() => {
@@ -62,7 +67,7 @@ export default function Modal({
             type="button"
             onClick={onClose}
             className="-mr-1 -mt-1 shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-            aria-label="Kapat"
+            aria-label={closeLabel}
           >
             <X className="h-5 w-5" />
           </button>

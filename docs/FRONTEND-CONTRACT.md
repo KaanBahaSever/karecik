@@ -49,8 +49,16 @@ import api, { ApiError } from '../lib/api'
 | `api.bulkPrice({ percentage, rounding, category_ids, apply })` | `{ applied, affected, preview[], price_updated_at }` |
 | `api.upload(file)` | `{ url, size }` |
 | `api.getMenu(id)` | Menu (one menu of the caller's business) |
-| `api.previewMenu(lang)` | PublicMenu |
-| `api.publicMenu(slug, lang)` | PublicMenu |
+| `api.previewMenu(lang, { menu })` | PublicMenu |
+| `api.publicMenu(businessSlug, menuSlug, lang)` | PublicMenu — leave `lang` empty to let the server negotiate `Accept-Language` |
+| `api.publicMenuByHost(menuSlug, lang)` | PublicMenu (tenant from the request host) |
+| `api.analyticsSummary({ menu_id, from, to })` | Analytics summary (see "Analytics and audit endpoints") |
+| `api.analyticsEvents({ menu_id, type, from, to, ip, limit, offset })` | `{ items, total, limit, offset }` |
+| `api.auditLogs({ entity_type, action, limit, offset })` | `{ items, total, limit, offset }` |
+
+Empty parameters are left out of the query string. The visitor events of the
+customer menu do NOT go through `api.js`: `src/lib/analytics.js` sends them with
+`navigator.sendBeacon` (see there).
 
 On failure it throws `ApiError` with `.message` (Turkish, safe to show to the
 user), `.status` and `.code`. Wrap every call in `try/catch` and surface the
@@ -86,22 +94,45 @@ PublicMenu = {
               primary_color, default_language, languages, splash_enabled, splash_duration,
               splash_bg_color, splash_text, show_vat_note, vat_note_text, show_price_date,
               price_updated_at, phone, address, instagram, wifi_ssid, wifi_password,
-              contact_display, links: [{ id, label, url }] },
+              contact_display, contact_in_footer, links: [{ id, label, url }] },
   categories: [{ id, name, description, icon, image_url, is_active,
                  products: [{ id, name, description, ingredients, price, compare_price,
                               image_url, allergens, is_featured, is_active }] }],
-  footer: { price_note, vat_note, powered_by },
+  footer: { price_note, price_date, vat_note, powered_by },
+  language,          // the language every text above was resolved in
+  menus, menu_resolved,
 }
 ```
 
+> **Language.** The public menu endpoints negotiate the language when the
+> request names none: an explicit `lang` the menu offers wins, then the first
+> language of the browser's `Accept-Language` the menu offers, then the menu's
+> `default_language`. The browser sends `Accept-Language` on its own, so a
+> client that has no stored choice simply leaves `lang` out and reads the
+> result from `language` — it never has to guess from `navigator.language`
+> itself. Once the visitor picks a language, send it as `lang`. The directory
+> payload (`menu_resolved: false`) carries `language` too, matched against every
+> supported language. The dashboard preview reports `language` but ignores the
+> owner's `Accept-Language` (explicit `lang`, else the menu default).
+>
+> **Price date.** `footer.price_date` is `"YYYY-MM-DD"` (the Istanbul calendar
+> day of the menu's last price change), or `""` when the menu hides it. Build
+> the localized sentence from it; `footer.price_note` is the same day as a
+> ready-made Turkish sentence, kept for older clients.
+
 > **Contact details.** A dashboard menu (`/api/menus`) and the public `business`
-> both carry `contact_display` — `'inline'`, `'list'`, `'footer'` or `'hidden'` —
-> and `links`, always an array of `{ id, label, url }` in the owner's order. A
+> both carry `contact_display` — `'inline'`, `'list'` or `'hidden'`, which
+> governs the **home view only** — `contact_in_footer` (boolean, default
+> `false`: whether the compact list is repeated in the menu's footer, which is
+> the same on every view) and `links`, always an array of `{ id, label, url }` in the owner's
+> order. A save may still send the legacy `contact_display: 'footer'`; it is
+> stored as `'hidden'` + `contact_in_footer: true`, so a read never returns it. A
 > save has to pass the link rules (see `src/lib/contact.js` below, and section 8
 > of `docs/API.md`). The public `business.links` carries only the stored entries
 > that pass them, at most 8, each with an id unique within the payload; the
 > owner's own endpoints return the stored entries as they are, so a stored link
-> may break the rules there. When `contact_display` is `'hidden'` the public
+> may break the rules there. When `contact_display` is `'hidden'` **and**
+> `contact_in_footer` is `false` — the block is drawn nowhere — the public
 > payload arrives with `phone`, `instagram`, `wifi_ssid` and `wifi_password` set
 > to `null` and `links: []`. Whenever `show_vat_note` is on, `footer.vat_note` is
 > the trimmed `vat_note_text`, or `"Fiyatlarımıza KDV dahildir."` when that text
@@ -126,6 +157,63 @@ PublicMenu = {
 > `product_count` is still returned by `/api/categories` (the dashboard's bulk
 > price dialog shows it), but the customer menu no longer shows a product count
 > on its category cards.
+
+### Analytics and audit endpoints
+
+Full rules in sections 10 and 11 of `docs/API.md`; the shapes a client reads:
+
+```js
+// public, no session; body is JSON even when sent as text/plain (sendBeacon).
+// 204 also when the event is not stored: a repeat of the same view within 10 s,
+// or past the business's daily cap — the page does nothing differently
+POST /api/public/events
+  { business_slug, menu_slug, type: 'menu_view' | 'category_view' | 'product_view',
+    category_id?, product_id?, visitor_id?, language? }      -> 204, no body
+
+// 🔒 from/to are YYYY-MM-DD, inclusive, Istanbul days; default the last 30 days
+GET /api/analytics/summary?menu_id=&from=&to=
+  -> { from, to, total_visits, unique_visitors, menu_views, category_views, product_views,
+       daily: [{ date, visits, unique_visitors, category_views, product_views }],
+       top_categories: [{ id, name, views }],
+       top_products: [{ id, name, category_name, views }] }
+
+// 🔒 newest first; limit default 50, max 200; ip is a prefix match
+GET /api/analytics/events?menu_id=&type=&from=&to=&ip=&limit=&offset=
+  -> { items: [{ id, created_at, type, menu_id, menu_name, category_id, category_name,
+                 product_id, product_name, ip, port, ip_source, visitor_id, language,
+                 user_agent }], total, limit, offset }
+
+// 🔒 newest first; limit default 50, max 200
+GET /api/audit-logs?entity_type=&action=&limit=&offset=
+  -> { items: [{ id, created_at, user_id, user_email, action, entity_type, entity_id,
+                 entity_label, changes: { <field>: { old, new } }, ip, port, ip_source }],
+       total, limit, offset }
+```
+
+`ip` and `port` may be `null` (not established); `category_name` /
+`product_name` are `null` for a record deleted since. `changes` keys are field
+names, translations as `translations.<lang>.<field>`; a Wi-Fi password is always
+`"••••"`. The actions are `product.create|update|delete|price|bulk_price|reorder`,
+`category.create|update|delete|reorder`, `menu.create|update|delete`,
+`business.update`, `account.password_change` and `upload.create`; the entity
+types `product`, `category`, `menu`, `business`, `account`, `upload`.
+
+`POST /api/uploads` accepts SVG (`image/svg+xml`) as well as JPEG, PNG, WebP and
+GIF. An SVG with script, external references or embedded HTML — or a raster file
+whose bytes are not an image — is a `422` with a Turkish message to show as is.
+`components/ui/ImageUploader.jsx` checks the type (by MIME type or by extension:
+`.svg .jpg .jpeg .png .webp .gif`), refuses an empty file and applies the 5 MB
+limit before uploading, with the rules in `src/lib/imageUpload.js`; the server
+stays the authority on the content. Its previews use `object-contain`, so an SVG
+without `width`/`height` still shows.
+
+The dashboard reads these endpoints on two pages of their own:
+`/panel/analitik` (`pages/dashboard/Analytics.jsx` — menu picker and day range
+over the summary, the daily chart, the top lists and the paged visit log with
+IP, port and IP source) and `/panel/gecmis` (`pages/dashboard/AuditLog.jsx` —
+the business-wide change history, filtered by record type). The Turkish labels
+and value formatting live in `src/lib/analyticsFormat.js` and
+`src/lib/auditFormat.js`.
 
 ---
 
@@ -211,12 +299,35 @@ import { formatPrice, currencySymbol, formatDate, parsePrice, priceToInput,
 - `priceToInput(145)` → `"145,00"`
 - `formatDate(iso)` → `"24.08.2026"`: the calendar day in **Europe/Istanbul**,
   whatever time zone the browser is in (the local day if `Intl` cannot do it)
+- `parseIsoDay('2026-08-24')` → `{ year, month, day }` or `null`;
+  `istanbulDay(iso)` → the instant's Istanbul day as `"YYYY-MM-DD"`;
+  `formatDay('2026-08-24', 'de')` → `"24. August 2026"` — the month spelled out
+  in the visitor's language, Latin digits and the Gregorian calendar in Arabic too
+- `footerPriceSentence(business, footer, language)` → the localized "prices
+  valid from …" sentence, or `''`: built from `footer.price_date`; the business's
+  `show_price_date` (and `price_updated_at`) win over the saved footer so the
+  live preview shows an unsaved toggle; `footer.price_note` is used only when
+  `price_date` is absent altogether (an older server)
+- `footerVatNote(business, footer, language)` → the VAT sentence, or `''` (see
+  the footer section below); `DEFAULT_VAT_NOTE` is the server's Turkish default
 
 ## `src/lib/category.js`
 
 ```js
-import { normalizeCategories, categoryEmoji, categoryImageUrl } from '../lib/category'
+import { normalizeCategories, categoryEmoji, categoryImageUrl, isSvgUrl,
+         productTexts, comparableText } from '../lib/category'
 ```
+
+- `isSvgUrl(url)` → whether an image address is an SVG (by its path's
+  extension, or a `data:image/svg+xml` URI). The customer menu draws an SVG with
+  `object-contain` and an explicit height, a photo with `object-cover`
+- `productTexts(product)` → `{ subtitle, description, ingredients }`: the card's
+  grey line is the description, else the ingredients; the detail sheet drops a
+  description that only repeats the ingredients
+- `comparableText(value)` → the text as that repeat check compares it: NFC,
+  Turkish lowercase, whitespace collapsed, trailing punctuation dropped. The
+  product dialog's "same text in both fields" warning (`src/lib/productText.js`)
+  uses this same function, so the two can never disagree
 
 - `categoryEmoji(icon)` → the trimmed icon when it is a glyph (non-empty, no
   ASCII letters or digits, at most 32 UTF-16 code units), otherwise `null`:
@@ -300,9 +411,16 @@ The link rules:
 
 The contact items:
 
-- `CONTACT_DISPLAY_MODES` → `[{ id, label }]`: `inline` "Yan yana", `list`
-  "Açık liste", `footer` "Sadece alt bilgi", `hidden` "Hiç gösterme"
-- `contactDisplayMode(value)` → one of those ids; anything unknown is `'inline'`
+- `CONTACT_DISPLAY_MODES` → `[{ id, label }]`, the ids of
+  `contact_display_modes` in `/api/meta`: `inline` "Yan yana", `list`
+  "Açık liste", `hidden` "Gösterme" (the settings page shows them under the
+  heading "Ana ekranda iletişim bilgileri", so the short label suffices; the
+  server's own label is "Ana sayfada gösterme"). The footer list is the separate
+  `contact_in_footer` switch, not a mode
+- `contactDisplayMode(value)` → one of those ids; the legacy `'footer'` is
+  `'hidden'` and anything else unknown is `'inline'`
+- `contactInFooter(business)` → `true` when `contact_in_footer === true` or the
+  business still carries the legacy `contact_display: 'footer'`; never throws
 - `telHref(phone)` → `'tel:'`, a `+` when one comes before the first digit,
   then the ASCII digits; `null` when there is no digit.
   `'+90 (555) 000 00 00'` → `'tel:+905550000000'`
@@ -396,17 +514,75 @@ right after `npm ci`. Nothing imports either file, so neither reaches the bundle
 
 ## `src/locales/index.js`
 
-- `LANGUAGES`, `findLanguage(code)`, `languageShort(code)`, `isRtl(code)`
-- `ALLERGENS` → `[{ code, emoji, tr, en }]`, `findAllergen(code)`, `allergenLabel(code, language)`
-- `t(key, language)` → a customer menu interface string
+- `LANGUAGES`, `LANGUAGE_CODES` (`tr en de ru ar fr`), `findLanguage(code)`,
+  `languageShort(code)`, `isRtl(code)`, `languageDir(code)` → `'rtl'` | `'ltr'`
+- `ALLERGENS` → `[{ code, emoji, tr, en, de, ru, ar, fr }]` (one label per
+  language; the dashboard reads `tr`), `findAllergen(code)`,
+  `allergenLabel(code, language)`
+- `STRINGS` → one dictionary per language, all with the same keys
+- `t(key, language, values)` → a customer menu interface string with
+  `{placeholders}` filled from `values`; an unknown language reads English, a
+  missing key English, then Turkish, then the key itself
+
+Every customer-facing string of the menu goes through `t` — no literal text in
+`components/menu/*` or `pages/menu/*`. "Karecik", "Instagram" and "Yerli Üretim"
+are never translated, and neither are the owner's own product names.
+`node frontend/tests/locales.test.mjs` checks the key sets, the placeholders and
+that every `t('…')` used in the menu source exists.
+
+> **Right to left.** An Arabic menu sets `dir="rtl"` and `lang` on its roots
+> (and, standalone, on `<html>`), uses logical Tailwind classes only
+> (`text-start`, `ps-*`, `start-3` — never `left`/`right`), wraps prices in
+> `<bdi dir="ltr">` and owner-typed text in `<bdi dir={textDir(text, language)}>`
+> — `rtl` when the menu is RTL and the text holds an RTL letter (so "Frozen
+> بالفراولة" keeps the Latin term on the right), `auto` otherwise. The language
+> picker itself is `dir="ltr"`, so its order (TR … FR) never flips.
 
 > Never render flag emoji in the interface: Windows cannot draw them and prints
 > the country code instead, which made English show up as "GB". Use
 > `language.short` (TR / EN / DE) instead.
 
+## `src/lib/language.js`
+
+Which language the customer menu renders in, in this order: the visitor's pick
+(tapped now, named by the address's `?lang=`, or remembered for this tenant in
+`localStorage` `karecik_lang_<tenant>`) while the menu offers it → the payload's
+`language` (the server's `Accept-Language` negotiation) → `navigator.languages`
+matched against the menu → `default_language` → `'tr'`. The first request sends
+the pick when there is one and no `lang` otherwise, so the first paint is
+already in the visitor's language. `?lang=` is how the landing page's demo
+iframe follows the landing language; it is never remembered. A tap on an
+address that already has `?lang=` rewrites it in place (history `replace`); an
+address without one never gains it. A remembered pick is never forgotten: a
+sibling menu that does not offer it simply ignores it. Directory links keep the
+address's query string.
+`resolveMenuLanguage`, `matchPreferredLanguage`, `baseLanguage`,
+`browserLanguages`, `readRememberedLanguage`, `rememberLanguage`; tested by
+`tests/menuLanguage.test.mjs`.
+
+## `src/lib/analytics.js`
+
+`trackMenuEvent({ businessSlug, menuSlug, type, categoryId?, productId?, language })`
+sends one `POST /api/public/events` with `navigator.sendBeacon` (a `text/plain`
+JSON body, no preflight), falling back to `fetch` with `keepalive`; it never
+throws and never waits. The anonymous `visitor_id` lives in `localStorage`
+`karecik_visitor_id`. The customer menu sends `menu_view` once per menu per page
+load, `category_view` when a category opens and `product_view` when a product's
+detail sheet opens — never when `embedded` (the landing demo iframe, the
+dashboard live preview) and never for the tenant directory.
+
 ## `src/locales/landing.js`
 
-- `LANDING_LANGUAGES`, `landingText(language)`, `readSavedLanguage()`, `saveLanguage(language)`
+- `LANDING_LANGUAGES` (tr / en / de), `DEFAULT_LANDING_LANGUAGE`, `LANDING_STRINGS`,
+  `landingText(language)`, `readSavedLanguage()`, `saveLanguage(language)`
+- `validateSignUp({ businessName, email, password })` → `{ field: messageKey }`,
+  the server's limits included (name ≤ 100 characters, password ≤ 72 bytes)
+- `signUpErrorKey(error)` / `signUpErrorMessage(error, language)` → a request
+  error in the visitor's language, decided by status and code (409, network,
+  429, 5xx, other)
+
+The landing page sets `<html lang>` to its language and pins `dir="ltr"` while
+it is mounted. `tests/landingLocales.test.mjs` checks the three dictionaries.
 
 ---
 
@@ -414,7 +590,10 @@ right after `npm ci`. Nothing imports either file, so neither reaches the bundle
 
 ```jsx
 import Modal from '../ui/Modal.jsx'
-<Modal open onClose={fn} title="" description="" width="max-w-lg" footer={<>...</>}>body</Modal>
+<Modal open onClose={fn} title="" description="" width="max-w-lg" footer={<>...</>}
+       closeLabel="Kapat">body</Modal>
+// closeLabel is the X button's accessible name; the landing sign-up dialog
+// passes the visitor's language
 
 import ConfirmModal from '../ui/ConfirmModal.jsx'
 <ConfirmModal open onClose={fn} onConfirm={fn} title="" message="" confirmText="Sil" busy={false} />
@@ -428,9 +607,14 @@ import EmptyState from '../ui/EmptyState.jsx'
 import ImageUploader from '../ui/ImageUploader.jsx'
 <ImageUploader value={url|null} onChange={(url)=>{}} label="" hint="" round={false} />
 // a URL that no longer loads shows the placeholder and "Görsel yüklenemedi. Lütfen yeniden yükleyin."
+// accepts SVG as well; "JPG, PNG, WEBP, GIF veya SVG · en fazla 5 MB" is always
+// printed, and `hint` (default '') is field-specific advice only
 
 import { useToast } from '../ui/Toast.jsx'
 const toast = useToast()   // toast.success(msg) / .error(msg) / .info(msg)
+// second argument: a duration in ms, or { duration, closeLabel } — closeLabel
+// names the close button (default "Bildirimi kapat"; the landing page passes
+// the visitor's language)
 // the stack sits at the TOP: top right below the dashboard top bar, full width
 // between side gutters on narrow screens, above modals (z-[100]), with
 // role="status" and aria-live="polite". At most 2 toasts are shown: a new one
@@ -490,26 +674,42 @@ const items = buildContactItems(business)                 // src/lib/contact.js
   Instagram value that holds no user name is shown whole, as plain text with no
   "Instagram'da aç" button.
 - `MenuContent` draws them on the home view only (`inline` / `list`);
-  `MenuFooter` draws the compact list on product screens for every mode but
-  `hidden`.
+  `MenuFooter` draws the compact list only when `contactInFooter(business)` is
+  true, whatever `contact_display` says.
 
 ## Customer menu footer (`src/components/menu/MenuFooter.jsx`)
 
 ```jsx
-<MenuFooter business={menu.business} footer={menu.footer} language="tr" scope="products" />
+<MenuFooter business={menu.business} footer={menu.footer} language="tr" />
+<MenuFooter language="tr" scope="directory" />
 ```
 
-- `scope="home"` draws only the "Karecik ile hazırlandı" signature;
-  `scope="products"` adds the compact contact list, the price date
-  (`footer.price_note`), the VAT sentence and the "Yerli Üretim" badge.
-- **VAT.** The menu's own toggle governs every VAT sentence on the page:
-  `business.show_vat_note === false` → none at all; `true` →
-  `business.vat_note_text` trimmed like Go's `strings.TrimSpace`, or
-  `"Fiyatlarımıza KDV dahildir."` when it is blank. The sentence is read from
-  the business fields rather than `footer.vat_note`, so the dashboard live
-  preview shows an unsaved edit of the text at once; on the customer menu both
-  carry the same sentence. `footer.vat_note` is only the fallback for a business
-  without those fields. The settings page keeps a blank `vat_note_text` blank:
+One footer, identical on every view of a menu (category grid, product list,
+search results). Top to bottom, each only when it has something to say:
+
+- the compact contact list, only when `contactInFooter(business)` — the owner
+  turned `contact_in_footer` on (it is off by default);
+- the price sentence in the visitor's language, from `footerPriceSentence`
+  (`footer.price_date`);
+- the VAT sentence (below);
+- the "Yerli Üretim" badge when `show_yerli_uretim` is on — printed as-is in
+  every language, never translated;
+- the "Powered by Karecik" signature, always last, from `t('poweredBy')`.
+  `footer.powered_by` is not read.
+
+Nothing else belongs in the footer: no loose Instagram link, Wi-Fi field or
+button of its own. `scope="directory"` (the tenant directory, which has no
+menu) draws the signature alone. The legacy values `"home"` / `"products"` draw
+the full footer.
+- **VAT.** The menu's own toggle governs every VAT sentence on the page
+  (`footerVatNote`): `business.show_vat_note === false` → none at all; `true` →
+  `business.vat_note_text` as the owner typed it, trimmed like Go's
+  `strings.TrimSpace`, or the localized `t('vatIncluded')` ("Fiyatlarımıza KDV
+  dahildir." in Turkish) when it is blank. The sentence is read from the
+  business fields rather than `footer.vat_note`, so the dashboard live preview
+  shows an unsaved edit of the text at once. `footer.vat_note` is only the
+  fallback for a business without those fields, and the server's Turkish
+  default sentence there is swapped for the localized one. The settings page keeps a blank `vat_note_text` blank:
   the default sentence is only the placeholder of its field, and the help text
   under the field says that a blank text prints that sentence.
 - The "Yerli Üretim" block is the badge alone, with no VAT sentence of its own.
@@ -540,13 +740,21 @@ Shadows: `shadow-card`, `shadow-panel`. Width: `max-w-content`.
 | `/` | `pages/Landing.jsx` |
 | `/giris` | `pages/Login.jsx` |
 | `/kayit` | `pages/SignUp.jsx` |
-| `/m/:slug` | `pages/menu/CustomerMenu.jsx` |
-| `/demo` | `CustomerMenu` (`businessSlug={VITE_DEMO_BUSINESS} embedded`) |
+| `/sifremi-unuttum` | `pages/ForgotPassword.jsx` |
+| `/sifre-sifirla` | `pages/ResetPassword.jsx` |
+| `/m/:businessSlug` | `pages/menu/CustomerMenu.jsx` (tenant address) |
+| `/m/:businessSlug/:menuSlug` | `pages/menu/CustomerMenu.jsx` |
+| `/demo` | `CustomerMenu` (`businessSlug={VITE_DEMO_BUSINESS} embedded`); the landing page loads it as `/demo?lang=<landing language>` |
 | `/panel` | `pages/dashboard/DashboardLayout.jsx` (Outlet) |
 | `/panel` (index) | `pages/dashboard/MenuEditor.jsx` |
-| `/panel/tasarim` | `pages/dashboard/Design.jsx` |
-| `/panel/ayarlar` | `pages/dashboard/Settings.jsx` |
-| `/panel/qr` | `pages/dashboard/QrCode.jsx` |
+| `/panel/ayarlar` | `pages/dashboard/MenuSettings.jsx` |
+| `/panel/qr` | `pages/dashboard/QrHub.jsx` |
+| `/panel/analitik` | `pages/dashboard/Analytics.jsx` — visitor analytics and the visit log |
+| `/panel/gecmis` | `pages/dashboard/AuditLog.jsx` — change history (audit trail) |
+| `/panel/hesap` | `pages/dashboard/Account.jsx` |
+
+Any customer menu address also accepts `?lang=<code>` to open in that language
+when the menu offers it.
 
 > The URL paths stay Turkish on purpose — they are public, user-visible
 > addresses that are already in use.

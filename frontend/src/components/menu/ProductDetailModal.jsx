@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { isSvgUrl, productTexts } from '../../lib/category'
 import { formatPrice } from '../../lib/format'
 import { useImageFallback } from '../../lib/useImageFallback'
 import { BadgeIcon } from '../../themes/badges'
-import { allergenLabel, findAllergen, t } from '../../locales/index.js'
+import { allergenLabel, findAllergen, languageDir, t, textDir } from '../../locales/index.js'
 
 /**
  * Bottom sheet shown when a product is tapped in the customer menu.
@@ -15,6 +16,17 @@ import { allergenLabel, findAllergen, t } from '../../locales/index.js'
  *
  * Option groups are presentation only: the selections feed the live total and
  * nothing else. There is no cart and nothing is ever submitted.
+ *
+ * The sheet carries its own `dir` and `lang`. It is rendered inside MenuContent
+ * and would inherit both from there today, but it is `position: fixed` — the
+ * kind of element that gets moved into a portal one day — and an Arabic sheet
+ * that silently turned left-to-right on that day would be a bug nobody sees in
+ * Turkish.
+ *
+ * Prices sit in <bdi dir="ltr">: inside right-to-left text "145,00 ₺" would
+ * otherwise be reordered into "₺ 145,00", and "+15,00 ₺" would lose its sign
+ * to the far end. The owner's texts sit in a <bdi> whose direction textDir()
+ * picks — see MenuContent.
  *
  * @param {object|null} product  - Selected product (renders nothing when null)
  * @param {object}      business - PublicMenu.business (currency and colours)
@@ -254,6 +266,14 @@ export default function ProductDetailModal({ product, business, language = 'tr',
   const isDiscounted =
     Number(product.compare_price) > 0 && Number(product.compare_price) > Number(product.price)
 
+  /* The description paragraph and the "Ingredients" section. A description
+     that only repeats the ingredients is dropped, and the ingredients keep
+     their labelled section — see productTexts in lib/category.js. */
+  const texts = productTexts(product)
+
+  // An SVG hero is artwork, not a photograph: contained, never cropped.
+  const heroIsSvg = isSvgUrl(heroImage.src)
+
   /* --------------------------------------------------------- option state */
 
   function chooseSingle(groupIndex, itemIndex) {
@@ -372,13 +392,15 @@ export default function ProductDetailModal({ product, business, language = 'tr',
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/50"
       onClick={() => onClose?.()}
       role="presentation"
+      dir={languageDir(language)}
+      lang={language}
     >
       <style>{ANIMATION_STYLE}</style>
 
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={product.name || 'Ürün detayı'}
+        aria-label={product.name || t('productDetails', language)}
         onClick={(event) => event.stopPropagation()}
         className="karecik-sheet-panel max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl"
         style={{
@@ -405,7 +427,9 @@ export default function ProductDetailModal({ product, business, language = 'tr',
               src={heroImage.src}
               alt=""
               onError={heroImage.onError}
-              className="h-56 w-full rounded-t-2xl object-cover"
+              className={`h-56 w-full rounded-t-2xl ${
+                heroIsSvg ? 'object-contain px-6 pb-4 pt-8' : 'object-cover'
+              }`}
             />
           ) : null}
 
@@ -422,12 +446,14 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : 'grab' }}
             role="presentation"
           >
+            {/* White over a photograph. A contained SVG leaves the sheet's own
+                background showing behind the handle, where white would vanish
+                on every light theme, so it keeps the muted pill. */}
             <span
               className="h-1.5 w-12 rounded-full"
               style={{
-                backgroundColor: heroImage.src
-                  ? 'rgba(255, 255, 255, 0.75)'
-                  : 'var(--menu-border)',
+                backgroundColor:
+                  heroImage.src && !heroIsSvg ? 'rgba(255, 255, 255, 0.75)' : 'var(--menu-border)',
               }}
               aria-hidden="true"
             />
@@ -444,7 +470,9 @@ export default function ProductDetailModal({ product, business, language = 'tr',
         >
           {/* name + calories */}
           <div>
-            <h2 className="text-lg font-semibold leading-snug">{product.name}</h2>
+            <h2 className="text-lg font-semibold leading-snug">
+              <bdi dir={textDir(product.name, language)}>{product.name}</bdi>
+            </h2>
 
             {calories != null || product.is_featured ? (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -483,21 +511,21 @@ export default function ProductDetailModal({ product, business, language = 'tr',
                   }}
                 >
                   <BadgeIcon id={badge.icon} className="h-3.5 w-3.5 shrink-0" />
-                  {badge.text}
+                  <bdi dir={textDir(badge.text, language)}>{badge.text}</bdi>
                 </span>
               ))}
             </div>
           ) : null}
 
-          {/* description */}
-          {product.description ? (
+          {/* description — absent when it merely repeats the ingredients */}
+          {texts.description ? (
             <p className="text-sm leading-relaxed" style={{ color: 'var(--menu-muted)' }}>
-              {product.description}
+              <bdi dir={textDir(texts.description, language)}>{texts.description}</bdi>
             </p>
           ) : null}
 
           {/* ingredients */}
-          {product.ingredients ? (
+          {texts.ingredients ? (
             <div
               className="p-3"
               style={{
@@ -510,7 +538,7 @@ export default function ProductDetailModal({ product, business, language = 'tr',
                 {t('ingredients', language)}
               </h3>
               <p className="text-sm leading-relaxed" style={{ color: 'var(--menu-muted)' }}>
-                {product.ingredients}
+                <bdi dir={textDir(texts.ingredients, language)}>{texts.ingredients}</bdi>
               </p>
             </div>
           ) : null}
@@ -552,13 +580,15 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             return (
               <div key={`${group.name}-${groupIndex}`}>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide">{group.name}</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide">
+                    <bdi dir={textDir(group.name, language)}>{group.name}</bdi>
+                  </h3>
                   {group.required ? (
                     <span
                       className="rounded-full px-2 py-0.5 text-[10px] font-medium"
                       style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
                     >
-                      Zorunlu
+                      {t('required', language)}
                     </span>
                   ) : null}
                 </div>
@@ -590,13 +620,15 @@ export default function ProductDetailModal({ product, business, language = 'tr',
                           className="h-4 w-4 shrink-0"
                           style={{ accentColor: 'var(--menu-primary)' }}
                         />
-                        <span className="min-w-0 flex-1">{item.name}</span>
+                        <span className="min-w-0 flex-1">
+                          <bdi dir={textDir(item.name, language)}>{item.name}</bdi>
+                        </span>
                         {item.price > 0 ? (
                           <span
                             className="shrink-0 text-xs font-medium"
                             style={{ color: 'var(--menu-muted)' }}
                           >
-                            +{formatPrice(item.price, currency)}
+                            <bdi dir="ltr">+{formatPrice(item.price, currency)}</bdi>
                           </span>
                         ) : null}
                       </label>
@@ -627,17 +659,17 @@ export default function ProductDetailModal({ product, business, language = 'tr',
               className="text-[11px] font-medium uppercase tracking-wide"
               style={{ color: 'var(--menu-muted)' }}
             >
-              Toplam
+              {t('total', language)}
             </span>
 
             <span className="flex items-baseline gap-2">
               {strikePrice != null ? (
                 <span className="text-xs line-through" style={{ color: 'var(--menu-muted)' }}>
-                  {formatPrice(strikePrice, currency)}
+                  <bdi dir="ltr">{formatPrice(strikePrice, currency)}</bdi>
                 </span>
               ) : null}
               <span className="text-xl font-bold" style={{ color: 'var(--menu-primary)' }}>
-                {formatPrice(total, currency)}
+                <bdi dir="ltr">{formatPrice(total, currency)}</bdi>
               </span>
             </span>
           </div>

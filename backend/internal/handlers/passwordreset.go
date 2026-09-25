@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"karecik/backend/internal/mailer"
+	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/repository"
 	"karecik/backend/internal/utils"
 )
@@ -251,7 +254,29 @@ func (h *Handler) ResetPassword(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.Internal(c, err)
 	}
-	if err := repository.UpdatePassword(c.Context(), h.DB, userID, hash); err != nil {
+
+	// A reset has no session, so the actor is assembled from the token's user:
+	// the tenant is the business that user owns, looked up inside the write's
+	// own transaction. An account with no business — not something sign-up can
+	// produce — simply records nothing.
+	addr := middleware.ClientAddrOf(c)
+	record := func(ctx context.Context, tx pgx.Tx, _ uuid.UUID) error {
+		user, err := repository.GetUserByID(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		business, err := repository.GetBusinessByUserID(ctx, tx, userID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		actor := auditActor{businessID: business.ID, userID: userID,
+			ip: addr.IP, port: addr.Port, source: string(addr.Source)}
+		return repository.InsertAuditLog(ctx, tx, actor.entry(*passwordChangeRecord(user, "reset_link")))
+	}
+	if err := repository.UpdatePassword(c.Context(), h.DB, userID, hash, record); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			// The account went away between the token being issued and used.
 			return utils.Fail(c, fiber.StatusGone, "RESET_TOKEN_INVALID",

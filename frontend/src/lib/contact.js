@@ -26,33 +26,56 @@
 /* ---------------------------------------------------------- display modes */
 
 /**
- * How the contact items are laid out, bound to `contact_display`. The ids and
- * the labels are the ones the shared API contract gives GET /api/meta
- * (`contact_display_modes`), in the same order.
+ * How the contact items are laid out ON THE HOME VIEW, bound to
+ * `contact_display`:
  *
- *   inline  one row of chips on the home view; a tap opens that item's details
- *   list    the same items as an always-open list on the home view
- *   footer  nothing on the home view, only the footer of the product screens
- *   hidden  nowhere at all
+ *   inline  one row of chips; a tap opens that item's details
+ *   list    the same items as an always-open list
+ *   hidden  nothing on the home view
  *
- * The first three also repeat the compact list in the product screens' footer.
+ * Whether the compact list ALSO appears in the page footer is a separate
+ * switch, `contact_in_footer` - see contactInFooter. The two used to be one
+ * setting, with a fourth mode 'footer' meaning "footer only"; splitting them
+ * lets an owner have chips on the home view and the list in the footer, or
+ * either one alone.
  */
 export const CONTACT_DISPLAY_MODES = [
   { id: 'inline', label: 'Yan yana' },
   { id: 'list', label: 'Açık liste' },
-  { id: 'footer', label: 'Sadece alt bilgi' },
-  { id: 'hidden', label: 'Hiç gösterme' },
+  { id: 'hidden', label: 'Gösterme' },
 ]
 
 /**
- * One of the four display mode ids. Anything else - a missing field, a payload
- * from before the column existed, a typo - is 'inline', the column default.
+ * One of the three display mode ids. The legacy 'footer' is 'hidden' - on the
+ * home view it never drew anything - and its footer half is contactInFooter's.
+ * Anything else - a missing field, a payload from before the column existed, a
+ * typo - is 'inline', the column default.
  *
  * @param {unknown} value
- * @returns {'inline'|'list'|'footer'|'hidden'}
+ * @returns {'inline'|'list'|'hidden'}
  */
 export function contactDisplayMode(value) {
+  if (value === 'footer') return 'hidden'
   return CONTACT_DISPLAY_MODES.some((mode) => mode.id === value) ? value : 'inline'
+}
+
+/**
+ * Whether the page footer carries the compact contact list: `contact_in_footer`
+ * set to true, or a menu saved with the legacy `contact_display: 'footer'`
+ * that no migration has converted yet - the dashboard preview's draft, or a
+ * payload from an older server. Anything else, a missing field included, is
+ * false. Never throws.
+ *
+ * @param {unknown} business - PublicMenu.business, or the dashboard draft
+ * @returns {boolean}
+ */
+export function contactInFooter(business) {
+  try {
+    if (!isPlainObject(business)) return false
+    return business.contact_in_footer === true || business.contact_display === 'footer'
+  } catch {
+    return false
+  }
 }
 
 /* ------------------------------------------------------------- characters */

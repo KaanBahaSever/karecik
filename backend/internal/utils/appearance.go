@@ -216,33 +216,55 @@ var HeaderDisplayModes = []DisplayMode{
 }
 
 // The contact display mode ids. Unlike the other catalogues in this file these
-// are named, because code branches on one of them: in ContactDisplayHidden mode
-// the public menu payload leaves the contact details out altogether (see
-// repository.ToPublicBusiness), and a bare "hidden" there could drift from the
-// catalogue below without the compiler noticing.
+// are named, because code branches on them: in ContactDisplayHidden mode, with
+// the footer list switched off too, the public menu payload leaves the contact
+// details out altogether (see repository.ToPublicBusiness), and a bare "hidden"
+// there could drift from the catalogue below without the compiler noticing.
+//
+// ContactDisplayFooter is the LEGACY fourth mode. Migration 012 split it into
+// two settings — contact_display for the home view and contact_in_footer for
+// the footer of the product screens — so it is no longer stored and no longer
+// listed, but the API still accepts it on write and stores it as the pair it
+// always meant: ContactDisplayHidden plus contact_in_footer = true (see
+// ResolveContactDisplay). An older dashboard bundle that still sends it keeps
+// working.
 const (
 	ContactDisplayInline = "inline"
 	ContactDisplayList   = "list"
-	ContactDisplayFooter = "footer"
 	ContactDisplayHidden = "hidden"
+	ContactDisplayFooter = "footer"
 )
 
-// ContactDisplayModes lists where the customer menu draws the contact block —
-// the Wi-Fi, Instagram and phone entries followed by the menu's own links.
-// The ids match the menus.contact_display CHECK constraint of migration 011.
+// ContactDisplayModes lists where the HOME view of the customer menu draws the
+// contact block — the Wi-Fi, Instagram and phone entries followed by the
+// menu's own links. The ids match the menus.contact_display CHECK constraint of
+// migration 012.
 //
 //	inline  one row of chips on the home view; a chip opens its details
 //	list    the same entries as an always-open list on the home view
-//	footer  nothing on the home view, the entries only in the footer
-//	hidden  the entries nowhere at all
+//	hidden  nothing on the home view
 //
-// inline, list and footer all keep the compact list in the footer of the
-// product screens; hidden drops that too.
+// Whether the compact list is repeated in the footer of the product screens is
+// a separate switch, menus.contact_in_footer, which no mode implies.
 var ContactDisplayModes = []DisplayMode{
 	{ID: ContactDisplayInline, Label: "Yan yana"},
 	{ID: ContactDisplayList, Label: "Açık liste"},
-	{ID: ContactDisplayFooter, Label: "Sadece alt bilgi"},
-	{ID: ContactDisplayHidden, Label: "Hiç gösterme"},
+	{ID: ContactDisplayHidden, Label: "Ana sayfada gösterme"},
+}
+
+// ResolveContactDisplay maps a contact_display value a request carries onto
+// what is stored: the mode itself, and whether the value also forces
+// contact_in_footer on. It is the listed modes as they are, the legacy
+// "footer" as ContactDisplayHidden with the footer list forced on, and ok ==
+// false for anything else. The comparison is exact — "Inline" is not a mode.
+func ResolveContactDisplay(value string) (mode string, forcesFooter bool, ok bool) {
+	if value == ContactDisplayFooter {
+		return ContactDisplayHidden, true, true
+	}
+	if IsValidContactDisplay(value) {
+		return value, false, true
+	}
+	return "", false, false
 }
 
 // Limits of the custom links of a menu. handlers/menu.go enforces them next to

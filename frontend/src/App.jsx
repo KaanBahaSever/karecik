@@ -16,6 +16,8 @@ import MenuEditor from './pages/dashboard/MenuEditor.jsx'
 import MenuSettings from './pages/dashboard/MenuSettings.jsx'
 import QrHub from './pages/dashboard/QrHub.jsx'
 import Account from './pages/dashboard/Account.jsx'
+import Analytics from './pages/dashboard/Analytics.jsx'
+import AuditLog from './pages/dashboard/AuditLog.jsx'
 import { DEMO_BUSINESS_SLUG } from './lib/env'
 
 /** Guards routes that require an active session. */
@@ -105,6 +107,11 @@ export default function App() {
         <Route index element={<MenuEditor />} />
         <Route path="ayarlar" element={<MenuSettings />} />
         <Route path="qr" element={<QrHub />} />
+        {/* Visitor traffic, and who changed what in the panel. Two pages, not
+            two tabs: they answer different questions with different filters,
+            and the history is business-wide - see AuditLog.jsx. */}
+        <Route path="analitik" element={<Analytics />} />
+        <Route path="gecmis" element={<AuditLog />} />
         <Route path="hesap" element={<Account />} />
       </Route>
 

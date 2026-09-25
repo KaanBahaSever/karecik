@@ -12,6 +12,22 @@ let counter = 0
  */
 const MAX_VISIBLE_TOASTS = 2
 
+/** The close button's accessible name when the caller names none. */
+const DEFAULT_CLOSE_LABEL = 'Bildirimi kapat'
+
+/**
+ * Reads the second argument of success/error/info: a bare number is the
+ * duration (the original signature, which every panel call still uses), an
+ * object carries { duration, closeLabel }. A missing duration stays undefined
+ * so each kind keeps its own default.
+ */
+function toastOptions(options) {
+  if (typeof options === 'number') return { duration: options, closeLabel: DEFAULT_CLOSE_LABEL }
+  const duration = typeof options?.duration === 'number' ? options.duration : undefined
+  const label = typeof options?.closeLabel === 'string' ? options.closeLabel.trim() : ''
+  return { duration, closeLabel: label || DEFAULT_CLOSE_LABEL }
+}
+
 /**
  * Short-lived notifications, stacked at the top of the screen: top right, just
  * below the dashboard's 64 px top bar, and across the full width inside side
@@ -44,6 +60,13 @@ const MAX_VISIBLE_TOASTS = 2
  *   const toast = useToast()
  *   toast.success('Kaydedildi.')
  *   toast.error(err.message)
+ *   toast.error(message, { duration: 8000, closeLabel: 'Dismiss notification' })
+ *
+ * The second argument is either the duration in milliseconds, as it always
+ * was, or an options object: { duration, closeLabel }. `closeLabel` names the
+ * close button for a screen reader and defaults to the panel's Turkish; the
+ * landing page passes the word of the language its visitor picked, so a toast
+ * shown in English is not dismissed in Turkish.
  */
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
@@ -56,11 +79,14 @@ export function ToastProvider({ children }) {
   }, [])
 
   const add = useCallback(
-    (kind, message, duration = 4000) => {
+    (kind, message, options, fallbackDuration = 4000) => {
       if (!message) return
+      const { duration = fallbackDuration, closeLabel } = toastOptions(options)
       counter += 1
       const id = counter
-      setToasts((previous) => [...previous, { id, kind, message }].slice(-MAX_VISIBLE_TOASTS))
+      setToasts((previous) =>
+        [...previous, { id, kind, message, closeLabel }].slice(-MAX_VISIBLE_TOASTS),
+      )
       // A toast pushed out early still has its timer; removing an id that is
       // no longer in the list changes nothing.
       if (duration > 0) {
@@ -72,9 +98,9 @@ export function ToastProvider({ children }) {
 
   const value = useMemo(
     () => ({
-      success: (message, duration) => add('success', message, duration),
-      error: (message, duration) => add('error', message, duration ?? 6000),
-      info: (message, duration) => add('info', message, duration),
+      success: (message, options) => add('success', message, options),
+      error: (message, options) => add('error', message, options, 6000),
+      info: (message, options) => add('info', message, options),
       remove,
     }),
     [add, remove],
@@ -161,7 +187,7 @@ function ToastItem({ toast, onClose, onRestoreFocus }) {
       <p className="min-w-0 flex-1 text-sm leading-snug">{toast.message}</p>
       {/* After the message in the DOM, drawn first by `order-first`. The stack
           is a role="status" region, which a screen reader reads out whole and
-          in DOM order, so the message is announced before "Bildirimi kapat".
+          in DOM order, so the message is announced before the close label.
           On screen the button sits at the start of the card, away from the
           top-right corner where a modal keeps its own close button.
 
@@ -169,7 +195,7 @@ function ToastItem({ toast, onClose, onRestoreFocus }) {
       <button
         type="button"
         className="order-first -my-1 shrink-0 rounded-md p-1 opacity-60 hover:opacity-100"
-        aria-label="Bildirimi kapat"
+        aria-label={toast.closeLabel || DEFAULT_CLOSE_LABEL}
       >
         <X className="h-4 w-4" aria-hidden="true" />
       </button>

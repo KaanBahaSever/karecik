@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/contact.test.mjs && node tests/sortableRows.test.mjs"
+    "test": "node tests/contact.test.mjs && node tests/sortableRows.test.mjs && node tests/locales.test.mjs && node tests/menuLanguage.test.mjs && node tests/menuContent.test.mjs && node tests/menuAnalytics.test.mjs && node tests/landingLocales.test.mjs && node tests/dashboardAnalytics.test.mjs && node tests/dashboardSettings.test.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",

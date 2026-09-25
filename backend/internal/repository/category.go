@@ -91,6 +91,14 @@ func GetCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.
 		id, businessID))
 }
 
+// lockedCategory is the before-read of a category write (see "The
+// before-read" in audit.go): GetCategory under the given row lock.
+func lockedCategory(ctx context.Context, db DB, id, businessID uuid.UUID, lock string) (*models.Category, error) {
+	return scanCategory(db.QueryRow(ctx,
+		`SELECT `+categoryColumns+` FROM categories WHERE id = $1 AND business_id = $2 `+lock,
+		id, businessID))
+}
+
 // CreateCategory appends a new category to the end of the list of the given
 // menu. The menu is always named by the request — there is no default menu to
 // fall back to.
@@ -103,8 +111,12 @@ func GetCategory(ctx context.Context, db DB, id, businessID uuid.UUID) (*models.
 //
 // A run PostgreSQL aborted over a lock conflict rolled its transaction back, so
 // RetryOnConflict can run it again as it is.
+//
+// hooks run inside the same transaction after the INSERT, with the created
+// category (see WriteHook).
 func CreateCategory(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
-	translations models.Translations, icon, imageURL *string, isActive bool) (*models.Category, error) {
+	translations models.Translations, icon, imageURL *string, isActive bool,
+	hooks ...WriteHook[*models.Category]) (*models.Category, error) {
 
 	var category *models.Category
 	err := writeIntoMenu(ctx, db, businessID, menuID, func(tx pgx.Tx) error {
@@ -121,8 +133,11 @@ func CreateCategory(ctx context.Context, db TxDB, businessID, menuID uuid.UUID,
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			RETURNING `+categoryColumns,
 			businessID, menuID, translations, icon, imageURL, nextPosition, isActive))
+		if err != nil {
+			return err
+		}
 		category = created
-		return err
+		return runHooks(ctx, tx, created, hooks)
 	})
 	if err != nil {
 		return nil, err
@@ -150,8 +165,15 @@ var categoryUpdatableColumns = map[string]bool{
 //
 // Either way a run PostgreSQL aborted over a lock conflict wrote nothing, so
 // RetryOnConflict can run it again as it is.
+//
+// hooks run after the UPDATE, inside the move's transaction or, for an update
+// that moves nothing, one opened for them (see updateWithHooks), with the
+// category as it was and as it is now. The "before" is read in that
+// transaction, FOR NO KEY UPDATE, as the statement right before the UPDATE and
+// after a move's advisory lock (see "The before-read" in audit.go). An update
+// that names no updatable column runs none.
 func UpdateCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID,
-	fields map[string]any) (*models.Category, error) {
+	fields map[string]any, hooks ...WriteHook[Update[*models.Category]]) (*models.Category, error) {
 
 	columns := make([]string, 0, len(fields))
 	for column := range fields {
@@ -176,9 +198,16 @@ func UpdateCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 		fmt.Sprintf(` WHERE id = $%d AND business_id = $%d RETURNING `, len(args)-1, len(args)) +
 		categoryColumns
 
+	before := func(db DB) (*models.Category, error) {
+		return lockedCategory(ctx, db, id, businessID, lockForNoKeyUpdate)
+	}
+	update := func(db DB) (*models.Category, error) {
+		return scanCategory(db.QueryRow(ctx, query, args...))
+	}
+
 	value, moves := fields["menu_id"]
 	if !moves {
-		return scanCategory(db.QueryRow(ctx, query, args...))
+		return updateWithHooks(ctx, db, hooks, before, update)
 	}
 	// The lock is keyed on the id, so a move has to name its menu as a
 	// uuid.UUID; anything else would move the category without it.
@@ -189,9 +218,12 @@ func UpdateCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 
 	var category *models.Category
 	err := writeIntoMenu(ctx, db, businessID, target, func(tx pgx.Tx) error {
-		updated, err := scanCategory(tx.QueryRow(ctx, query, args...))
+		updated, err := updateInTx(ctx, tx, hooks, before, update)
+		if err != nil {
+			return err
+		}
 		category = updated
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -222,7 +254,14 @@ func UpdateCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID,
 // 2 has no join: a product that moved to another category while the delete
 // waited for its row lock is checked again against its own category_id and
 // left out, as it has to be.
-func DeleteCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID) (int, error) {
+//
+// With hooks, one more statement runs between steps 2 and 3: the category's
+// before-read, FOR UPDATE — the lock the DELETE takes on it anyway, so the
+// category row is still locked after its products (see "The before-read" in
+// audit.go). The hooks run after the DELETE, inside the transaction, with that
+// copy of the category and the count.
+func DeleteCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID,
+	hooks ...WriteHook[CategoryDeletion]) (int, error) {
 	var productCount int
 	err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		owned, err := categoryOwned(ctx, tx, id, businessID)
@@ -246,6 +285,13 @@ func DeleteCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID) (int
 		}
 		productCount = int(locked.RowsAffected())
 
+		var removed *models.Category
+		if len(hooks) > 0 {
+			if removed, err = lockedCategory(ctx, tx, id, businessID, lockForUpdate); err != nil {
+				return err
+			}
+		}
+
 		tag, err := tx.Exec(ctx,
 			`DELETE FROM categories WHERE id = $1 AND business_id = $2`, id, businessID)
 		if err != nil {
@@ -254,12 +300,19 @@ func DeleteCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID) (int
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return nil
+		return runHooks(ctx, tx, CategoryDeletion{Category: removed, Products: productCount}, hooks)
 	})
 	if err != nil {
 		return 0, err
 	}
 	return productCount, nil
+}
+
+// CategoryDeletion is what the hooks of DeleteCategory receive: the category as
+// it was removed and how many products went with it.
+type CategoryDeletion struct {
+	Category *models.Category
+	Products int
 }
 
 // ReorderCategories writes the given id order into the position column
@@ -283,7 +336,10 @@ func DeleteCategory(ctx context.Context, db TxDB, id, businessID uuid.UUID) (int
 //
 // A run PostgreSQL aborted over a lock conflict rolled its transaction back, so
 // RetryOnConflict can run it again as it is.
-func ReorderCategories(ctx context.Context, db TxDB, businessID uuid.UUID, ids []uuid.UUID) error {
+//
+// hooks run after the UPDATE, inside the transaction, with the ids as given.
+func ReorderCategories(ctx context.Context, db TxDB, businessID uuid.UUID, ids []uuid.UUID,
+	hooks ...WriteHook[[]uuid.UUID]) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -295,12 +351,14 @@ func ReorderCategories(ctx context.Context, db TxDB, businessID uuid.UUID, ids [
 			FOR NO KEY UPDATE`, businessID, ids); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			UPDATE categories c
 			SET position = data.ord - 1
 			FROM unnest($2::uuid[]) WITH ORDINALITY AS data(id, ord)
 			WHERE c.id = data.id AND c.business_id = $1`,
-			businessID, ids)
-		return err
+			businessID, ids); err != nil {
+			return err
+		}
+		return runHooks(ctx, tx, ids, hooks)
 	})
 }

@@ -468,11 +468,14 @@ export default function LivePreview({
             </div>
 
             {/* `contained` keeps the splash inside the phone instead of covering
-                the whole dashboard window. */}
+                the whole dashboard window. `language` is the preview's, so the
+                replayed splash reads the way the customer will see it — its
+                "skip" label and direction included. */}
             {splashOpen ? (
               <SplashScreen
                 contained
                 business={previewBusiness}
+                language={language}
                 replayKey={splashKey}
                 onDone={() => setSplashOpen(false)}
               />

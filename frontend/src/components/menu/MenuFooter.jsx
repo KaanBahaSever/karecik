@@ -1,83 +1,50 @@
-import { buildContactItems, contactDisplayMode, trimSpace } from '../../lib/contact'
-import { t } from '../../locales/index.js'
+import { buildContactItems, contactInFooter } from '../../lib/contact'
+import { footerPriceSentence, footerVatNote } from '../../lib/format'
+import { t, textDir } from '../../locales/index.js'
 import Logo from '../ui/Logo.jsx'
 import { ContactList } from './ContactInfo.jsx'
 
 /**
- * Footer of the customer menu.
+ * Footer of the customer menu — ONE footer, identical on every public view: the
+ * category grid, a product listing, search results and the tenant directory.
  *
- * It renders in two scopes:
+ * It holds exactly these, top to bottom, each only when it has something to say:
  *
- *   scope="home"      The landing view with the category cards. Only the
- *                     "Karecik ile hazırlandı" signature is shown; contact
- *                     details and the legal notices are omitted.
+ *   contact list   the compact ContactList, only when the owner put the contact
+ *                  details in the footer (contactInFooter: `contact_in_footer`,
+ *                  or the legacy `contact_display: 'footer'`)
+ *   price date     "Prices valid from 24 August 2026." in the visitor's
+ *                  language, built from footer.price_date (lib/format.js)
+ *   VAT note       the owner's own sentence as typed, or the localized
+ *                  "prices include VAT" when the toggle is on and the text is
+ *                  blank or still the stock Turkish sentence
+ *   Yerli Üretim   the certification badge, when the menu enables it
+ *   signature      "Powered by Karecik" with the Karecik mark — always last
  *
- *   scope="products"  Any screen listing or searching products. Contact details
- *                     and the legal notices appear here:
- *                       "Fiyatlarımız 24.08.2026 tarihinden itibaren geçerlidir."
- *                       the menu's VAT sentence, while its toggle is on
- *                     plus, when the menu enables it, the "Yerli Üretim" badge
- *                     just above the signature.
+ * Nothing else belongs here. Loose Instagram links, Wi-Fi fields or buttons of
+ * their own have no place in a footer; the owner's contact details reach it
+ * only as the one compact list above, and only when asked for.
  *
- * The contact details are the compact ContactList from ContactInfo.jsx, shown in
- * the 'inline', 'list' and 'footer' modes of `contact_display` and absent in
- * 'hidden'. What the home view shows for the first two modes is MenuContent's
- * business, not this footer's.
- *
- * The price date is produced by the backend (repository/menu.go -> BuildFooter)
- * and merely displayed here; it arrives empty when the menu turns it off. The
- * VAT sentence is read from the menu's own fields instead - see vatNoteText.
+ * The home view's chips or open list are MenuContent's business and follow
+ * `contact_display` alone; this footer never looks at that field.
  *
  * The address is deliberately absent: the customer is standing in the venue, so
- * a street address and a map view are noise. Wi-Fi is what they actually want.
+ * a street address and a map view are noise.
  *
- * On both scopes the signature is the true page footer - last element, generous
- * top spacing, hairline rule above it.
- *
- * @param {object} business - PublicMenu.business
- * @param {object} footer   - PublicMenu.footer { price_note, vat_note, powered_by }
+ * @param {object} business - PublicMenu.business (or the dashboard draft over it)
+ * @param {object} footer   - PublicMenu.footer { price_date, price_note, vat_note }
  * @param {string} language - Active language code
- * @param {string} scope    - "home" | "products"
+ * @param {string} scope    - "menu" (default) | "directory". The directory has no
+ *                            menu, so no menu settings either: the signature alone.
  */
 
 /**
- * The VAT sentence of a menu whose toggle is on but whose own text is blank.
- *
- * It is the server's defaultVatNote (repository/menu.go), which BuildFooter puts
- * into footer.vat_note in that case, and the sentence the settings page shows as
- * that field's default.
+ * The text of the "Yerli Üretim" badge. It is the name of an official Turkish
+ * certification mark, so it is printed as-is in every language — marked as
+ * Turkish so a screen reader pronounces it as such — and only its descriptive
+ * title is translated.
  */
-const DEFAULT_VAT_NOTE = 'Fiyatlarımıza KDV dahildir.'
-
-/**
- * The one VAT sentence the page prints, or '' for none.
- *
- * The menu's own toggle governs it, and there is no other VAT sentence anywhere
- * on the page:
- *
- *   show_vat_note false  nothing
- *   show_vat_note true   vat_note_text, trimmed as the server trims it, or
- *                        DEFAULT_VAT_NOTE when that is blank
- *
- * This reads the business fields rather than footer.vat_note. On the customer
- * menu the two say the same thing - BuildFooter derives footer.vat_note from
- * exactly these two columns - but the dashboard live preview lays the unsaved
- * draft over the last SAVED payload, and only the business fields carry an edit
- * that is not saved yet. footer.vat_note is the fallback for a payload whose
- * business lacks the fields.
- */
-function vatNoteText(business, footer) {
-  const enabled = business?.show_vat_note
-  if (enabled === false) return ''
-
-  if (enabled === true) {
-    const text =
-      typeof business.vat_note_text === 'string' ? business.vat_note_text : footer?.vat_note
-    return trimSpace(text) || DEFAULT_VAT_NOTE
-  }
-
-  return trimSpace(footer?.vat_note)
-}
+const YERLI_URETIM = 'Yerli Üretim'
 
 /**
  * The "Yerli Üretim" badge.
@@ -88,14 +55,23 @@ function vatNoteText(business, footer) {
  * dashboard, or seeded as an absolute URL - and it is rendered as-is, or the
  * fallback is a plain bordered text pill that claims nothing visually.
  *
- * @param {string} logoUrl - business.yerli_uretim_logo_url, may be empty
+ * The artwork may well be an SVG. The explicit height below is what gives an
+ * SVG without width/height attributes a box at all; the width follows from its
+ * viewBox, and `object-contain` keeps the mark whole inside the max width.
+ *
+ * @param {string} logoUrl  - business.yerli_uretim_logo_url, may be empty
+ * @param {string} language - Active language code, for the descriptive title
  */
-function YerliUretimBadge({ logoUrl }) {
+function YerliUretimBadge({ logoUrl, language }) {
+  const title = t('yerliUretimTitle', language)
+
   if (logoUrl) {
     return (
       <img
         src={logoUrl}
-        alt="Yerli Üretim"
+        alt={YERLI_URETIM}
+        title={title}
+        lang="tr"
         className="h-10 w-auto max-w-[120px] object-contain"
       />
     )
@@ -103,16 +79,18 @@ function YerliUretimBadge({ logoUrl }) {
 
   return (
     <span
+      lang="tr"
+      title={title}
       className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-medium"
       style={{ border: '1px solid var(--menu-border)', color: 'var(--menu-muted)' }}
     >
-      Yerli Üretim
+      {YERLI_URETIM}
     </span>
   )
 }
 
 /** The Karecik signature: always the last thing on the page. */
-function Signature({ text }) {
+function Signature({ language }) {
   return (
     <div className="mt-12 pt-8" style={{ borderTop: '1px solid var(--menu-border)' }}>
       <p
@@ -120,74 +98,68 @@ function Signature({ text }) {
         style={{ opacity: 0.7 }}
       >
         <Logo className="h-3.5 w-3.5 shrink-0" title="" knockoutColor="var(--menu-bg)" />
-        {text}
+        {t('poweredBy', language)}
       </p>
     </div>
   )
 }
 
-export default function MenuFooter({ business, footer, language = 'tr', scope = 'products' }) {
-  const signature = footer?.powered_by?.trim() || t('poweredBy', language)
-
-  // Home view: nothing but the signature line.
-  if (scope === 'home') {
+export default function MenuFooter({ business, footer, language = 'tr', scope = 'menu' }) {
+  // The directory lists menus; it has no prices, VAT or badge of its own.
+  if (scope === 'directory') {
     return (
       <footer className="text-center" style={{ color: 'var(--menu-muted)' }}>
-        <Signature text={signature} />
+        <Signature language={language} />
       </footer>
     )
   }
 
-  /* Contact details, in every display mode but 'hidden'. The product screens
-     never show the home view's chips or list, so this is where a customer who is
-     browsing products finds them - and in 'footer' mode it is the only place.
+  /* The compact contact list, when the owner put it in the footer.
 
-     The Wi-Fi password is masked here too: these are exactly the screens a
-     customer holds up at the table.
+     The Wi-Fi password is masked here too, with a reveal toggle: a table of
+     strangers can read a phone screen.
 
-     'hidden' is checked here rather than trusted to arrive empty. The server
-     redacts only the mode it has SAVED, and the dashboard preview lays the
-     unsaved draft over that payload - so a draft switched to 'hidden' still
-     carries every contact field. */
-  const contactItems =
-    contactDisplayMode(business?.contact_display) === 'hidden' ? [] : buildContactItems(business)
+     The switch is read here rather than trusted to arrive as empty fields. The
+     server redacts the contact fields only for a menu SAVED with nothing to
+     show, and the dashboard preview lays the unsaved draft over that payload —
+     so a draft with the footer switched off still carries every field. */
+  const contactItems = contactInFooter(business) ? buildContactItems(business) : []
   const hasContact = contactItems.length > 0
 
-  const priceNote = footer?.price_note?.trim()
-  const vatNote = vatNoteText(business, footer)
+  const priceSentence = footerPriceSentence(business, footer, language)
+  const vatNote = footerVatNote(business, footer, language)
 
   const showYerliUretim = Boolean(business?.show_yerli_uretim)
-  const yerliUretimLogoUrl = business?.yerli_uretim_logo_url?.trim() || ''
+  const yerliUretimLogoUrl =
+    typeof business?.yerli_uretim_logo_url === 'string' ? business.yerli_uretim_logo_url.trim() : ''
 
   return (
     <footer className="text-center" style={{ color: 'var(--menu-muted)' }}>
-      {hasContact || priceNote || vatNote ? (
-        <div
-          className="mt-10 pt-6"
-          style={{ borderTop: '1px solid var(--menu-border)' }}
-        >
+      {hasContact || priceSentence || vatNote ? (
+        <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--menu-border)' }}>
           {/* Renders nothing at all without items, so no margin is left behind. */}
           <ContactList items={contactItems} language={language} compact className="mb-5" />
 
           {/* Legal notices, kept up to date automatically by the system */}
-          {priceNote || vatNote ? (
+          {priceSentence || vatNote ? (
             <div className="space-y-1 text-[11px] leading-relaxed">
-              {priceNote ? <p>{priceNote}</p> : null}
-              {vatNote ? <p>{vatNote}</p> : null}
+              {priceSentence ? <p>{priceSentence}</p> : null}
+              {/* The owner's own words, in whatever script they typed them:
+                  textDir lets a Turkish sentence keep its direction inside
+                  the Arabic menu. */}
+              {vatNote ? <p dir={textDir(vatNote, language)}>{vatNote}</p> : null}
             </div>
           ) : null}
         </div>
       ) : null}
 
-      {/* The badge alone, with no VAT sentence of its own: the menu's VAT
-          toggle governs the only one, vatNote above. */}
       {showYerliUretim ? (
         <div className="mt-8 flex justify-center">
-          <YerliUretimBadge logoUrl={yerliUretimLogoUrl} />
+          <YerliUretimBadge logoUrl={yerliUretimLogoUrl} language={language} />
         </div>
       ) : null}
 
-      <Signature text={signature} />
+      <Signature language={language} />
     </footer>
   )
 }

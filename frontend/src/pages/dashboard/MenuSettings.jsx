@@ -12,7 +12,7 @@ import {
   Link2,
   MapPin,
   Palette,
-  Percent,
+  PanelBottom,
   Phone,
   Plus,
   Save,
@@ -25,9 +25,8 @@ import {
 import { useAuth } from '../../lib/auth.jsx'
 import { useActiveMenu } from '../../lib/menuContext.jsx'
 import {
+  buildContactItems,
   completeLinkUrl,
-  CONTACT_DISPLAY_MODES,
-  contactDisplayMode,
   instagramHandle,
   instagramUrl,
   keptLinkIds,
@@ -37,6 +36,7 @@ import {
   MAX_LINKS,
   trimSpace,
 } from '../../lib/contact'
+import { contactPlacement, footerSummary, HOME_CONTACT_MODES } from '../../lib/footerSettings'
 import { CURRENCY_LIST, formatDate, formatPrice } from '../../lib/format'
 import { cleanSlugInput, MIN_SLUG_LENGTH, slugify } from '../../lib/slugify'
 import { APP_DOMAIN } from '../../lib/subdomain'
@@ -60,8 +60,9 @@ import ActiveMenuBar from '../../components/dashboard/ActiveMenuBar.jsx'
 import LivePreview from '../../components/dashboard/LivePreview.jsx'
 
 /**
- * Everything a menu owns, on one page: identity, contact details, currency and
- * languages, appearance, the splash screen and the footer notices.
+ * Everything a menu owns, on one page: identity, contact details, where those
+ * details and the footer notices appear, currency and languages, appearance
+ * and the splash screen.
  *
  * A menu is the primary entity now, so this page replaces the old business-wide
  * Settings and Design pages. It saves through the menu context — the business
@@ -87,12 +88,19 @@ const MENU_FIELDS = [
   'wifi_ssid',
   'wifi_password',
   'links',
+  /* 3. contact placement and footer notices ("İletişim ve alt bilgi") */
   'contact_display',
-  /* 3. currency and languages */
+  'contact_in_footer',
+  'show_price_date',
+  'show_vat_note',
+  'vat_note_text',
+  'show_yerli_uretim',
+  'yerli_uretim_logo_url',
+  /* 4. currency and languages */
   'currency',
   'languages',
   'default_language',
-  /* 4. appearance */
+  /* 5. appearance */
   'theme',
   'font_family',
   'primary_color',
@@ -101,7 +109,7 @@ const MENU_FIELDS = [
   'background_color',
   'background_image_url',
   'background_overlay_opacity',
-  /* 5. splash screen */
+  /* 6. splash screen */
   'splash_enabled',
   'splash_logo_url',
   'splash_headline',
@@ -114,12 +122,6 @@ const MENU_FIELDS = [
   'splash_exit_duration',
   'splash_display',
   'splash_slide_fade',
-  /* 6. footer notices */
-  'show_price_date',
-  'show_vat_note',
-  'vat_note_text',
-  'show_yerli_uretim',
-  'yerli_uretim_logo_url',
   /* 7. status */
   'is_active',
 ]
@@ -183,18 +185,6 @@ const SLIDE_FADE_MODES = [
   { value: true, label: 'Kayarken soluklaşsın' },
   { value: false, label: 'Tam opak kaysın (perde gibi)' },
 ]
-
-/**
- * One line under each option of the contact display picker. The ids and labels
- * are CONTACT_DISPLAY_MODES in lib/contact.js; only the help text lives here,
- * beside the one control that shows it.
- */
-const CONTACT_DISPLAY_HELP = {
-  inline: 'Ana sayfada küçük düğmeler halinde yan yana dizilir; dokunulan düğmenin bilgisi açılır.',
-  list: 'Ana sayfada tüm bilgiler her zaman açık bir liste halinde görünür.',
-  footer: 'Ana sayfada görünmez; yalnızca ürün ekranlarının en altında yer alır.',
-  hidden: 'Telefon, Instagram, Wi-Fi ve linkler menünün hiçbir yerinde gösterilmez.',
-}
 
 /*
   The owner's custom links are checked with the link rules of lib/contact.js -
@@ -434,6 +424,10 @@ function instagramFieldValue(value) {
 function buildDraft(menu) {
   const languages =
     Array.isArray(menu.languages) && menu.languages.length > 0 ? [...menu.languages] : ['tr']
+  // The home view and the footer are two settings now. A menu still holding
+  // the legacy contact_display 'footer' reads as 'hidden' with the footer
+  // switch on - the pair a save writes back; see contactPlacement.
+  const placement = contactPlacement(menu)
 
   return {
     /* identity */
@@ -455,8 +449,11 @@ function buildDraft(menu) {
     // Always an array of string-valued rows with ids the editor can key on;
     // a payload from before the column existed simply has no links.
     links: buildLinkRows(menu.links),
-    // Unknown or missing means 'inline', the column default.
-    contact_display: contactDisplayMode(menu.contact_display),
+    /* contact placement - unknown or missing means 'inline' and off, the
+       column defaults. Both are real values on the draft (never undefined):
+       LivePreview lays the draft over the saved payload key by key. */
+    contact_display: placement.contact_display,
+    contact_in_footer: placement.contact_in_footer,
     /* currency and languages */
     currency: menu.currency || 'TRY',
     languages,
@@ -735,6 +732,21 @@ export default function MenuSettings() {
   const displaySlug = finalSlug || 'menu-adresi'
   const priceDate = formatDate(activeMenu.price_updated_at) || formatDate(new Date())
 
+  // Whether the draft holds any contact detail the customer menu can show -
+  // the same items it builds, so a malformed link does not count. With none,
+  // the placement choices have nothing to place, and the page says so.
+  const hasContactItems = buildContactItems(draft).length > 0
+  // The line under the footer switches, built from the draft so it follows
+  // every toggle before it is saved.
+  const footerLine = footerSummary({
+    contactInFooter: draft.contact_in_footer,
+    hasContact: hasContactItems,
+    showPriceDate: draft.show_price_date,
+    priceDate,
+    showVatNote: draft.show_vat_note,
+    showYerliUretim: draft.show_yerli_uretim,
+  })
+
   const usesImageBackground = draft.background_type === 'image'
   const backgroundColorInvalid =
     Boolean(draft.background_color) && !isValidColor(draft.background_color)
@@ -912,7 +924,7 @@ export default function MenuSettings() {
       return
     }
     if (draft.vat_note_text.trim().length > 200) {
-      toast.error('KDV ibaresi en fazla 200 karakter olabilir.')
+      toast.error('KDV notu metni en fazla 200 karakter olabilir.')
       return
     }
 
@@ -950,6 +962,23 @@ export default function MenuSettings() {
       }
       body[field] = draft[field]
     })
+
+    // A menu the server still stores with the legacy contact_display 'footer'
+    // (one no migration has converted) reads here as 'hidden' + footer on, so
+    // whichever half the owner changes, the other half looks unchanged and
+    // would not be sent - and the stored pair would stay inconsistent:
+    //   - only the home view changed: the new mode is stored with the column's
+    //     contact_in_footer (off), silently dropping the footer list;
+    //   - only the footer switched off: 'footer' stays stored and still means
+    //     "in the footer", so the switch comes back on after the save.
+    // Sending both halves together writes exactly what the page shows.
+    if (
+      activeMenu.contact_display === 'footer' &&
+      ('contact_display' in body || 'contact_in_footer' in body)
+    ) {
+      body.contact_display = draft.contact_display
+      body.contact_in_footer = Boolean(draft.contact_in_footer)
+    }
 
     // If only a trailing dash was trimmed there may be nothing left to send.
     if (body.slug === stored.slug) delete body.slug
@@ -1015,7 +1044,7 @@ export default function MenuSettings() {
                 value={draft.logo_url}
                 onChange={(url) => update('logo_url', url)}
                 label="Logo"
-                hint="Kare veya yuvarlak logo önerilir · en fazla 5 MB"
+                hint="Kare veya yuvarlak logo önerilir. Geniş logolarda SVG en net sonucu verir."
                 round
               />
 
@@ -1119,7 +1148,7 @@ export default function MenuSettings() {
                 value={draft.cover_url}
                 onChange={(url) => update('cover_url', url)}
                 label="Kapak görseli (opsiyonel)"
-                hint="Menünün üst bölümünde kullanılır · en fazla 5 MB"
+                hint="Menünün üst bölümünde kullanılır."
               />
 
               {/* Which of the two identity fields above — the logo or the name —
@@ -1151,7 +1180,7 @@ export default function MenuSettings() {
             <SectionHeading
               icon={Phone}
               title="İletişim"
-              description="Telefon, Instagram, Wi-Fi ve linkleriniz müşteri menüsünde, bu bölümün sonunda seçtiğiniz iletişim görünümüyle gösterilir. Boş bıraktıklarınız menüde hiç yer almaz."
+              description="Telefon, Instagram, Wi-Fi ve linkleriniz müşteri menüsünde, aşağıdaki “İletişim ve alt bilgi” bölümünde seçtiğiniz yerlerde gösterilir. Boş bıraktıklarınız menüde hiç yer almaz."
             />
 
             <div className="space-y-5">
@@ -1214,8 +1243,8 @@ export default function MenuSettings() {
                   />
                 </div>
                 <p className="help-text">
-                  Seçtiğiniz iletişim görünümüne göre menüde Instagram bağlantısı olarak yer alır.
-                  Boş bırakırsanız gösterilmez.
+                  “İletişim ve alt bilgi” bölümündeki seçiminize göre menüde Instagram bağlantısı
+                  olarak yer alır. Boş bırakırsanız gösterilmez.
                 </p>
                 {/* The customer menu links only a user name it can read
                     (instagramHandle in lib/contact.js: a name, @name or the
@@ -1471,22 +1500,38 @@ export default function MenuSettings() {
                   ) : null}
                 </div>
               </div>
+            </div>
+          </section>
 
-              {/* ------------------------------------------ where they appear */}
-              {/* The option-card pattern of the theme and currency pickers: each
-                  mode needs a line of explanation, which a segmented control
-                  has no room for. */}
-              <div className="border-t border-gray-100 pt-5">
+          {/* ------------------------- 3. Contact placement and the footer */}
+          {/* Every "where does it show" switch in one place: where the contact
+              details sit on the home view, and what the footer at the bottom
+              of the menu carries. The contact picker used to close the
+              section above and the footer switches had a section of their
+              own ("Menü Altı Bilgiler"); both MOVED here - nothing is kept
+              twice. */}
+          <section className="card p-5">
+            <SectionHeading
+              icon={PanelBottom}
+              title="İletişim ve alt bilgi"
+              description="İletişim bilgilerinizin ana ekranda nasıl görüneceğini ve menünün en altındaki alt bilgide nelerin yer alacağını seçin."
+            />
+
+            <div className="space-y-5">
+              {/* (a) The home view. The option-card pattern of the theme and
+                  currency pickers: each mode needs a line of explanation,
+                  which a segmented control has no room for. */}
+              <div>
                 <span className="label" id="contact-display-label">
-                  İletişim görünümü
+                  Ana ekranda iletişim bilgileri
                 </span>
 
                 <div
-                  className="grid gap-3 sm:grid-cols-2"
+                  className="grid gap-3 sm:grid-cols-3"
                   role="group"
                   aria-labelledby="contact-display-label"
                 >
-                  {CONTACT_DISPLAY_MODES.map((mode) => {
+                  {HOME_CONTACT_MODES.map((mode) => {
                     const isSelected = draft.contact_display === mode.id
                     return (
                       <button
@@ -1502,17 +1547,129 @@ export default function MenuSettings() {
                           {mode.label}
                         </span>
                         <span className="mt-0.5 block text-xs leading-snug text-gray-500">
-                          {CONTACT_DISPLAY_HELP[mode.id]}
+                          {mode.help}
                         </span>
                       </button>
                     )
                   })}
                 </div>
+
+                {!hasContactItems ? (
+                  <p className="help-text">
+                    Henüz telefon, Instagram, Wi-Fi ya da link girmediniz. Seçiminiz, bunları
+                    yukarıdaki “İletişim” bölümüne eklediğinizde uygulanır.
+                  </p>
+                ) : null}
               </div>
+
+              {/* (b) The footer. Each switch keeps the control that belongs to
+                  it right underneath - the VAT text, the Yerli Üretim logo. */}
+              <div className="border-t border-gray-100 pt-5">
+                <span className="label">Alt bilgide gösterilecekler</span>
+
+                <div className="divide-y divide-gray-100 rounded-xl border border-gray-200">
+                  <div className="p-4">
+                    <Switch
+                      checked={draft.contact_in_footer}
+                      onChange={(value) => update('contact_in_footer', value)}
+                      label="İletişim bilgileri"
+                      description="Telefon, Instagram, Wi-Fi ve linkleriniz alt bilgide kısa bir liste olarak da yer alır. Kapalıyken alt bilgide yalnızca aşağıdaki ibareler ve Karecik imzası bulunur."
+                    />
+                    {draft.contact_in_footer && !hasContactItems ? (
+                      <p className="mt-2 text-xs text-amber-700">
+                        Henüz iletişim bilgisi girmediniz; alt bilgide gösterilecek bir şey yok.
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="p-4">
+                    <Switch
+                      checked={draft.show_price_date}
+                      onChange={(value) => update('show_price_date', value)}
+                      label="Fiyat geçerlilik tarihi"
+                    />
+
+                    <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
+                      Fiyatlarımız <b className="text-gray-900">{priceDate}</b> tarihinden
+                      itibaren geçerlidir.
+                    </p>
+
+                    <p className="help-text flex items-start gap-1.5">
+                      <Info
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        Bu tarih, bu menüde bir fiyat değiştiğinde (tek ürün düzenlemesi ya da
+                        toplu güncelleme) otomatik olarak yenilenir. Menüde ziyaretçinin dilinde
+                        gösterilir.
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="p-4">
+                    <Switch
+                      checked={draft.show_vat_note}
+                      onChange={(value) => update('show_vat_note', value)}
+                      label="KDV notu"
+                    />
+
+                    <div className="mt-3">
+                      <label className="label" htmlFor="vat-note">
+                        KDV notu metni
+                      </label>
+                      <input
+                        id="vat-note"
+                        type="text"
+                        className="input"
+                        value={draft.vat_note_text}
+                        maxLength={200}
+                        placeholder={DEFAULT_VAT_NOTE}
+                        disabled={!draft.show_vat_note}
+                        onChange={(event) => update('vat_note_text', event.target.value)}
+                      />
+                      <p className="help-text">
+                        Boş bırakırsanız menüde “{DEFAULT_VAT_NOTE}” yazar; bu hazır cümle
+                        diğer dillerde ziyaretçinin dilinde gösterilir ·{' '}
+                        {draft.vat_note_text.length} / 200 karakter
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="p-4">
+                    <Switch
+                      checked={draft.show_yerli_uretim}
+                      onChange={(value) => update('show_yerli_uretim', value)}
+                      label="Yerli Üretim rozeti"
+                      description="Menünün en altında, Karecik imzasının hemen üzerinde görünür."
+                    />
+
+                    {draft.show_yerli_uretim ? (
+                      <div className="mt-4">
+                        <ImageUploader
+                          value={draft.yerli_uretim_logo_url}
+                          onChange={(url) => update('yerli_uretim_logo_url', url)}
+                          label="Yerli Üretim logosu (opsiyonel)"
+                          hint="Belgeli logonuzu yükleyin. Boş bırakırsanız sade bir metin rozeti gösterilir."
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* (c) What the footer will hold, in one line, from the draft. */}
+              <p
+                className="flex items-start gap-2 rounded-lg border border-brand-100 bg-brand-50 px-3 py-2.5 text-sm text-brand-800"
+                aria-live="polite"
+              >
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" aria-hidden="true" />
+                <span>{footerLine}</span>
+              </p>
             </div>
           </section>
 
-          {/* -------------------------------- 3. Currency and languages */}
+          {/* -------------------------------- 4. Currency and languages */}
           <section className="card p-5">
             <SectionHeading
               icon={Globe}
@@ -1604,7 +1761,7 @@ export default function MenuSettings() {
             </div>
           </section>
 
-          {/* --------------------------------------------- 4. Appearance */}
+          {/* --------------------------------------------- 5. Appearance */}
           <section className="card p-5">
             <SectionHeading
               icon={Palette}
@@ -1827,7 +1984,7 @@ export default function MenuSettings() {
                     value={draft.background_image_url}
                     onChange={(url) => update('background_image_url', url)}
                     label="Arka plan görseli"
-                    hint="Geniş, sakin görseller en iyi sonucu verir · en fazla 5 MB"
+                    hint="Geniş, sakin görseller en iyi sonucu verir."
                   />
 
                   <div>
@@ -1954,7 +2111,7 @@ export default function MenuSettings() {
             </div>
           </section>
 
-          {/* ----------------------------------------- 5. Splash screen */}
+          {/* ----------------------------------------- 6. Splash screen */}
           <section className="card p-5">
             <SectionHeading
               icon={Sparkles}
@@ -1988,7 +2145,7 @@ export default function MenuSettings() {
                     value={draft.splash_logo_url}
                     onChange={(url) => update('splash_logo_url', url)}
                     label="Karşılama logosu"
-                    hint="Yatay logolar desteklenir · SVG, PNG veya JPG"
+                    hint="Yatay logolar desteklenir; SVG her ekranda keskin görünür."
                   />
                   <p className="help-text">Boş bırakırsanız menü logonuz kullanılır.</p>
                 </div>
@@ -2219,82 +2376,6 @@ export default function MenuSettings() {
               <b className="font-medium text-gray-700">Karşılama ekranını oynat</b> düğmesine
               basarak nasıl göründüğünü deneyebilirsiniz.
             </p>
-          </section>
-
-          {/* --------------------------------- 6. Footer / legal notices */}
-          <section className="card p-5">
-            <SectionHeading icon={Percent} title="Menü Altı Bilgiler (Yasal İbareler)" />
-
-            <div className="space-y-5">
-              <div>
-                <Switch
-                  checked={draft.show_price_date}
-                  onChange={(value) => update('show_price_date', value)}
-                  label="Fiyat geçerlilik tarihini göster"
-                />
-
-                <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
-                  Fiyatlarımız <b className="text-gray-900">{priceDate}</b> tarihinden itibaren
-                  geçerlidir.
-                </p>
-
-                <p className="help-text flex items-start gap-1.5">
-                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
-                  <span>
-                    Bu tarih, bu menüde bir fiyat değiştiğinde (tek ürün düzenlemesi ya da
-                    toplu güncelleme) otomatik olarak yenilenir.
-                  </span>
-                </p>
-              </div>
-
-              <div className="border-t border-gray-100 pt-5">
-                <Switch
-                  checked={draft.show_vat_note}
-                  onChange={(value) => update('show_vat_note', value)}
-                  label="KDV ibaresini göster"
-                />
-
-                <div className="mt-3">
-                  <label className="label" htmlFor="vat-note">
-                    KDV ibaresi metni
-                  </label>
-                  <input
-                    id="vat-note"
-                    type="text"
-                    className="input"
-                    value={draft.vat_note_text}
-                    maxLength={200}
-                    placeholder={DEFAULT_VAT_NOTE}
-                    disabled={!draft.show_vat_note}
-                    onChange={(event) => update('vat_note_text', event.target.value)}
-                  />
-                  <p className="help-text">
-                    Boş bırakırsanız menüde “{DEFAULT_VAT_NOTE}” yazar ·{' '}
-                    {draft.vat_note_text.length} / 200 karakter
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-gray-100 pt-5">
-                <Switch
-                  checked={draft.show_yerli_uretim}
-                  onChange={(value) => update('show_yerli_uretim', value)}
-                  label="Yerli Üretim rozetini göster"
-                  description="Menünün en altında, Karecik imzasının hemen üzerinde görünür."
-                />
-
-                {draft.show_yerli_uretim ? (
-                  <div className="mt-4">
-                    <ImageUploader
-                      value={draft.yerli_uretim_logo_url}
-                      onChange={(url) => update('yerli_uretim_logo_url', url)}
-                      label="Yerli Üretim logosu (opsiyonel)"
-                      hint="Belgeli logonuzu yükleyin. Boş bırakırsanız sade bir metin rozeti gösterilir."
-                    />
-                  </div>
-                ) : null}
-              </div>
-            </div>
           </section>
 
           {/* ------------------------------------------- 7. Menu status */}

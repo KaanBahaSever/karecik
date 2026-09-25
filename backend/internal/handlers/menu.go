@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"karecik/backend/internal/audit"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
 	"karecik/backend/internal/repository"
@@ -114,7 +117,25 @@ func (h *Handler) CreateMenu(c *fiber.Ctx) error {
 	}
 	fields["slug"] = slug
 
-	menu, err := repository.CreateMenu(c.Context(), h.DB, business.ID, fields)
+	// The audit row of a create records the settings the request named — not
+	// every default the new row was given, which says nothing about what the
+	// owner did.
+	written := make([]string, 0, len(fields))
+	for column := range fields {
+		written = append(written, column)
+	}
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, created *models.Menu) (*auditRecord, error) {
+			return &auditRecord{
+				action:     audit.ActionMenuCreate,
+				entityType: audit.EntityMenu,
+				entityID:   created.ID.String(),
+				label:      created.Name,
+				changes:    audit.DiffMenu(nil, created).Only(written...),
+			}, nil
+		})
+
+	menu, err := repository.CreateMenu(c.Context(), h.DB, business.ID, fields, record)
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicate) {
 			return utils.Conflict(c, "Bu menü adresi bu işletmede zaten kullanılıyor.")
@@ -143,7 +164,10 @@ func (h *Handler) UpdateMenu(c *fiber.Ctx) error {
 	}
 
 	// The menu has to belong to this business before anything is written — and
-	// before its own id is excluded from the slug search.
+	// before its own id is excluded from the slug search. The copy read here is
+	// NOT the "before" of the audit diff: that one is read inside the write's
+	// transaction, under its row lock, so that a save committing in between
+	// cannot end up in the diff.
 	if _, err := repository.GetMenu(c.Context(), h.DB, id, business.ID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return utils.NotFound(c, "Menü bulunamadı.")
@@ -167,7 +191,25 @@ func (h *Handler) UpdateMenu(c *fiber.Ctx) error {
 		fields["slug"] = slug
 	}
 
-	menu, err := repository.UpdateMenu(c.Context(), h.DB, id, business.ID, fields)
+	// Every setting the save really changed — logo, phone, links, colours,
+	// languages, the footer switches — with the Wi-Fi password masked. A save
+	// that changed nothing records nothing.
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, change repository.Update[*models.Menu]) (*auditRecord, error) {
+			changes := audit.DiffMenu(change.Before, change.After)
+			if len(changes) == 0 {
+				return nil, nil
+			}
+			return &auditRecord{
+				action:     audit.ActionMenuUpdate,
+				entityType: audit.EntityMenu,
+				entityID:   change.After.ID.String(),
+				label:      change.After.Name,
+				changes:    changes,
+			}, nil
+		})
+
+	menu, err := repository.UpdateMenu(c.Context(), h.DB, id, business.ID, fields, record)
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicate) {
 			return utils.Conflict(c, "Bu menü adresi bu işletmede zaten kullanılıyor.")
@@ -192,13 +234,30 @@ func (h *Handler) DeleteMenu(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Geçersiz menü kimliği.")
 	}
 
-	// DeleteMenu is its own transaction — it takes the menu's advisory lock,
-	// locks the menu's products, then its categories, then deletes the menu —
-	// so a run PostgreSQL aborted over a lock conflict left nothing behind and
-	// is simply run again. See repository.RetryOnConflict.
+	// The audit row names the menu as the delete found it — read by the
+	// repository in the delete's own transaction, under the DELETE's row lock.
 	businessID := middleware.BusinessID(c)
+	record := recordHook(auditActorOf(c),
+		func(_ context.Context, _ pgx.Tx, removed *models.Menu) (*auditRecord, error) {
+			return &auditRecord{
+				action:     audit.ActionMenuDelete,
+				entityType: audit.EntityMenu,
+				entityID:   removed.ID.String(),
+				label:      removed.Name,
+				changes: audit.Changes{
+					"name": {Old: removed.Name, New: nil},
+					"slug": {Old: removed.Slug, New: nil},
+				},
+			}, nil
+		})
+
+	// DeleteMenu is its own transaction — it takes the menu's advisory lock,
+	// locks the menu's products, then its categories, deletes the menu and
+	// writes the audit row — so a run PostgreSQL aborted over a lock conflict
+	// left nothing behind and is simply run again. See
+	// repository.RetryOnConflict.
 	err = repository.RetryOnConflict(c.Context(), "DeleteMenu", func() error {
-		return repository.DeleteMenu(c.Context(), h.DB, id, businessID)
+		return repository.DeleteMenu(c.Context(), h.DB, id, businessID, record)
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -498,15 +557,37 @@ func menuFieldsFrom(c *fiber.Ctx, raw map[string]json.RawMessage) (map[string]an
 
 	// --- contact block
 	//
-	// contact_display is checked against utils.ContactDisplayModes, which is
-	// exactly the set menus_contact_display_check accepts, so a mode this lets
-	// through never turns into a constraint violation.
+	// contact_in_footer is read first so that the legacy mode below can
+	// override it: "footer" always MEANT "the list in the footer", so a body
+	// that sends it together with contact_in_footer false still gets the
+	// footer list — the pair is resolved the one way migration 012 resolved
+	// the stored rows.
+	if value, ok := raw["contact_in_footer"]; ok {
+		flag, err := decodeBool(value)
+		if err != nil {
+			return nil, false, utils.Unprocessable(c, "contact_in_footer alanı true/false olmalıdır.")
+		}
+		fields["contact_in_footer"] = flag
+	}
+
+	// contact_display is resolved through utils.ResolveContactDisplay: the
+	// three listed modes are stored as they are — exactly the set
+	// menus_contact_display_check accepts, so a mode this lets through never
+	// turns into a constraint violation — and the legacy "footer" is stored as
+	// "hidden" with the footer list switched on, which is what it meant.
 	if value, ok := raw["contact_display"]; ok {
-		mode, err := DecodeString(value)
-		if err != nil || !utils.IsValidContactDisplay(mode) {
+		text, err := DecodeString(value)
+		if err != nil {
+			return nil, false, utils.Unprocessable(c, "Geçersiz iletişim görünümü.")
+		}
+		mode, forcesFooter, valid := utils.ResolveContactDisplay(text)
+		if !valid {
 			return nil, false, utils.Unprocessable(c, "Geçersiz iletişim görünümü.")
 		}
 		fields["contact_display"] = mode
+		if forcesFooter {
+			fields["contact_in_footer"] = true
+		}
 	}
 
 	// null means "no links", exactly like []: json.Unmarshal leaves the slice
