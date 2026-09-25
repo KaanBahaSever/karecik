@@ -33,7 +33,8 @@ type PublicMenuOptions struct {
 
 // BuildPublicMenu assembles the customer-facing payload of one menu.
 // Translations are resolved into the requested language, so the translations
-// map itself never leaves the server.
+// map itself never leaves the server. The names of the option groups and items
+// are resolved the same way (models.ProductOptions.Resolve).
 //
 // It takes both halves of the address: the business identifies the tenant —
 // the subdomain of {business-slug}.karecik.com — and the menu identifies what
@@ -148,7 +149,7 @@ func BuildPublicMenu(ctx context.Context, db DB, business *models.Business,
 			ImageURL:     product.ImageURL,
 			Allergens:    product.Allergens,
 			Badges:       product.Badges,
-			Options:      product.Options,
+			Options:      product.Options.Resolve(lang, fallback),
 			IsFeatured:   product.IsFeatured,
 			IsActive:     product.IsActive,
 		})

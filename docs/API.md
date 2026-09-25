@@ -94,7 +94,7 @@ API refuses both in every text it stores, before anything is written, with the
 | category `icon` / `image_url`, on create and update | `icon alanı metin veya boş olmalıdır.` / `image_url alanı metin veya boş olmalıdır.` |
 | product `image_url`, on create and update | `Görsel adresi geçersiz.` |
 | any field of a product badge, its `id` included | `Rozet listesi geçersiz.` |
-| an option group name or an option name | `Seçenek listesi geçersiz.` |
+| an option group name or an option name, in any supported language | `Seçenek listesi geçersiz.` |
 | a link `label` or `url` | the link rules of section 8: `Link adı geçersiz karakter içeriyor.` / `Link adresi http:// veya https:// ile başlayan geçerli bir adres olmalıdır.` |
 
 A link `id` is not refused: like any other id that is not a plain identifier, it
@@ -488,8 +488,8 @@ different list of option surcharges; the menu is the one the product sits on
 after the update, so a product moved into another menu with a new price dates
 that menu and leaves the old one alone. Re-sending identical prices together
 with other edits (the dashboard dialog sends every field on every save),
-toggling `is_active` / `is_featured`, renaming an option, or moving a product
-without a new price does not move the date. Surcharges compare numerically:
+toggling `is_active` / `is_featured`, renaming an option (in any language), or
+moving a product without a new price does not move the date. Surcharges compare numerically:
 `10` and `10.0` are the same. The date is moved by a database trigger
 (migration `010_price_change_date.sql`), not by the handler.
 
@@ -504,6 +504,45 @@ A `category_id` of another business, or one that does not exist, is `404`
 runs — after the ownership check, before the row is written — and the product
 is left exactly as it was: a move into a category, or into a menu, that is being
 deleted waits until the delete has finished and then gets that `404`.
+
+#### Product options
+
+`options` is a list of groups, on `POST` and `PUT` alike:
+
+```json
+[ { "name": "Süt Tercihi",
+    "translations": { "tr": { "name": "Süt Tercihi" }, "en": { "name": "Milk" } },
+    "type": "single", "required": true,
+    "items": [
+      { "name": "Yulaf Sütü", "translations": { "en": { "name": "Oat milk" } }, "price": 25 },
+      { "name": "Laktozsuz", "price": 10 } ] } ]
+```
+
+`name` is the group's or item's name in the default language of the menu the
+product sits on, and it is required (1–60 characters). `translations` is
+optional and holds the names in the menu's other languages, 1–60 characters
+each. The rules, applied by `handlers.SanitizeOptions`:
+
+- A translation in a language that is not one of `tr en de ru ar fr`, and a
+  blank one, is dropped.
+- A blank `name` is taken from the default-language translation when there is
+  one; with neither, the group is `422` `Seçenek grubunun adı zorunludur.` and
+  the item `422` `Seçenek adı zorunludur.`. When both are sent and differ,
+  `name` wins.
+- A translation over 60 characters is `422`, naming its language:
+  `Seçenek grubunun adı (EN) en fazla 60 karakter olabilir.` /
+  `Seçenek adı (EN) en fazla 60 karakter olabilir.`.
+- `translations` is stored only when a language other than the default one is
+  left, and then with a copy of `name` under the default language, so a later
+  change of the menu's `default_language` keeps the old default-language name
+  under its own code. An option with no other language is stored exactly as
+  before translations existed — `{ "name", "price" }` — and every option stored
+  that way stays valid.
+
+The owner's endpoints return `translations` as stored. The customer menu and the
+preview resolve every name into the requested language — its translation, else
+the default language's, else `name` — and carry no `translations` key (see
+section 7).
 
 ### `PATCH /api/products/:id/price`
 
@@ -752,7 +791,9 @@ Both endpoints return the same body:
 
 Important: on the public endpoints **translations are already resolved** — the
 payload carries plain `name` / `description` fields instead of the
-`translations` map. Categories and products with `is_active = false` are
+`translations` map. The same holds for the option groups and items of a
+product: each carries its `name` in the requested language, falling back to the
+menu's default language, and no `translations` key. Categories and products with `is_active = false` are
 **omitted entirely**. Both lists are ordered by `position ASC`.
 
 `footer.price_date` is the menu's `price_updated_at` as a bare `YYYY-MM-DD`

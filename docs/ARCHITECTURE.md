@@ -355,7 +355,9 @@ The menu it moves is the one the product's **new** category belongs to, so a
 product moved into another menu with a new price dates that menu. Creating or
 deleting a product, reordering, moving a product without a new price, toggling
 `is_active` / `is_featured`, and editing translations, allergens, badges, the
-image, calories or an option's name are not price changes. Surcharges compare
+image, calories or an option's name — in any language: the translated names sit
+under `translations` inside a group or item, where `$[*].items[*].price` never
+reaches — are not price changes. Surcharges compare
 as jsonb, which compares numbers numerically: `10` and `10.0` are the same.
 
 The product dialog (`PUT /api/products/:id`, which sends every field on every

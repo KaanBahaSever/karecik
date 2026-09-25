@@ -125,7 +125,7 @@ func TestTextThatIsNotUTF8IsRefusedLikeNUL(t *testing.T) {
 		t.Errorf("SanitizeBadges of invalid UTF-8 = (%v, %q)", out, message)
 	}
 	options := models.ProductOptions{{Name: invalid, Type: "single", Items: []models.ProductOptionItem{{Name: "Büyük"}}}}
-	if out, message := handlers.SanitizeOptions(options); message != "Seçenek listesi geçersiz." || out != nil {
+	if out, message := handlers.SanitizeOptions(options, "tr"); message != "Seçenek listesi geçersiz." || out != nil {
 		t.Errorf("SanitizeOptions of invalid UTF-8 = (%v, %q)", out, message)
 	}
 
@@ -148,7 +148,7 @@ func TestSanitizeOptionsRefusesNUL(t *testing.T) {
 			Items: []models.ProductOptionItem{item, {Name: "Orta" + nul}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, message := handlers.SanitizeOptions(models.ProductOptions{tc.group})
+			out, message := handlers.SanitizeOptions(models.ProductOptions{tc.group}, "tr")
 			if message != "Seçenek listesi geçersiz." || out != nil {
 				t.Fatalf("SanitizeOptions = (%v, %q), want (nil, %q)", out, message, "Seçenek listesi geçersiz.")
 			}

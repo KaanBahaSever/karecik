@@ -15,7 +15,10 @@ import { allergenLabel, findAllergen, languageDir, t, textDir } from '../../loca
  * gesture library.
  *
  * Option groups are presentation only: the selections feed the live total and
- * nothing else. There is no cart and nothing is ever submitted.
+ * nothing else. There is no cart and nothing is ever submitted. Their names
+ * arrive already resolved into `language` by the backend — a translation, else
+ * the menu's default-language name — so an option without an Arabic name shows
+ * its Turkish one in the Arabic menu, in a <bdi> that keeps it left to right.
  *
  * The sheet carries its own `dir` and `lang`. It is rendered inside MenuContent
  * and would inherit both from there today, but it is `position: fixed` — the
