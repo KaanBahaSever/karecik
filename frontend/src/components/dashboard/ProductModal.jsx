@@ -4,6 +4,7 @@ import { Ban, Loader2, Plus, X } from 'lucide-react'
 import api from '../../lib/api'
 import { categoryEmoji } from '../../lib/category'
 import { currencySymbol, parsePrice, priceToInput } from '../../lib/format'
+import { buildOptionsPayload, optionNamesOf } from '../../lib/productOptions.js'
 import { ALLERGENS, findLanguage } from '../../locales/index.js'
 import {
   BADGE_COLOR_PRESETS,
@@ -55,20 +56,23 @@ const OPTION_TYPES = [
 
 /* Option groups and their items have no id at all, so — exactly like the badge
    rows above — the editor keeps a local `uid` purely as the React key. Both are
-   stripped before the payload is sent. */
+   stripped before the payload is sent.
+
+   A row's `names` holds its name per menu language ({ tr: 'Boy', en: 'Size' });
+   lib/productOptions.js turns it into the stored name + translations and back. */
 let optionGroupCounter = 0
 let optionItemCounter = 0
 
 function newOptionItem(values) {
   optionItemCounter += 1
-  return { uid: `option-item-${optionItemCounter}`, name: '', price: '', ...(values || {}) }
+  return { uid: `option-item-${optionItemCounter}`, names: {}, price: '', ...(values || {}) }
 }
 
 function newOptionGroup(values) {
   optionGroupCounter += 1
   return {
     uid: `option-group-${optionGroupCounter}`,
-    name: '',
+    names: {},
     type: OPTION_TYPES[0].value,
     required: false,
     items: [newOptionItem()],
@@ -77,20 +81,33 @@ function newOptionGroup(values) {
 }
 
 /** Turns the stored option array into editable rows. */
-function optionGroupsOf(product) {
+function optionGroupsOf(product, languages, primaryLanguage) {
   if (!Array.isArray(product?.options)) return []
   return product.options.map((group) =>
     newOptionGroup({
-      name: group?.name || '',
+      names: optionNamesOf(group, languages, primaryLanguage),
       type: group?.type === 'multiple' ? 'multiple' : 'single',
       required: Boolean(group?.required),
       items: Array.isArray(group?.items)
         ? group.items.map((item) =>
-            newOptionItem({ name: item?.name || '', price: priceToInput(item?.price) }),
+            newOptionItem({
+              names: optionNamesOf(item, languages, primaryLanguage),
+              price: priceToInput(item?.price),
+            }),
           )
         : [],
     }),
   )
+}
+
+/**
+ * Placeholder of an option name input. In a translation it shows the
+ * default-language name, which is what the menu prints while the translation
+ * stays empty; otherwise, and before that name exists, an example.
+ */
+function optionPlaceholder(names, editingPrimary, primaryLanguage, example) {
+  const primaryName = editingPrimary ? '' : String(names?.[primaryLanguage] || '').trim()
+  return primaryName || example
 }
 
 /** Checks that an input such as "145,00" / "145.00" can be parsed as a number. */
@@ -218,7 +235,7 @@ export default function ProductModal({
       setImageUrl(product?.image_url || null)
       setAllergens(Array.isArray(product?.allergens) ? [...product.allergens] : [])
       setBadges(badgeRowsOf(product))
-      setOptionGroups(optionGroupsOf(product))
+      setOptionGroups(optionGroupsOf(product, languageList, primaryLanguage))
       setVisible(product?.is_active !== false)
       setFeatured(Boolean(product?.is_featured))
       setActiveLanguage(primaryLanguage)
@@ -272,6 +289,40 @@ export default function ProductModal({
   function updateOptionGroup(uid, patch) {
     setOptionGroups((previous) =>
       previous.map((group) => (group.uid === uid ? { ...group, ...patch } : group)),
+    )
+  }
+
+  /* Names are edited in the active language, like the product texts above. */
+  function updateOptionGroupName(uid, value) {
+    setOptionGroups((previous) =>
+      previous.map((group) =>
+        group.uid === uid ? { ...group, names: { ...group.names, [activeLanguage]: value } } : group,
+      ),
+    )
+    clearOptionError(uid)
+  }
+
+  function updateOptionItemName(groupUid, itemUid, value) {
+    setOptionGroups((previous) =>
+      previous.map((group) =>
+        group.uid === groupUid
+          ? {
+              ...group,
+              items: group.items.map((item) =>
+                item.uid === itemUid
+                  ? { ...item, names: { ...item.names, [activeLanguage]: value } }
+                  : item,
+              ),
+            }
+          : group,
+      ),
+    )
+    clearOptionError(itemUid)
+  }
+
+  function clearOptionError(uid) {
+    setErrors((previous) =>
+      previous.optionUid === uid ? { ...previous, options: '', optionUid: '' } : previous,
     )
   }
 
@@ -349,9 +400,18 @@ export default function ProductModal({
       }
     }
 
+    // An unnamed group, or one nobody can answer, is dropped rather than
+    // rejected — a half-finished row must never block the save. A row named
+    // only in another language is refused: see buildOptionsPayload.
+    const optionResult = buildOptionsPayload(optionGroups, languageList, primaryLanguage)
+    if (optionResult.problem) {
+      found.options = optionResult.problem.message
+      found.optionUid = optionResult.problem.uid
+    }
+
     if (Object.keys(found).length > 0) {
       setErrors(found)
-      if (found.name) setActiveLanguage(primaryLanguage)
+      if (found.name || found.options) setActiveLanguage(primaryLanguage)
       return
     }
 
@@ -383,20 +443,6 @@ export default function ProductModal({
       })
       .filter((badge) => badge.text !== '')
 
-    // An unnamed group, or one nobody can answer, is dropped rather than
-    // rejected — a half-finished row must never block the save. `uid` is a
-    // local React key and never leaves the form.
-    const payloadOptions = optionGroups
-      .map((group) => ({
-        name: (group.name || '').trim(),
-        type: group.type === 'multiple' ? 'multiple' : 'single',
-        required: Boolean(group.required),
-        items: group.items
-          .map((item) => ({ name: (item.name || '').trim(), price: parsePrice(item.price) }))
-          .filter((item) => item.name !== ''),
-      }))
-      .filter((group) => group.name !== '' && group.items.length > 0)
-
     const payload = {
       category_id: categoryId,
       translations: payloadTranslations,
@@ -406,7 +452,7 @@ export default function ProductModal({
       image_url: imageUrl || null,
       allergens,
       badges: payloadBadges,
-      options: payloadOptions,
+      options: optionResult.options,
       is_active: visible,
       is_featured: featured,
     }
@@ -430,6 +476,9 @@ export default function ProductModal({
 
   const activeTranslation = translations[activeLanguage] || EMPTY_TRANSLATION
   const multiLanguage = languageList.length > 1
+  const editingPrimary = activeLanguage === primaryLanguage
+  const activeLanguageLabel = findLanguage(activeLanguage).label
+  const primaryLanguageLabel = findLanguage(primaryLanguage).label
 
   return (
     <Modal
@@ -899,6 +948,49 @@ export default function ProductModal({
             </button>
           </div>
 
+          {/* The same language switch as the tabs above, repeated here so the
+              owner can translate the option names without scrolling back up. */}
+          {multiLanguage && optionGroups.length > 0 ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div
+                className="inline-flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1"
+                role="group"
+                aria-label="Seçenek adlarının dili"
+              >
+                {languageList.map((code) => {
+                  const language = findLanguage(code)
+                  const isSelected = code === activeLanguage
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setActiveLanguage(code)}
+                      aria-pressed={isSelected}
+                      title={language.label}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                        isSelected
+                          ? 'bg-white text-gray-900 shadow-card'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {language.short}
+                      {code === primaryLanguage ? (
+                        <span className="ml-0.5 text-brand-600" aria-hidden="true">
+                          •
+                        </span>
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-gray-500">
+                {editingPrimary
+                  ? `Adlar ${activeLanguageLabel} (varsayılan dil) olarak düzenleniyor.`
+                  : `Adlar ${activeLanguageLabel} olarak düzenleniyor. Boş bırakılanlar menüde ${primaryLanguageLabel} adıyla görünür.`}
+              </p>
+            </div>
+          ) : null}
+
           {optionGroups.length === 0 ? (
             <p className="mt-3 rounded-lg border border-dashed border-gray-300 px-3 py-4 text-center text-xs text-gray-500">
               Henüz seçenek grubu yok. Örn. “Süt Tercihi”, “Porsiyon”, “Ek Şuruplar”.
@@ -911,20 +1003,29 @@ export default function ProductModal({
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <label className="sr-only" htmlFor={`option-group-${group.uid}`}>
-                        {groupIndex + 1}. grubun adı
+                        {groupIndex + 1}. grubun adı ({activeLanguageLabel})
                       </label>
                       <input
                         id={`option-group-${group.uid}`}
                         type="text"
-                        className="input bg-white py-2"
-                        value={group.name}
-                        onChange={(event) =>
-                          updateOptionGroup(group.uid, { name: event.target.value })
-                        }
-                        placeholder="Örn. Süt Tercihi"
+                        className={`input bg-white py-2 ${
+                          errors.optionUid === group.uid ? 'border-red-400' : ''
+                        }`}
+                        value={group.names[activeLanguage] || ''}
+                        onChange={(event) => updateOptionGroupName(group.uid, event.target.value)}
+                        placeholder={optionPlaceholder(
+                          group.names,
+                          editingPrimary,
+                          primaryLanguage,
+                          activeLanguage === 'tr' ? 'Örn. Süt Tercihi' : 'Örn. Milk Choice',
+                        )}
                         maxLength={MAX_OPTION_NAME}
                         autoComplete="off"
+                        aria-invalid={errors.optionUid === group.uid || undefined}
                       />
+                      {errors.optionUid === group.uid ? (
+                        <p className="error-text">{errors.options}</p>
+                      ) : null}
                     </div>
 
                     <button
@@ -994,20 +1095,31 @@ export default function ProductModal({
                       <div key={item.uid} className="flex items-start gap-2">
                         <div className="min-w-0 flex-1">
                           <label className="sr-only" htmlFor={`option-item-${item.uid}`}>
-                            {itemIndex + 1}. seçeneğin adı
+                            {itemIndex + 1}. seçeneğin adı ({activeLanguageLabel})
                           </label>
                           <input
                             id={`option-item-${item.uid}`}
                             type="text"
-                            className="input bg-white py-2"
-                            value={item.name}
+                            className={`input bg-white py-2 ${
+                              errors.optionUid === item.uid ? 'border-red-400' : ''
+                            }`}
+                            value={item.names[activeLanguage] || ''}
                             onChange={(event) =>
-                              updateOptionItem(group.uid, item.uid, { name: event.target.value })
+                              updateOptionItemName(group.uid, item.uid, event.target.value)
                             }
-                            placeholder="Örn. Yulaf Sütü"
+                            placeholder={optionPlaceholder(
+                              item.names,
+                              editingPrimary,
+                              primaryLanguage,
+                              activeLanguage === 'tr' ? 'Örn. Yulaf Sütü' : 'Örn. Oat Milk',
+                            )}
                             maxLength={MAX_OPTION_NAME}
                             autoComplete="off"
+                            aria-invalid={errors.optionUid === item.uid || undefined}
                           />
+                          {errors.optionUid === item.uid ? (
+                            <p className="error-text">{errors.options}</p>
+                          ) : null}
                         </div>
 
                         <div className="relative w-28 shrink-0">

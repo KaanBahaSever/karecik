@@ -38,6 +38,28 @@ export function isRtl(code) {
   return code === 'ar'
 }
 
+/** A letter of a right-to-left script: Hebrew, Arabic and its supplements, Syriac, Thaana, N'Ko. */
+const RTL_LETTER = /[֐-ࣿיִ-﷿ﹰ-ﻼ]/
+
+/**
+ * The `dir` of the isolate (<bdi>) around one of the owner's own texts — a
+ * product, category, option or badge name — in the menu of `language`.
+ *
+ * 'auto' gives a text the direction of its first strong letter, which is what
+ * an untranslated Turkish fallback needs inside the Arabic menu. An Arabic
+ * translation that OPENS with a Latin loanword ("Frozen بالفراولة") would then
+ * be laid out left to right, so in a right-to-left menu a text with any
+ * right-to-left letter in it is 'rtl'; everything else, in every menu, stays
+ * 'auto'.
+ *
+ * @param {unknown} text
+ * @param {string}  language
+ * @returns {'rtl'|'auto'}
+ */
+export function textDir(text, language) {
+  return isRtl(language) && typeof text === 'string' && RTL_LETTER.test(text) ? 'rtl' : 'auto'
+}
+
 /* -------------------------------------------------------------- allergens */
 
 export const ALLERGENS = [

@@ -117,7 +117,8 @@ func (h *Handler) CreateProduct(c *fiber.Ctx) error {
 		return utils.Unprocessable(c, errMessage)
 	}
 
-	options, errMessage := SanitizeOptions(req.Options)
+	// Option names follow the same default language as the product's own.
+	options, errMessage := SanitizeOptions(req.Options, lang)
 	if errMessage != "" {
 		return utils.Unprocessable(c, errMessage)
 	}
@@ -244,20 +245,29 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 		fields["category_id"] = categoryID
 	}
 
+	// The default language of the menu the product ends up in: the translations
+	// and the option names are both checked against it. It is read once, and
+	// only when the body carries one of the two.
+	var textLanguage string
+	language := func() (string, error) {
+		if textLanguage != "" {
+			return textLanguage, nil
+		}
+		var err error
+		if target != nil {
+			textLanguage, err = h.menuLanguage(c, businessID, target.MenuID)
+		} else {
+			textLanguage, err = h.productLanguage(c, businessID, id)
+		}
+		return textLanguage, err
+	}
+
 	if value, ok := raw["translations"]; ok {
 		var translations models.Translations
 		if err := json.Unmarshal(value, &translations); err != nil {
 			return utils.Unprocessable(c, "Çeviri alanı geçersiz.")
 		}
-		var (
-			lang string
-			err  error
-		)
-		if target != nil {
-			lang, err = h.menuLanguage(c, businessID, target.MenuID)
-		} else {
-			lang, err = h.productLanguage(c, businessID, id)
-		}
+		lang, err := language()
 		if err != nil {
 			return utils.Internal(c, err)
 		}
@@ -357,7 +367,11 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 				return utils.Unprocessable(c, "Seçenek listesi geçersiz.")
 			}
 		}
-		cleaned, errMessage := SanitizeOptions(options)
+		lang, err := language()
+		if err != nil {
+			return utils.Internal(c, err)
+		}
+		cleaned, errMessage := SanitizeOptions(options, lang)
 		if errMessage != "" {
 			return utils.Unprocessable(c, errMessage)
 		}
@@ -378,6 +392,8 @@ func (h *Handler) UpdateProduct(c *fiber.Ctx) error {
 	// compare_price or an option surcharge, the products_touch_menu_price_date
 	// trigger of migration 010 moves the "prices valid from" date of the menu
 	// the product ends up in. A second mechanism in Go would only drift from it.
+	// An edit of option names alone, in any language, is not a price change:
+	// the trigger compares the surcharges only.
 	//
 	// The update is one statement — the trigger runs inside it — or, when the
 	// body names a category, one transaction of its own, so a run PostgreSQL
@@ -722,6 +738,7 @@ const maxOptionItemPrice = 100000
 
 // SanitizeOptions validates the option groups of a product and returns the
 // cleaned list plus an error message, which is empty when everything is valid.
+// defaultLang is the default language of the menu the product sits on.
 //
 // It checks the RAW payload before normalising, because Normalize truncates
 // silently: it caps the list at MaxOptionGroups and each group at
@@ -731,32 +748,40 @@ const maxOptionItemPrice = 100000
 // lowercases before it compares, so "Single" has to be accepted here too or
 // the model and the handler would disagree about the same payload.
 //
+// Names, per group and per item: Name is the name in defaultLang and is
+// required. A request that leaves it blank may carry it as the defaultLang
+// translation instead; when both are sent and differ, Name wins. Translations
+// in a language the menus cannot be published in are dropped, like
+// SanitizeTranslations drops them, and blank ones are dropped too. What is
+// left is stored only when at least one language other than defaultLang
+// remains, and then together with a copy of Name under defaultLang — see
+// models.OptionTranslations for why.
+//
 // A group with a valid name but no usable items is NOT an error: the dashboard
 // drops such a group rather than refusing to save, and Normalize drops it here
 // as well.
 //
 // NOTE: the messages are shown to the end user and are therefore Turkish.
-func SanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
+func SanitizeOptions(in models.ProductOptions, defaultLang string) (models.ProductOptions, string) {
 	if len(in) > models.MaxOptionGroups {
 		return nil, fmt.Sprintf("En fazla %d seçenek grubu ekleyebilirsiniz.",
 			models.MaxOptionGroups)
 	}
+
+	out := make(models.ProductOptions, 0, len(in))
 
 	for _, group := range in {
 		// The group and item names are stored in the jsonb column, so a text
 		// PostgreSQL cannot store in one of them refuses the list (see
 		// UnstorableText). The type is not stored as sent — an unknown one is
 		// refused below — so it needs no check of its own.
-		if UnstorableText(group.Name) {
+		if UnstorableText(group.Name) || unstorableOptionTranslations(group.Translations) {
 			return nil, "Seçenek listesi geçersiz."
 		}
-		name := strings.TrimSpace(group.Name)
-		if name == "" {
-			return nil, "Seçenek grubunun adı zorunludur."
-		}
-		if len([]rune(name)) > models.MaxOptionNameRunes {
-			return nil, fmt.Sprintf("Seçenek grubunun adı en fazla %d karakter olabilir.",
-				models.MaxOptionNameRunes)
+		name, translations, errMessage := sanitizeOptionName(group.Name, group.Translations,
+			defaultLang, "Seçenek grubunun adı")
+		if errMessage != "" {
+			return nil, errMessage
 		}
 
 		switch strings.ToLower(strings.TrimSpace(group.Type)) {
@@ -770,17 +795,16 @@ func SanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
 				models.MaxOptionItems)
 		}
 
+		// A fresh slice: group.Items shares its array with the caller's value.
+		items := make([]models.ProductOptionItem, 0, len(group.Items))
 		for _, item := range group.Items {
-			if UnstorableText(item.Name) {
+			if UnstorableText(item.Name) || unstorableOptionTranslations(item.Translations) {
 				return nil, "Seçenek listesi geçersiz."
 			}
-			itemName := strings.TrimSpace(item.Name)
-			if itemName == "" {
-				return nil, "Seçenek adı zorunludur."
-			}
-			if len([]rune(itemName)) > models.MaxOptionNameRunes {
-				return nil, fmt.Sprintf("Seçenek adı en fazla %d karakter olabilir.",
-					models.MaxOptionNameRunes)
+			itemName, itemTranslations, errMessage := sanitizeOptionName(item.Name,
+				item.Translations, defaultLang, "Seçenek adı")
+			if errMessage != "" {
+				return nil, errMessage
 			}
 			if item.Price < 0 {
 				return nil, "Seçenek fiyatı sıfırdan küçük olamaz."
@@ -788,13 +812,78 @@ func SanitizeOptions(in models.ProductOptions) (models.ProductOptions, string) {
 			if item.Price > maxOptionItemPrice {
 				return nil, "Seçenek fiyatı çok yüksek."
 			}
+			items = append(items, models.ProductOptionItem{
+				Name:         itemName,
+				Translations: itemTranslations,
+				Price:        item.Price,
+			})
 		}
+
+		group.Name, group.Translations, group.Items = name, translations, items
+		out = append(out, group)
 	}
 
 	// Normalize is the last pass: it trims the fields, coerces the type, rounds
 	// the prices, drops the groups that carry no answer and guarantees a
 	// non-nil slice, which the NOT NULL jsonb column needs.
-	return in.Normalize(), ""
+	return out.Normalize(), ""
+}
+
+// unstorableOptionTranslations reports a translated option name PostgreSQL
+// cannot store. Only the languages SanitizeOptions keeps are looked at, the
+// way SanitizeTranslations looks at them: the others are dropped unread.
+func unstorableOptionTranslations(translations models.OptionTranslations) bool {
+	for code, translation := range translations {
+		if utils.IsValidLanguage(code) && UnstorableText(translation.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeOptionName cleans the names of one option group or item (see
+// SanitizeOptions) and returns its default-language name, the translations to
+// store — nil when there is nothing to store — and an error message. label
+// starts every message: "Seçenek grubunun adı" or "Seçenek adı".
+func sanitizeOptionName(rawName string, rawTranslations models.OptionTranslations,
+	defaultLang, label string) (string, models.OptionTranslations, string) {
+
+	translations := make(models.OptionTranslations, len(rawTranslations))
+	for code, translation := range rawTranslations {
+		if !utils.IsValidLanguage(code) {
+			continue
+		}
+		name := strings.TrimSpace(translation.Name)
+		if name == "" {
+			continue
+		}
+		if len([]rune(name)) > models.MaxOptionNameRunes {
+			return "", nil, fmt.Sprintf("%s (%s) en fazla %d karakter olabilir.",
+				label, strings.ToUpper(code), models.MaxOptionNameRunes)
+		}
+		translations[code] = models.OptionTranslation{Name: name}
+	}
+
+	name := strings.TrimSpace(rawName)
+	if name == "" {
+		name = translations[defaultLang].Name
+	}
+	if name == "" {
+		return "", nil, label + " zorunludur."
+	}
+	if len([]rune(name)) > models.MaxOptionNameRunes {
+		return "", nil, fmt.Sprintf("%s en fazla %d karakter olabilir.",
+			label, models.MaxOptionNameRunes)
+	}
+
+	// Name is the default-language text, so a translation under defaultLang
+	// is replaced by it rather than trusted.
+	delete(translations, defaultLang)
+	if len(translations) == 0 {
+		return name, nil, ""
+	}
+	translations[defaultLang] = models.OptionTranslation{Name: name}
+	return name, translations, ""
 }
 
 // validateCalories checks the optional calorie value of a product; nil means

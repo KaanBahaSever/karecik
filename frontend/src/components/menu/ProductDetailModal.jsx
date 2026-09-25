@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatPrice } from '../../lib/format'
 import { useImageFallback } from '../../lib/useImageFallback'
 import { BadgeIcon } from '../../themes/badges'
-import { allergenLabel, findAllergen, t } from '../../locales/index.js'
+import { allergenLabel, findAllergen, t, textDir } from '../../locales/index.js'
 
 /**
  * Bottom sheet shown when a product is tapped in the customer menu.
@@ -14,7 +14,11 @@ import { allergenLabel, findAllergen, t } from '../../locales/index.js'
  * gesture library.
  *
  * Option groups are presentation only: the selections feed the live total and
- * nothing else. There is no cart and nothing is ever submitted.
+ * nothing else. There is no cart and nothing is ever submitted. Their names
+ * arrive already resolved into `language` by the backend — a translation, else
+ * the menu's default-language name — so an option without an Arabic name shows
+ * its Turkish one in the Arabic menu. Each name sits in a <bdi> whose direction
+ * textDir() picks, so either reads the right way round.
  *
  * @param {object|null} product  - Selected product (renders nothing when null)
  * @param {object}      business - PublicMenu.business (currency and colours)
@@ -552,7 +556,9 @@ export default function ProductDetailModal({ product, business, language = 'tr',
             return (
               <div key={`${group.name}-${groupIndex}`}>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide">{group.name}</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide">
+                    <bdi dir={textDir(group.name, language)}>{group.name}</bdi>
+                  </h3>
                   {group.required ? (
                     <span
                       className="rounded-full px-2 py-0.5 text-[10px] font-medium"
@@ -590,7 +596,9 @@ export default function ProductDetailModal({ product, business, language = 'tr',
                           className="h-4 w-4 shrink-0"
                           style={{ accentColor: 'var(--menu-primary)' }}
                         />
-                        <span className="min-w-0 flex-1">{item.name}</span>
+                        <span className="min-w-0 flex-1">
+                          <bdi dir={textDir(item.name, language)}>{item.name}</bdi>
+                        </span>
                         {item.price > 0 ? (
                           <span
                             className="shrink-0 text-xs font-medium"

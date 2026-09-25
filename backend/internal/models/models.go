@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -431,20 +432,105 @@ func (b Badges) Normalize() Badges {
 
 // ---------------------------------------------------------- product options
 
+// OptionTranslation is the name of an option group or item in one language.
+type OptionTranslation struct {
+	Name string `json:"name"`
+}
+
+// OptionTranslations maps a language code to the name of an option group or
+// item in that language. It lives inside products.options, next to Name.
+//
+// Name stays the name in the menu's default language and the fallback of every
+// language without a translation, so an option stored before translations
+// existed — a bare {"name", "price"} — is still complete. The map is omitted
+// when an option has no name in any language but the default one; once it has
+// one, handlers.SanitizeOptions also writes the default language into it, as a
+// copy of Name, so that a later change of the menu's default language still
+// finds the old default-language text under its own code.
+//
+// The translations are nested one level down on purpose: the trigger of
+// migration 010 compares $[*].items[*].price, which a name in any language can
+// never reach, so a translation-only edit does not move the menu's "prices
+// valid from" date.
+type OptionTranslations map[string]OptionTranslation
+
+// resolveName returns the name for lang: its translation, then the one in
+// fallback (the menu's default language), then name itself. A name that is
+// empty everywhere — which a stored row never has, as SanitizeOptions refuses
+// it — falls back to the first non-empty translation in language-code order,
+// so the answer never depends on Go's map order.
+func (t OptionTranslations) resolveName(lang, fallback, name string) string {
+	if translation, ok := t[lang]; ok && translation.Name != "" {
+		return translation.Name
+	}
+	if translation, ok := t[fallback]; ok && translation.Name != "" {
+		return translation.Name
+	}
+	if name != "" {
+		return name
+	}
+	codes := make([]string, 0, len(t))
+	for code, translation := range t {
+		if translation.Name != "" {
+			codes = append(codes, code)
+		}
+	}
+	if len(codes) == 0 {
+		return ""
+	}
+	sort.Strings(codes)
+	return t[codes[0]].Name
+}
+
+// normalize trims every name and drops the empty ones. A map left empty is
+// nil, so the JSON omits it and an untranslated option keeps the exact shape
+// it had before translations existed.
+func (t OptionTranslations) normalize() OptionTranslations {
+	var normalized OptionTranslations
+	for code, translation := range t {
+		name := strings.TrimSpace(translation.Name)
+		if name == "" {
+			continue
+		}
+		if normalized == nil {
+			normalized = make(OptionTranslations, len(t))
+		}
+		normalized[code] = OptionTranslation{Name: name}
+	}
+	return normalized
+}
+
 // ProductOptionItem is one choice inside a group, priced as a surcharge on top
-// of the product's own price. A zero price is normal ("Tek" portion).
+// of the product's own price. A zero price is normal ("Tek" portion). Name is
+// the default-language name; Translations carries the others (see
+// OptionTranslations).
 type ProductOptionItem struct {
-	Name  string  `json:"name"`
-	Price float64 `json:"price"`
+	Name         string             `json:"name"`
+	Translations OptionTranslations `json:"translations,omitempty"`
+	Price        float64            `json:"price"`
+}
+
+// ResolveName returns the item's name in lang, falling back to the menu's
+// default language and then to Name.
+func (i ProductOptionItem) ResolveName(lang, fallback string) string {
+	return i.Translations.resolveName(lang, fallback, i.Name)
 }
 
 // ProductOptionGroup is one question asked about a product.
-// Type is "single" (radio) or "multiple" (checkbox).
+// Type is "single" (radio) or "multiple" (checkbox). Name and Translations
+// work as on ProductOptionItem.
 type ProductOptionGroup struct {
-	Name     string              `json:"name"`
-	Type     string              `json:"type"`
-	Required bool                `json:"required"`
-	Items    []ProductOptionItem `json:"items"`
+	Name         string              `json:"name"`
+	Translations OptionTranslations  `json:"translations,omitempty"`
+	Type         string              `json:"type"`
+	Required     bool                `json:"required"`
+	Items        []ProductOptionItem `json:"items"`
+}
+
+// ResolveName returns the group's name in lang, falling back to the menu's
+// default language and then to Name.
+func (g ProductOptionGroup) ResolveName(lang, fallback string) string {
+	return g.Translations.resolveName(lang, fallback, g.Name)
 }
 
 // ProductOptions is stored as a JSONB array on the product.
@@ -462,11 +548,14 @@ const (
 
 // Normalize trims names, drops groups without a name or without items, drops
 // items without a name, coerces an unknown Type to "single", rounds prices to
-// two decimals and caps both lists. It always returns a non-nil slice.
+// two decimals and caps both lists. Translated names are trimmed and the empty
+// ones dropped, and a translations map left empty is removed. It always
+// returns a non-nil slice.
 //
-// Name length and the price range are validated in the handler, which owns the
-// Turkish messages; this only trims, coerces, rounds and caps — nothing here
-// ever reports an error.
+// Name length, the price range and the language codes are validated in the
+// handler, which owns the Turkish messages and knows the menu's default
+// language; this only trims, coerces, rounds and caps — nothing here ever
+// reports an error.
 func (o ProductOptions) Normalize() ProductOptions {
 	normalized := make(ProductOptions, 0, len(o))
 
@@ -475,6 +564,7 @@ func (o ProductOptions) Normalize() ProductOptions {
 		if group.Name == "" {
 			continue
 		}
+		group.Translations = group.Translations.normalize()
 
 		group.Type = strings.ToLower(strings.TrimSpace(group.Type))
 		if group.Type != OptionTypeSingle && group.Type != OptionTypeMultiple {
@@ -487,6 +577,7 @@ func (o ProductOptions) Normalize() ProductOptions {
 			if item.Name == "" {
 				continue
 			}
+			item.Translations = item.Translations.normalize()
 			// Prices arrive from a text input, so 25.999999 is possible.
 			item.Price = math.Round(item.Price*100) / 100
 
@@ -509,6 +600,32 @@ func (o ProductOptions) Normalize() ProductOptions {
 	}
 
 	return normalized
+}
+
+// Resolve returns a copy of the options with every group and item name
+// resolved into lang — its translation, else the one in fallback (the menu's
+// default language), else Name — and no translations map left, which is what
+// the customer payload carries: like the product translations, the map itself
+// never leaves the server. The receiver is not modified and the result is
+// never nil.
+func (o ProductOptions) Resolve(lang, fallback string) ProductOptions {
+	resolved := make(ProductOptions, 0, len(o))
+	for _, group := range o {
+		items := make([]ProductOptionItem, 0, len(group.Items))
+		for _, item := range group.Items {
+			items = append(items, ProductOptionItem{
+				Name:  item.ResolveName(lang, fallback),
+				Price: item.Price,
+			})
+		}
+		resolved = append(resolved, ProductOptionGroup{
+			Name:     group.ResolveName(lang, fallback),
+			Type:     group.Type,
+			Required: group.Required,
+			Items:    items,
+		})
+	}
+	return resolved
 }
 
 // ----------------------------------------------------------------- products
