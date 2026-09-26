@@ -267,6 +267,37 @@ export const api = {
   // 200 and answers { items, total, limit, offset }.
   analyticsEvents: (params) => request(`/api/analytics/events${qs(params)}`),
 
+  /* analytics exclusions — visits that are never recorded at all */
+  // The business's own list of IP addresses and ranges, plus what the server
+  // sees of THIS request: { items, current_ip, current_ip_source,
+  // current_ip_excluded, optout, max }. `current_ip` is the address a menu
+  // visit from here would be logged under (null when unknown), `optout`
+  // whether this browser carries the opt-out cookie. The platform-wide list
+  // (ANALYTICS_EXCLUDED_IPS) is never exposed.
+  excludedIps: () => request('/api/analytics/excluded-ips'),
+  // How many stored visits of this business an address or range covers, asked
+  // before every add so the owner can decide about them: { cidr, count }.
+  // 422 for text that is not an address or a range.
+  excludedIpMatchCount: (cidr) =>
+    request(`/api/analytics/excluded-ips/match-count${qs({ cidr })}`),
+  // `delete_history` is REQUIRED and must be the owner's own answer to the
+  // match-count dialog - true also deletes the covered visits, in the same
+  // transaction. Answers 201 { item, deleted_events }; 409 when the list
+  // already covers the address, 422 for a range broader than /16 (IPv4) or
+  // /48 (IPv6), a label over 60 characters or a full list.
+  addExcludedIp: ({ cidr, label, delete_history: deleteHistory }) =>
+    request('/api/analytics/excluded-ips', {
+      method: 'POST',
+      body: { cidr, label: label || '', delete_history: deleteHistory },
+    }),
+  // 204; 404 for an entry that is gone (or belongs to another business).
+  removeExcludedIp: (id) =>
+    request(`/api/analytics/excluded-ips/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // true sets the karecik_analytics_optout cookie on this browser, false
+  // expires it; either way 204. Menus opened in a browser that has it are not
+  // counted, on every tenant.
+  setAnalyticsOptout: (on) => request('/api/analytics/optout', { method: on ? 'POST' : 'DELETE' }),
+
   /* audit trail — who changed what in the panel, newest first */
   // `params` may carry { entity_type, action, limit, offset }. Each item's
   // `changes` maps a field to { old, new }; a Wi-Fi password arrives masked

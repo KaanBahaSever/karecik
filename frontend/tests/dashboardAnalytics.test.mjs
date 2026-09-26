@@ -365,6 +365,8 @@ check('every action and record type of the contract has a Turkish label', () => 
     'business.update',
     'account.password_change',
     'upload.create',
+    'analytics.exclude_ip.add',
+    'analytics.exclude_ip.remove',
   ]
   assert.deepEqual(Object.keys(AUDIT_ACTIONS).sort(), actions.slice().sort())
   for (const action of actions) assert.notEqual(auditActionLabel(action), action)
@@ -377,13 +379,18 @@ check('every action and record type of the contract has a Turkish label', () => 
   assert.equal(auditActionTone('future.thing'), 'neutral')
   assert.equal(auditActionLabel(null), '—')
   assert.equal(auditActionLabel('toString'), 'toString')
+  assert.equal(auditActionLabel('analytics.exclude_ip.add'), 'IP hariç tutuldu')
+  assert.equal(auditActionLabel('analytics.exclude_ip.remove'), 'IP listeden çıkarıldı')
+  assert.equal(auditActionTone('analytics.exclude_ip.add'), 'create')
+  assert.equal(auditActionTone('analytics.exclude_ip.remove'), 'delete')
 
   assert.deepEqual(
     AUDIT_ENTITY_TYPES.map((entity) => entity.id),
-    ['product', 'category', 'menu', 'business', 'account', 'upload'],
+    ['product', 'category', 'menu', 'business', 'account', 'upload', 'analytics_exclusion'],
   )
   assert.equal(auditEntityLabel('product'), 'Ürün')
   assert.equal(auditEntityLabel('upload'), 'Dosya')
+  assert.equal(auditEntityLabel('analytics_exclusion'), 'Hariç tutulan IP')
   assert.equal(auditEntityLabel('widget'), 'widget')
   assert.equal(auditEntityLabel(undefined), '')
 })
@@ -598,6 +605,44 @@ check('bulk price, reorder, upload and password records read in Turkish', () => 
   const password = auditChangeRows({ method: { old: null, new: 'reset_link' } })
   assert.equal(password[0].label, 'Yöntem')
   assert.equal(password[0].after, 'Sıfırlama bağlantısıyla')
+})
+
+check('an IP exclusion reads as the address, its note and the visits it deleted', () => {
+  // analytics.exclude_ip.add, as handlers.AddExcludedIP records it.
+  const added = auditChangeRows({
+    cidr: { old: null, new: '198.18.139.87/32' },
+    label: { old: null, new: 'Ev' },
+    deleted_events: { old: null, new: 1234 },
+  })
+  assert.deepEqual(
+    added.map((row) => [row.label, row.hasBefore, row.after]),
+    [
+      ['IP / aralık', false, '198.18.139.87'],
+      ['Not', false, 'Ev'],
+      ['Silinen ziyaret kaydı', false, '1.234'],
+    ],
+  )
+
+  // analytics.exclude_ip.remove: the removed entry on the old side only.
+  const removed = auditChangeRows({
+    cidr: { old: '85.105.0.0/16', new: null },
+    label: { old: 'Ofis', new: null },
+  })
+  assert.deepEqual(
+    removed.map((row) => [row.label, row.before, row.hasAfter]),
+    [
+      ['IP / aralık', '85.105.0.0/16', false],
+      ['Not', 'Ofis', false],
+    ],
+  )
+
+  // A range keeps its prefix - "/32" of IPv6 is a range, not a host.
+  assert.equal(formatAuditValue('2a02:e0::/32', 'cidr'), '2a02:e0::/32')
+  assert.equal(formatAuditValue('2a02:e0::1/128', 'cidr'), '2a02:e0::1')
+  assert.equal(formatAuditValue('something odd', 'cidr'), 'something odd')
+  assert.equal(formatAuditValue(0, 'deleted_events'), '0')
+  // A menu's contact link keeps its own label, not the exclusion's "Not".
+  assert.equal(auditFieldLabel('links.0.label'), 'Linkler › 0.label')
 })
 
 if (failures.length > 0) {

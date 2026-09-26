@@ -505,16 +505,22 @@ func TestAuditRowOfARetriedWriteIsNotDuplicated(t *testing.T) {
 }
 
 // Every action and entity type of internal/audit satisfies the CHECK
-// constraints of migration 014, so no audited write can fail on its own
-// vocabulary.
+// constraints of migrations 014 and 015, so no audited write can fail on its
+// own vocabulary.
 func TestEveryAuditActionFitsTheSchema(t *testing.T) {
 	h := newHarness(t)
 	owner := h.register("owner", "Sözlük Kafe", "vocabulary@example.test")
 	businessID := uuid.MustParse(owner.businessID)
 	ctx := context.Background()
 
+	// An action is <entity>.<verb>, except where the entity type is spelled
+	// differently from the action's prefix.
+	entityOf := map[string]string{"analytics": audit.EntityAnalyticsExclusion}
 	for _, action := range audit.Actions {
 		entity := strings.SplitN(action, ".", 2)[0]
+		if spelled, ok := entityOf[entity]; ok {
+			entity = spelled
+		}
 		if err := repository.InsertAuditLog(ctx, h.pool, audit.Entry{
 			BusinessID: businessID, Action: action, EntityType: entity,
 			IP: "-", Port: "-", IPSource: "",

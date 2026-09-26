@@ -207,7 +207,8 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	//
 	// Neither budget is what bounds the table any more: a repeat of the same
 	// view within seconds and every event past ANALYTICS_DAILY_EVENT_CAP are
-	// accepted without being stored (handlers.TrackEvent), whatever the rate.
+	// accepted without being stored (handlers.TrackEvent), whatever the rate —
+	// and so is every view from an excluded address or an opted-out browser.
 	// Limited requests are dropped with a 429 — a beacon does not retry — and
 	// cost the visitor nothing: a lost view is a missing row in a chart, never
 	// a page that does not open.
@@ -275,6 +276,17 @@ func Setup(app *fiber.App, h *handlers.Handler, cfg *config.Config) {
 	api.Get("/analytics/summary", h.AnalyticsSummary)
 	api.Get("/analytics/events", h.AnalyticsEvents)
 	api.Get("/audit-logs", h.ListAuditLogs)
+
+	// Whose visits the analytics never store: the business's list of
+	// addresses and ranges, and the opt-out mark of the owner's own browser
+	// (handlers/exclusions.go). The fixed "match-count" path must come BEFORE
+	// the ":id" pattern.
+	api.Get("/analytics/excluded-ips", h.ListExcludedIPs)
+	api.Get("/analytics/excluded-ips/match-count", h.ExcludedIPMatchCount)
+	api.Post("/analytics/excluded-ips", h.AddExcludedIP)
+	api.Delete("/analytics/excluded-ips/:id", h.RemoveExcludedIP)
+	api.Post("/analytics/optout", h.AnalyticsOptOut)
+	api.Delete("/analytics/optout", h.AnalyticsOptIn)
 
 	// ------------------------------------------------- unknown /api requests
 	app.All("/api/*", func(c *fiber.Ctx) error {

@@ -39,6 +39,11 @@ import (
 // bounds the rate, and an event that passes every check is still not stored
 // when it repeats one the same visitor sent moments ago or when its business
 // has reached ANALYTICS_DAILY_EVENT_CAP for the day (package eventgate).
+//
+// Before either of those, a visit that is not a customer's is dropped: one from
+// an address on the business's exclusion list or on ANALYTICS_EXCLUDED_IPS,
+// or from a browser that carries the opt-out mark (visitExcluded, package
+// ipexclude; the list is managed through handlers/exclusions.go).
 
 // MaxEventBodyBytes caps the body of one event. A real event is well under
 // 400 bytes; the cap is what stops the endpoint from parsing a megabyte of
@@ -138,7 +143,23 @@ func (h *Handler) TrackEvent(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 
+	// The owner's own visits, and the operator's, are never stored — answered
+	// like any other, because the page has nothing to do differently, and
+	// decided HERE: after the menu is known to exist, because a business's
+	// list is looked up by the business the event names, and before the event
+	// gate, so that an excluded view is neither claimed as a repeat nor counted
+	// against the business's daily cap. The owner who tapped through their own
+	// menu twenty times at opening time must not use up a single slot of the
+	// allowance their customers' visits are stored under.
 	addr := middleware.ClientAddrOf(c)
+	excluded, err := h.visitExcluded(c, businessID, addr.IP)
+	if err != nil {
+		return utils.Internal(c, err)
+	}
+	if excluded {
+		return c.SendStatus(fiber.StatusNoContent)
+	}
+
 	userAgent := CleanUserAgent(c.Get(fiber.HeaderUserAgent))
 	idText := ""
 	if visitorID != nil {
@@ -195,6 +216,28 @@ func (h *Handler) TrackEvent(c *fiber.Ctx) error {
 		return utils.Internal(c, err)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// visitExcluded reports whether a visit is one the analytics never store, from
+// the cheapest check to the dearest: the browser's opt-out mark (a cookie
+// read), the platform's ANALYTICS_EXCLUDED_IPS (a slice in memory), then the
+// business's own list (in memory, read from the database at most once per
+// ipexclude.DefaultTTL or after a change to it).
+//
+// The address matched is the one the visit log shows —
+// middleware.ClientAddrOf(c).IP — so an entry the owner copies from the log
+// matches exactly the visits listed under it. That address is not always
+// proven (see clientip.Source), which is acceptable here: forging it can only
+// keep one's own views out of somebody's analytics, which not sending them does
+// just as well. An address that could not be established never matches.
+func (h *Handler) visitExcluded(c *fiber.Ctx, businessID uuid.UUID, ip string) (bool, error) {
+	if middleware.AnalyticsOptedOut(c) {
+		return true, nil
+	}
+	if h.Exclusions == nil {
+		return false, nil
+	}
+	return h.Exclusions.Excludes(c.Context(), businessID, ip)
 }
 
 // storedEventsSince is the eventgate.Counter of the daily cap: what the

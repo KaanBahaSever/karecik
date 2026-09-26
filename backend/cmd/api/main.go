@@ -225,6 +225,13 @@ func main() {
 	} else {
 		log.Printf("[karecik] visitor analytics  -> NO daily cap on stored events (ANALYTICS_DAILY_EVENT_CAP=0)")
 	}
+	// How many, never which: the list is the operator's own addresses, and the
+	// log is read by more people than set the variable. A skipped entry has
+	// already been named, value and all, by config.Load — that is the line
+	// that helps fix a typo.
+	log.Printf("[karecik] visitor analytics  -> %d platform-wide excluded address(es)/range(s) "+
+		"(ANALYTICS_EXCLUDED_IPS); their visits are never stored for any business",
+		len(cfg.AnalyticsExcludedIPs))
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("[karecik] could not start the server: %v", err)
 	}

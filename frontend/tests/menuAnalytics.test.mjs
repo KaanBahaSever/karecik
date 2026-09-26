@@ -9,12 +9,15 @@
 import assert from 'node:assert/strict'
 
 import {
+  browserCookies,
   buildEventBody,
   createVisitorId,
   EVENTS_URL,
   getVisitorId,
+  hasAnalyticsOptout,
   isValidVisitorId,
   MENU_EVENT_TYPES,
+  OPTOUT_COOKIE,
   trackMenuEvent,
   VISITOR_ID_KEY,
 } from '../src/lib/analytics.js'
@@ -260,6 +263,87 @@ check('trackMenuEvent sends nothing for an event it cannot attribute', () => {
   assert.equal(trackMenuEvent({ ...EVENT, businessSlug: '' }, transport), false)
   assert.equal(trackMenuEvent({ ...EVENT, type: 'click' }, transport), false)
   assert.equal(nav.sent.length + fetchImpl.calls.length, 0)
+})
+
+/* ---------------------------------------------------------------- opt-out */
+
+check('hasAnalyticsOptout reads exactly karecik_analytics_optout=1 from a cookie header', () => {
+  assert.equal(OPTOUT_COOKIE, 'karecik_analytics_optout')
+  assert.equal(hasAnalyticsOptout('karecik_analytics_optout=1'), true)
+  assert.equal(hasAnalyticsOptout('a=b; karecik_analytics_optout=1; c=d'), true)
+  assert.equal(hasAnalyticsOptout('a=b;karecik_analytics_optout = 1 '), true)
+  assert.equal(hasAnalyticsOptout('karecik_analytics_optout=0'), false)
+  assert.equal(hasAnalyticsOptout('karecik_analytics_optout='), false)
+  assert.equal(hasAnalyticsOptout('karecik_analytics_optout'), false)
+  // A cookie whose name merely contains the marker's is another cookie.
+  assert.equal(hasAnalyticsOptout('x_karecik_analytics_optout=1'), false)
+  assert.equal(hasAnalyticsOptout('karecik_analytics_optout_old=1'), false)
+  assert.equal(hasAnalyticsOptout('session=karecik_analytics_optout=1'), false)
+  assert.equal(hasAnalyticsOptout(''), false)
+  assert.equal(hasAnalyticsOptout(null), false)
+  assert.equal(hasAnalyticsOptout(undefined), false)
+})
+
+check('an opted-out browser sends nothing and gets no visitor id', () => {
+  const nav = beaconNavigator(true)
+  const fetchImpl = recordingFetch()
+  const storage = memoryStorage()
+  const cookie = 'lang=tr; karecik_analytics_optout=1'
+  const transport = { navigator: nav, fetch: fetchImpl, storage, cookie }
+
+  for (const type of MENU_EVENT_TYPES) {
+    assert.equal(trackMenuEvent({ ...EVENT, type }, transport), false)
+  }
+  assert.equal(nav.sent.length, 0)
+  assert.equal(fetchImpl.calls.length, 0)
+  assert.equal(storage.data.has(VISITOR_ID_KEY), false)
+
+  // Switched off again (the cookie expired): events flow as before.
+  assert.equal(trackMenuEvent(EVENT, { ...transport, cookie: 'lang=tr' }), true)
+  assert.equal(nav.sent.length, 1)
+})
+
+check('without a document there is no cookie, and tracking goes on', () => {
+  // Plain node has no `document`: the default cookie source answers ''.
+  assert.equal(browserCookies(), '')
+  const nav = beaconNavigator(true)
+  assert.equal(trackMenuEvent(EVENT, { navigator: nav, fetch: null, storage: null }), true)
+  assert.equal(nav.sent.length, 1)
+
+  // A document whose cookie getter throws (a sandboxed frame) is no document.
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      get cookie() {
+        throw new Error('SecurityError')
+      },
+    },
+  })
+  try {
+    assert.equal(browserCookies(), '')
+    const nav = beaconNavigator(true)
+    assert.equal(trackMenuEvent(EVENT, { navigator: nav, fetch: null, storage: null }), true)
+    assert.equal(nav.sent.length, 1)
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'document', previous)
+    else delete globalThis.document
+  }
+
+  // And one that carries the marker is read by default.
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { cookie: 'karecik_analytics_optout=1' },
+  })
+  try {
+    assert.equal(browserCookies(), 'karecik_analytics_optout=1')
+    const quiet = beaconNavigator(true)
+    assert.equal(trackMenuEvent(EVENT, { navigator: quiet, fetch: null, storage: null }), false)
+    assert.equal(quiet.sent.length, 0)
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'document', previous)
+    else delete globalThis.document
+  }
 })
 
 /* --------------------------------------------------------------- summary */

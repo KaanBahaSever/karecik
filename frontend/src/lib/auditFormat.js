@@ -10,6 +10,8 @@
 //
 // NOTE: the copy is Turkish on purpose - it is panel UI, read by the owner.
 
+import { displayCidr } from './ipExclusion.js'
+
 /* ---------------------------------------------------------------- actions */
 
 /**
@@ -34,6 +36,8 @@ export const AUDIT_ACTIONS = {
   'business.update': { label: 'İşletme bilgileri değişti', tone: 'neutral' },
   'account.password_change': { label: 'Şifre değiştirildi', tone: 'neutral' },
   'upload.create': { label: 'Dosya yüklendi', tone: 'create' },
+  'analytics.exclude_ip.add': { label: 'IP hariç tutuldu', tone: 'create' },
+  'analytics.exclude_ip.remove': { label: 'IP listeden çıkarıldı', tone: 'delete' },
 }
 
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
@@ -64,6 +68,7 @@ export const AUDIT_ENTITY_TYPES = [
   { id: 'business', label: 'İşletme' },
   { id: 'account', label: 'Hesap' },
   { id: 'upload', label: 'Dosya' },
+  { id: 'analytics_exclusion', label: 'Hariç tutulan IP' },
 ]
 
 /** The Turkish name of a record type; an unknown one prints as it came, a missing one as ''. */
@@ -169,6 +174,10 @@ export const AUDIT_FIELD_LABELS = {
   email: 'E-posta',
   password: 'Şifre',
   method: 'Yöntem',
+  /* an analytics exclusion (analytics.exclude_ip.add / .remove) */
+  cidr: 'IP / aralık',
+  label: 'Not',
+  deleted_events: 'Silinen ziyaret kaydı',
 }
 
 /**
@@ -378,6 +387,8 @@ function isPricedList(value) {
  *                                 it is gone, "Bilinmeyen kategori" without
  *                                 a lookup
  *   the links of a menu        -> "Web sitemiz (https://example.com), …"
+ *   '203.0.113.7/32' (cidr)    -> "203.0.113.7" - a single host without its
+ *                                 prefix, as the exclusion list shows it
  *   any other object, or a list of them -> compact JSON
  *
  * A masked value ("••••" for a Wi-Fi password) is text like any other and
@@ -395,6 +406,7 @@ export function formatAuditValue(value, field = '', names = null) {
   if (typeof value === 'string') {
     if (value.trim() === '') return EMPTY_VALUE
     if (has(ID_FIELDS, leaf)) return recordName(ID_FIELDS[leaf], value.trim(), names)
+    if (leaf === 'cidr') return displayCidr(value)
     const labels = VALUE_LABELS[leaf]
     return labels && has(labels, value) ? labels[value] : value
   }

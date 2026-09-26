@@ -23,6 +23,14 @@
 //     throws. A lost event costs a number on a chart; an exception here would
 //     cost the menu.
 //
+// OPTING OUT. A browser whose owner switched on "Bu tarayıcıdan yapılan
+// ziyaretleri sayma" in the panel carries the karecik_analytics_optout=1
+// cookie (POST /api/analytics/optout sets it for the whole platform domain,
+// so every tenant subdomain and the path-form menu see it). Such a browser
+// sends nothing at all: no beacon, and no visitor id is even created. The
+// server drops the event anyway when the cookie reaches it; this is only the
+// courtesy of not sending what would be thrown away.
+//
 // The URL is built exactly as lib/api.js builds its own: VITE_API_URL (empty
 // means same origin) followed by the /api path.
 
@@ -40,6 +48,41 @@ export const MENU_EVENT_TYPES = ['menu_view', 'category_view', 'product_view']
 
 /** localStorage key of the anonymous visitor id. */
 export const VISITOR_ID_KEY = 'karecik_visitor_id'
+
+/**
+ * The cookie of a browser whose visits are never counted. Written by the
+ * server (POST /api/analytics/optout) and deliberately not HttpOnly, so this
+ * file and the panel's switch can read it.
+ */
+export const OPTOUT_COOKIE = 'karecik_analytics_optout'
+
+/**
+ * Whether a cookie header - `document.cookie` - carries the opt-out marker,
+ * `karecik_analytics_optout=1`. Only that exact value counts: an expired or
+ * emptied cookie is how the switch is turned off.
+ *
+ * @param {string} cookieText
+ * @returns {boolean}
+ */
+export function hasAnalyticsOptout(cookieText) {
+  if (typeof cookieText !== 'string' || !cookieText) return false
+  return cookieText.split(';').some((pair) => {
+    const separator = pair.indexOf('=')
+    if (separator < 0) return false
+    const name = pair.slice(0, separator).trim()
+    return name === OPTOUT_COOKIE && pair.slice(separator + 1).trim() === '1'
+  })
+}
+
+/** document.cookie, or '' where there is no document or reading it throws (sandboxed frames). */
+export function browserCookies() {
+  try {
+    if (typeof document === 'undefined') return ''
+    return typeof document.cookie === 'string' ? document.cookie : ''
+  } catch {
+    return ''
+  }
+}
 
 /** What the server accepts as a visitor id: 1-64 of [A-Za-z0-9_-]. */
 const VISITOR_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -165,14 +208,19 @@ export function buildEventBody({
 
 /**
  * Sends one event and returns whether it was handed to the browser. Never
- * throws and never waits.
+ * throws and never waits. A browser that opted out (OPTOUT_COOKIE) sends
+ * nothing and answers false.
  *
  * @param {object} event - { businessSlug, menuSlug, type, categoryId?, productId?, language? }
- * @param {object} [transport] - test seams: { navigator, fetch, storage }
+ * @param {object} [transport] - test seams: { navigator, fetch, storage, cookie }
  * @returns {boolean}
  */
 export function trackMenuEvent(event, transport = {}) {
   try {
+    // Asked first: an opted-out browser should not even get a visitor id.
+    const cookie = 'cookie' in transport ? transport.cookie : browserCookies()
+    if (hasAnalyticsOptout(cookie)) return false
+
     const storage = 'storage' in transport ? transport.storage : browserStorage()
     const body = buildEventBody({ ...event, visitorId: getVisitorId(storage) })
     if (!body) return false

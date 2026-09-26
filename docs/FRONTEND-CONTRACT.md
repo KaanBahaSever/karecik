@@ -54,6 +54,11 @@ import api, { ApiError } from '../lib/api'
 | `api.publicMenuByHost(menuSlug, lang)` | PublicMenu (tenant from the request host) |
 | `api.analyticsSummary({ menu_id, from, to })` | Analytics summary (see "Analytics and audit endpoints") |
 | `api.analyticsEvents({ menu_id, type, from, to, ip, limit, offset })` | `{ items, total, limit, offset }` |
+| `api.excludedIps()` | `{ items, current_ip, current_ip_source, current_ip_excluded, optout, max }` |
+| `api.excludedIpMatchCount(cidr)` | `{ cidr, count }` — stored visits the address or range covers |
+| `api.addExcludedIp({ cidr, label, delete_history })` | `{ item, deleted_events }` (201) |
+| `api.removeExcludedIp(id)` | nothing (204) |
+| `api.setAnalyticsOptout(on)` | nothing (204); sets or expires the `karecik_analytics_optout` cookie |
 | `api.auditLogs({ entity_type, action, limit, offset })` | `{ items, total, limit, offset }` |
 
 Empty parameters are left out of the query string. The visitor events of the
@@ -164,8 +169,9 @@ Full rules in sections 10 and 11 of `docs/API.md`; the shapes a client reads:
 
 ```js
 // public, no session; body is JSON even when sent as text/plain (sendBeacon).
-// 204 also when the event is not stored: a repeat of the same view within 10 s,
-// or past the business's daily cap — the page does nothing differently
+// 204 also when the event is not stored: an excluded visit (the business's IP
+// list, ANALYTICS_EXCLUDED_IPS, the opt-out cookie), a repeat of the same view
+// within 10 s, or past the business's daily cap — the page does nothing differently
 POST /api/public/events
   { business_slug, menu_slug, type: 'menu_view' | 'category_view' | 'product_view',
     category_id?, product_id?, visitor_id?, language? }      -> 204, no body
@@ -183,6 +189,31 @@ GET /api/analytics/events?menu_id=&type=&from=&to=&ip=&limit=&offset=
                  product_id, product_name, ip, port, ip_source, visitor_id, language,
                  user_agent }], total, limit, offset }
 
+// 🔒 visits never stored: this business's list (oldest first — a new entry goes
+// LAST, lib/ipExclusion.js withAddedEntry), and what the server sees of
+// THIS request (current_ip null when unknown; current_ip_excluded checks the
+// business's list only — the platform's ANALYTICS_EXCLUDED_IPS is never exposed)
+GET /api/analytics/excluded-ips
+  -> { items: [{ id, cidr, display, label, created_at, created_by_email }],
+       current_ip, current_ip_source, current_ip_excluded, optout, max: 50 }
+
+// 🔒 stored events of this business inside the address or range; 422 as for an add
+GET /api/analytics/excluded-ips/match-count?cidr=
+  -> { cidr, count }                                  // cidr normalised, e.g. "198.18.139.0/24"
+
+// 🔒 cidr: address or range, at most /16 (IPv4) or /48 (IPv6); label ≤ 60;
+// delete_history REQUIRED — true also deletes the stored visits it covers.
+// 409 "Bu IP zaten listede." when already listed or inside a listed range;
+// 422 bad input or 50 entries reached
+POST /api/analytics/excluded-ips
+  { cidr, label?, delete_history }                    -> 201 { item, deleted_events }
+DELETE /api/analytics/excluded-ips/:id               -> 204 (404 unknown / other tenant)
+
+// 🔒 this browser's opt-out mark: karecik_analytics_optout=1, a year, not HttpOnly,
+// Domain=APP_DOMAIN in production (host-only in development)
+POST   /api/analytics/optout                          -> 204, cookie set
+DELETE /api/analytics/optout                          -> 204, cookie expired
+
 // 🔒 newest first; limit default 50, max 200
 GET /api/audit-logs?entity_type=&action=&limit=&offset=
   -> { items: [{ id, created_at, user_id, user_email, action, entity_type, entity_id,
@@ -195,8 +226,11 @@ GET /api/audit-logs?entity_type=&action=&limit=&offset=
 names, translations as `translations.<lang>.<field>`; a Wi-Fi password is always
 `"••••"`. The actions are `product.create|update|delete|price|bulk_price|reorder`,
 `category.create|update|delete|reorder`, `menu.create|update|delete`,
-`business.update`, `account.password_change` and `upload.create`; the entity
-types `product`, `category`, `menu`, `business`, `account`, `upload`.
+`business.update`, `account.password_change`, `upload.create` and
+`analytics.exclude_ip.add|remove`; the entity types `product`, `category`,
+`menu`, `business`, `account`, `upload`, `analytics_exclusion`. An exclusion's
+`changes` carry `cidr` (the CIDR text, `"198.18.139.87/32"`), `label` when it
+has one and, for an add, `deleted_events`.
 
 `POST /api/uploads` accepts SVG (`image/svg+xml`) as well as JPEG, PNG, WebP and
 GIF. An SVG with script, external references or embedded HTML — or a raster file
@@ -569,7 +603,10 @@ throws and never waits. The anonymous `visitor_id` lives in `localStorage`
 `karecik_visitor_id`. The customer menu sends `menu_view` once per menu per page
 load, `category_view` when a category opens and `product_view` when a product's
 detail sheet opens — never when `embedded` (the landing demo iframe, the
-dashboard live preview) and never for the tenant directory.
+dashboard live preview) and never for the tenant directory. It sends nothing at
+all when `document.cookie` carries `karecik_analytics_optout=1`, the owner's
+opt-out mark; the server drops such views anyway, and also those from an
+excluded address.
 
 ## `src/locales/landing.js`
 

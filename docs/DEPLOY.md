@@ -136,6 +136,7 @@ alan adı gömmek kiracı çözümlemesine ikinci bir kök alan adı sokardı.
    | `APP_DOMAIN` | `karecik.com` |
    | `CORS_ORIGINS` | `https://karecik.com` |
    | `RAILWAY_RUN_UID` | `0` — volume varsa **zorunlu** (yukarı bak). Sonradan "artık kalmış" diye silme |
+   | `ANALYTICS_EXCLUDED_IPS` | isteğe bağlı — kendi IP'lerin; ziyaretleri hiçbir işletmenin analitiğine yazılmaz (bkz. "Kendi ziyaretlerini saydırmamak") |
 
    Dockerfile'ın verdiği ve **dokunmana gerek olmayanlar**: `HOST=0.0.0.0`,
    `PORT=8080`, `APP_ENV=production`, `SERVE_STATIC=true`,
@@ -306,6 +307,64 @@ tablodan sayılır.
 `ANALYTICS_RETENTION_DAYS` en fazla `3650` olabilir; daha büyük bir değer
 `3650`'ye indirilir (çok büyük bir sayı, silme sınırını hesaplayan tarih
 aritmetiğini taşırıp **bütün** olayları sildirebilirdi).
+
+### Kendi ziyaretlerini saydırmamak: hariç tutulan IP'ler
+
+İşletme sahibinin kendi menüsüne bakması, garsonun menüyü tezgâhtan masaya
+göstermesi ya da platform yöneticisinin bir deploy sonrası müşteri menüsünü
+açması gerçek ziyaret değil. Bunların hiçbiri `menu_events`'e **yazılmıyor**;
+olay ucu yine `204` dönüyor, tekrar kuralı ve günlük tavandan **önce** karar
+veriliyor (yani hariç tutulan bir görüntüleme tavandan pay yemiyor). Üç yol var:
+
+| Yol | Kim yönetiyor | Kapsam |
+|---|---|---|
+| İşletmenin **IP listesi** (`analytics_excluded_ips`, migration 015) | işletme sahibi, panelde **Analitik → Hariç tutulan IP'ler** | yalnızca o işletmenin menüleri; tek adres ya da CIDR aralığı, en fazla 50 kayıt |
+| **`ANALYTICS_EXCLUDED_IPS`** | platform yöneticisi, Railway değişkeni | **bütün** işletmelerin menüleri |
+| Tarayıcı işareti — `karecik_analytics_optout=1` çerezi | işletme sahibi, panelden bu tarayıcı için açıp kapatıyor | o tarayıcıdan bütün menüler; mobil veride IP'si sürekli değişen telefon için |
+
+Eşleşme, ziyaret kaydında görünen adresle yapılıyor (yukarıdaki çözümleyici).
+Adres tespit edilemediyse hiçbir kayıtla eşleşmiyor.
+
+**`ANALYTICS_EXCLUDED_IPS`** — virgül, noktalı virgül ya da boşlukla ayrılmış
+IPv4/IPv6 adresleri veya CIDR aralıkları:
+
+```
+ANALYTICS_EXCLUDED_IPS=198.18.139.87, 2001:db8:abcd::/48
+```
+
+- Açılışta bir kez okunuyor; değiştirince servisi yeniden başlatın.
+- IPv4'te `/16`'dan, IPv6'da `/48`'den **geniş** bir aralık ve adres olmayan her
+  değer **atlanıyor** ve log'a değeriyle yazılıyor — bu liste bütün işletmelere
+  birden uygulandığı için yanlışlıkla girilmiş bir `0.0.0.0/0` herkesin
+  analitiğini sessizce boşaltırdı:
+
+```
+[karecik] WARNING: ANALYTICS_EXCLUDED_IPS entry "10.0.0.0/8" skipped: the range is broader than /16 (IPv4) or /48 (IPv6)
+```
+
+- Açılış log'u kaç kaydın etkin olduğunu söylüyor (değerleri değil):
+
+```
+[karecik] visitor analytics  -> 1 platform-wide excluded address(es)/range(s) (ANALYTICS_EXCLUDED_IPS); their visits are never stored for any business
+```
+
+- Liste **hiçbir uçta gösterilmiyor**: bir işletme sahibi yalnızca kendi
+  listesini görüyor; paneldeki "bu adres hariç mi" bilgisi de yalnızca
+  işletmenin kendi listesine bakıyor.
+
+**İşletme listesi.** Sahip bir adres eklerken o adresten **daha önce
+kaydedilmiş** ziyaretlerin de silinip silinmeyeceğini seçiyor; ekleme, silme ve
+denetim kaydı tek transaction'da. Değişiklik bir sonraki ziyarette geçerli
+(bellekteki liste kopyası 60 saniyelik; panelden yapılan ekleme/silme onu
+anında düşürüyor). Liste psql ile elle değiştirilirse en geç 60 saniye içinde
+fark ediliyor.
+
+**Tarayıcı işareti.** Çerez `HttpOnly` **değil** (müşteri sayfası okuyup hiç
+göndermiyor), bir yıl geçerli, `SameSite=Lax`, `Secure` oturum çereziyle aynı
+kurala uyuyor (`COOKIE_SECURE`). Production'da `Domain=APP_DOMAIN` ile
+yazılıyor ki `{işletme}.karecik.com` alt alan adları ve `/m/...` yol biçimli
+menü de alsın — içinde gizli bir şey yok, yalnızca `1`. Geliştirmede host'a
+özel. Oturum çerezi bundan etkilenmiyor, o yine host'a özel kalıyor.
 
 ### Yüklenen SVG'ler
 

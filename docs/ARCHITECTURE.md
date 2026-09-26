@@ -95,6 +95,7 @@ karecik/
 │   │   ├── config/             .env parsing and defaults
 │   │   ├── database/           pgxpool connection, migration runner, dev fixtures
 │   │   ├── eventgate/          Which visitor events are stored: repeats, daily cap
+│   │   ├── ipexclude/          Whose visits are never stored: IP lists, list cache
 │   │   ├── models/             Data structures plus the public menu DTOs
 │   │   ├── repository/         SQL layer (handlers never write SQL)
 │   │   ├── handlers/           HTTP endpoints (one Handler struct, split by file)
@@ -104,7 +105,7 @@ karecik/
 │   │   ├── svgsafe/            SVG upload check (XML parser, allowlists)
 │   │   └── utils/              Session tokens, bcrypt, slug, currency, themes,
 │   │                           Accept-Language negotiation
-│   ├── migrations/             001_init.sql … 014_audit_logs.sql + embed.go,
+│   ├── migrations/             001_init.sql … 015_analytics_excluded_ips.sql + embed.go,
 │   │                           reverse scripts in down/ (never run automatically)
 │   └── uploads/                Uploaded logos and product images
 │
@@ -216,6 +217,7 @@ users ──1:1──▶ businesses ──1:N──▶ menus ──1:N──▶ 
                     │                 │
                     │                 └──1:N──▶ menu_events   (visitor analytics)
                     ├──1:N──▶ audit_logs                      (owner's writes)
+                    ├──1:N──▶ analytics_excluded_ips          (visits never stored)
                     └──1:N──▶ price_update_logs
 ```
 
@@ -232,6 +234,21 @@ index-driven slices. The endpoint is public, so the table is also bounded on
 the way in (`internal/eventgate`, in memory): a repeat of the same view within
 10 s is not stored, and a business stores at most `ANALYTICS_DAILY_EVENT_CAP`
 events a day — both still answered `204`.
+
+`analytics_excluded_ips` (migration 015) is each business's list of addresses
+and CIDR ranges whose visits the events endpoint never stores (at most 50, never
+broader than `/16` or `/48`). Together with the platform-wide
+`ANALYTICS_EXCLUDED_IPS` and a per-browser opt-out cookie it is checked
+**before** the event gate, so an excluded view is neither a repeat nor counted
+against the cap (`internal/ipexclude`: parsing, matching, and an in-memory
+per-business cache with a 60 s TTL that the add and remove endpoints invalidate
+on commit). Adding an entry can delete the range's stored events in the same
+transaction as the entry and its audit row; `menu_events.ip` is TEXT, so the
+comparison goes through `karecik_try_inet()`, which reads a non-address as NULL
+instead of failing. On PostgreSQL 16+ it is a `pg_input_is_valid()` expression
+the planner inlines, so a count or a delete over a busy tenant's ~90 days costs
+about a plain cast; older servers get a PL/pgSQL body whose guarded cast only
+non-IPv4 values reach.
 
 `audit_logs` (migration 014) holds one row per successful administrative
 write. The row is written by a `repository.WriteHook` **inside the transaction

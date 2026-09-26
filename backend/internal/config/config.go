@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"karecik/backend/internal/ipexclude"
 )
 
 // Config holds every setting read from the .env file and the environment.
@@ -73,6 +77,14 @@ type Config struct {
 	// storage guard of an endpoint anybody can call: the per-client limiter
 	// bounds a rate, not a total. 0 disables it.
 	AnalyticsDailyEventCap int
+
+	// AnalyticsExcludedIPs are the addresses and ranges whose visits no
+	// tenant's analytics ever store — the platform operator's own, so that
+	// opening a customer's menu to check a deploy does not show up as a visit
+	// in the customer's dashboard. Parsed from ANALYTICS_EXCLUDED_IPS by
+	// ExcludedIPs. The list is never exposed by any endpoint: the owner of a
+	// business manages their own list in the panel and sees only that one.
+	AnalyticsExcludedIPs []netip.Prefix
 
 	// PublicURL is the origin the reset link is built from. It has to be the
 	// address a person's browser can actually open, which is not derivable
@@ -148,6 +160,11 @@ func Load() *Config {
 	cfg.AnalyticsDailyEventCap, warning = DailyEventCap(
 		envInt64("ANALYTICS_DAILY_EVENT_CAP", defaultAnalyticsDailyEventCap))
 	if warning != "" {
+		log.Printf("[karecik] WARNING: %s", warning)
+	}
+	var warnings []string
+	cfg.AnalyticsExcludedIPs, warnings = ExcludedIPs(os.Getenv("ANALYTICS_EXCLUDED_IPS"))
+	for _, warning := range warnings {
 		log.Printf("[karecik] WARNING: %s", warning)
 	}
 
@@ -351,6 +368,32 @@ func DailyEventCap(value int64) (int, string) {
 		return math.MaxInt, ""
 	}
 	return int(value), ""
+}
+
+// ExcludedIPs turns ANALYTICS_EXCLUDED_IPS as read into the ranges used, and
+// says what it had to skip. Entries are separated by commas, semicolons or
+// whitespace; each is an IPv4 or IPv6 address (a /32 or /128) or a CIDR range,
+// read by the same rules as the panel's list (ipexclude.Parse) — a range
+// broader than /16 or /48 included, which is skipped rather than trusted: this
+// list applies to every tenant at once, so a stray "0.0.0.0/0" would silently
+// empty every dashboard on the platform.
+//
+// A skipped entry is named in its warning, value and all. The value is the
+// operator's own address or a typo of it, and the line is the only place the
+// mistake can be seen: the list itself is never shown anywhere.
+func ExcludedIPs(raw string) ([]netip.Prefix, []string) {
+	prefixes, rejected := ipexclude.ParseList(raw)
+	warnings := make([]string, 0, len(rejected))
+	for _, entry := range rejected {
+		reason := "it is not an IP address or a CIDR range"
+		if errors.Is(entry.Err, ipexclude.ErrTooBroad) {
+			reason = fmt.Sprintf("the range is broader than /%d (IPv4) or /%d (IPv6)",
+				ipexclude.MinIPv4Bits, ipexclude.MinIPv6Bits)
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"ANALYTICS_EXCLUDED_IPS entry %q skipped: %s", entry.Value, reason))
+	}
+	return prefixes, warnings
 }
 
 // AnalyticsCutoff is the instant the retention sweep deletes events before:

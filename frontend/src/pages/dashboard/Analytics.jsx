@@ -1,15 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  AlertCircle,
-  BarChart3,
-  Info,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  X,
-} from 'lucide-react'
+import { BarChart3, EyeOff, Info, RefreshCw, Search, ShieldCheck, X } from 'lucide-react'
 
 import api from '../../lib/api'
+import { browserCookies, hasAnalyticsOptout } from '../../lib/analytics.js'
 import { useActiveMenu } from '../../lib/menuContext.jsx'
 import {
   DEFAULT_RANGE_PRESET,
@@ -26,12 +19,24 @@ import {
   presetRange,
   shortUserAgent,
 } from '../../lib/analyticsFormat.js'
+import {
+  checkExclusion,
+  excludableAddress,
+  exclusionMatcher,
+  readExclusionState,
+  withAddedEntry,
+  withoutEntry,
+} from '../../lib/ipExclusion.js'
 import { findLanguage } from '../../locales/index.js'
 import EmptyState from '../../components/ui/EmptyState.jsx'
 import Loading from '../../components/ui/Loading.jsx'
+import { useToast } from '../../components/ui/Toast.jsx'
 import DailyVisitsChart from '../../components/analytics/DailyVisitsChart.jsx'
 import DateRangeFilter from '../../components/analytics/DateRangeFilter.jsx'
 import DateTimeCell from '../../components/analytics/DateTimeCell.jsx'
+import ErrorNote from '../../components/analytics/ErrorNote.jsx'
+import ExcludedIpsSection from '../../components/analytics/ExcludedIpsSection.jsx'
+import ExcludeIpDialog from '../../components/analytics/ExcludeIpDialog.jsx'
 import Pagination from '../../components/analytics/Pagination.jsx'
 
 /**
@@ -49,6 +54,16 @@ import Pagination from '../../components/analytics/Pagination.jsx'
  *
  * Unlike the editing pages it does not follow the menu chosen in the active
  * menu bar: "every menu" is a real answer here, and the page opens on it.
+ *
+ * At the bottom, "Hariç tutulan IP'ler" (ExcludedIpsSection) keeps the
+ * owner's own visits out of all of the above: an IP list and a per-browser
+ * switch, both enforced by the server before anything is stored. An address
+ * can be put on the list from three places - the section's form, its
+ * "Listeye ekle" for the current address, and the "Hariç tut" of a visit log
+ * row - and all three open the same dialog (ExcludeIpDialog), which asks
+ * what to do with the visits that address already made. That is why the list
+ * and the dialog live here, on the page, rather than inside the section: the
+ * visit log needs the list too, to mark the rows already covered.
  */
 
 /** Rows per page of the visit log; the server allows up to 200. */
@@ -85,25 +100,6 @@ function StatTile({ label, hint, value, loading }) {
         {value === null ? '—' : formatCount(value)}
       </p>
       <p className="mt-0.5 text-[11px] text-gray-400">{hint}</p>
-    </div>
-  )
-}
-
-/** A red box with the message and a retry button. */
-function ErrorNote({ message, onRetry }) {
-  return (
-    <div
-      className="flex flex-wrap items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5"
-      role="alert"
-    >
-      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
-      <p className="min-w-0 flex-1 text-sm text-red-800">{message}</p>
-      {onRetry ? (
-        <button type="button" className="btn-secondary btn-sm" onClick={onRetry}>
-          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-          Tekrar dene
-        </button>
-      ) : null}
     </div>
   )
 }
@@ -210,11 +206,47 @@ function TargetCell({ event }) {
   return <span className="text-gray-400">—</span>
 }
 
+/**
+ * "IP adresi" cell: the address, and under it the one-click way to stop
+ * recording it - or, when the list already covers it, a quiet "Listede"
+ * (the row itself stays: the owner chose to keep the past visits). An unknown
+ * address ("-") gets neither: there is nothing to exclude.
+ */
+function IpCell({ ip, coveredBy, onExclude }) {
+  const address = excludableAddress(ip)
+  return (
+    <>
+      <span className="block">{formatIp(ip)}</span>
+      {!address ? null : coveredBy ? (
+        <span
+          className="mt-0.5 block font-sans text-[11px] text-gray-400"
+          title={`Hariç tutulanlar listesinde (${
+            coveredBy.display || coveredBy.cidr
+          }); bu adresten yeni ziyaretler kaydedilmiyor.`}
+        >
+          Listede
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onExclude(address)}
+          className="-mx-1 mt-0.5 inline-flex items-center gap-1 rounded px-1 py-0.5 font-sans text-[11px] font-medium text-brand-700 hover:bg-brand-50 hover:text-brand-800 focus:outline-none focus:ring-2 focus:ring-brand-100"
+          aria-label={`${address} adresini hariç tut`}
+        >
+          <EyeOff className="h-3 w-3" aria-hidden="true" />
+          Hariç tut
+        </button>
+      )}
+    </>
+  )
+}
+
 /* -------------------------------------------------------------------- page */
 
 export default function Analytics() {
   const { menus, hasMenus, loading: menusLoading, error: menusError, reload: reloadMenus } =
     useActiveMenu()
+  const toast = useToast()
 
   /* ------------------------------------------------------------ filters */
 
@@ -306,6 +338,102 @@ export default function Analytics() {
         if (request === eventsRequest.current) setEventsLoading(false)
       })
   }, [hasMenus, scopedMenuId, eventType, range.from, range.to, ipQuery, offset, reloadKey])
+
+  /* ----------------------------------------------------- exclusion list */
+
+  // readExclusionState of GET /api/analytics/excluded-ips; null until loaded.
+  const [exclusions, setExclusions] = useState(null)
+  const [exclusionsLoading, setExclusionsLoading] = useState(true)
+  const [exclusionsError, setExclusionsError] = useState('')
+  // Bumped after a removal or a switch change: refetches the list alone.
+  const [exclusionsKey, setExclusionsKey] = useState(0)
+  const exclusionsRequest = useRef(0)
+  // Whether this browser is opted out. The cookie answers at once; the server
+  // (which sees the cookie the request carried) answers once the list loads.
+  const [optout, setOptout] = useState(() => hasAnalyticsOptout(browserCookies()))
+  // The entry the add dialog is open for, or null.
+  const [pendingExclusion, setPendingExclusion] = useState(null)
+  const exclusionsSectionRef = useRef(null)
+
+  useEffect(() => {
+    if (!hasMenus) return
+
+    const request = exclusionsRequest.current + 1
+    exclusionsRequest.current = request
+    setExclusionsLoading(true)
+    setExclusionsError('')
+
+    api
+      .excludedIps()
+      .then((data) => {
+        if (request !== exclusionsRequest.current) return
+        const state = readExclusionState(data)
+        setExclusions(state)
+        setOptout(state.optout)
+      })
+      .catch((err) => {
+        if (request !== exclusionsRequest.current) return
+        // The last list stays on screen: it was true a moment ago, and the
+        // server checks every add and removal again anyway.
+        setExclusionsError(err.message || "Hariç tutulan IP'ler yüklenemedi.")
+      })
+      .finally(() => {
+        if (request === exclusionsRequest.current) setExclusionsLoading(false)
+      })
+  }, [hasMenus, reloadKey, exclusionsKey])
+
+  // Which entry covers each address of the visit log; the list is read once.
+  const matchExclusion = useMemo(() => exclusionMatcher(exclusions?.items), [exclusions])
+
+  /**
+   * Opens the add dialog for `input` ({ cidr, label }) when it passes every
+   * rule the page can check, and says why not otherwise. `afterAdd` runs once
+   * the entry is really on the list - the form clears itself then.
+   */
+  function requestExclusion(input, afterAdd) {
+    const { value, problem, field } = checkExclusion(input, {
+      items: exclusions ? exclusions.items : null,
+      max: exclusions?.max,
+    })
+    if (!value) return { problem, field }
+    setPendingExclusion({ ...value, afterAdd })
+    return { problem: '', field: '' }
+  }
+
+  /** "Hariç tut" of a visit log row: the same dialog, the row's address in it. */
+  function excludeFromLog(address) {
+    const { problem } = requestExclusion({ cidr: address, label: '' })
+    if (problem) toast.error(problem)
+  }
+
+  function exclusionAdded({ item, message }) {
+    const afterAdd = pendingExclusion?.afterAdd
+    setPendingExclusion(null)
+    // Last, where the server's oldest-first order puts it, so the reload
+    // below confirms the row in place instead of moving it.
+    setExclusions((previous) => withAddedEntry(previous, item))
+    if (afterAdd) afterAdd()
+    toast.success(message)
+    // Everything on the page may have changed - the past visits may be gone -
+    // so the cards, the chart, the top lists, the log and the list all reload.
+    setReloadKey((key) => key + 1)
+  }
+
+  function exclusionRemoved(item) {
+    setExclusions((previous) => withoutEntry(previous, item?.id))
+    setExclusionsKey((key) => key + 1)
+  }
+
+  function optoutChanged(next) {
+    setOptout(next)
+    // A list request already on its way carried the old cookie; the refetch
+    // supersedes it, so its stale `optout` never flips the switch back.
+    setExclusionsKey((key) => key + 1)
+  }
+
+  function scrollToExclusions() {
+    exclusionsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   /* A filter change starts the log at its first page again: page 4 of the old
      filter means nothing under the new one. */
@@ -434,7 +562,16 @@ export default function Analytics() {
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden="true" />
         <span>
           Tekil ziyaretçi, tarayıcıya özgü anonim bir kimlikle (o yoksa IP adresi ve tarayıcı
-          bilgisiyle) yaklaşık olarak hesaplanır. Günler Türkiye saatine göre sayılır.
+          bilgisiyle) yaklaşık olarak hesaplanır. Günler Türkiye saatine göre sayılır. Kendi
+          ziyaretlerinizin sayılmaması için{' '}
+          <button
+            type="button"
+            onClick={scrollToExclusions}
+            className="font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:text-brand-800"
+          >
+            hariç tutulan IP'ler
+          </button>{' '}
+          bölümünü kullanın.
         </span>
       </p>
 
@@ -634,7 +771,11 @@ export default function Analytics() {
                         <TargetCell event={event} />
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-gray-900">
-                        {formatIp(event?.ip)}
+                        <IpCell
+                          ip={event?.ip}
+                          coveredBy={matchExclusion(event?.ip)}
+                          onExclude={excludeFromLog}
+                        />
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-gray-700">
                         {formatPort(event?.port)}
@@ -704,6 +845,28 @@ export default function Analytics() {
           </span>
         </p>
       </section>
+
+      {/* ------------------------------------------------ excluded visits */}
+      <ExcludedIpsSection
+        ref={exclusionsSectionRef}
+        state={exclusions}
+        loading={exclusionsLoading}
+        error={exclusionsError}
+        onRetry={() => setExclusionsKey((key) => key + 1)}
+        optout={optout}
+        onOptoutChange={optoutChanged}
+        onRequestAdd={requestExclusion}
+        onRemoved={exclusionRemoved}
+      />
+
+      {pendingExclusion ? (
+        <ExcludeIpDialog
+          entry={pendingExclusion}
+          onClose={() => setPendingExclusion(null)}
+          onAdded={exclusionAdded}
+          onConflict={() => setExclusionsKey((key) => key + 1)}
+        />
+      ) : null}
     </div>
   )
 }

@@ -26,7 +26,7 @@
 - **Live preview** — a true 390×844 mobile viewport in the dashboard, with on-demand splash replay.
 - **QR codes** — PNG download, printing and address copying.
 - **Customer menu** — served from `business.karecik.com/menu-slug` or `/m/:business/:menu`, with search, language switching, Wi-Fi credentials and automatic legal notices.
-- **Visitor analytics** — total and unique visitors, menu, category and product views per day, top lists, and a drill-down of every view with the visitor's address and source port (panel → **Analitik**, `/panel/analitik`); kept for `ANALYTICS_RETENTION_DAYS`.
+- **Visitor analytics** — total and unique visitors, menu, category and product views per day, top lists, and a drill-down of every view with the visitor's address and source port (panel → **Analitik**, `/panel/analitik`); kept for `ANALYTICS_RETENTION_DAYS`. The owner's own visits stay out: a list of excluded IP addresses and ranges per business (with an option to delete what they already recorded), a per-browser opt-out, and a platform-wide `ANALYTICS_EXCLUDED_IPS`.
 - **Audit trail** — every administrative write (products, prices, categories, menu settings, logos, contact details, account) recorded with who, from where and which fields changed (panel → **Değişiklik Geçmişi**, `/panel/gecmis`).
 - **Safe SVG logos** — uploaded SVGs are parsed and refused when they carry script or external references, and served under a sandboxing Content-Security-Policy.
 
@@ -42,7 +42,7 @@
 | Tenancy | Wildcard subdomain resolution with a path-based fallback |
 
 ```text
-backend/    cmd/{api,resetpw} · internal/{audit,clientip,config,database,eventgate,mailer,models,repository,handlers,middleware,router,session,svgsafe,utils}
+backend/    cmd/{api,resetpw} · internal/{audit,clientip,config,database,eventgate,ipexclude,mailer,models,repository,handlers,middleware,router,session,svgsafe,utils}
 frontend/   src/{lib,themes,locales,components,pages}
 docs/       SETUP · API · ARCHITECTURE · FRONTEND-CONTRACT
 ```
@@ -103,6 +103,7 @@ the API has to run as a single instance — see [DEPLOY](docs/DEPLOY.md).
 | `APP_ENV` | `development` | `development` or `production` |
 | `ANALYTICS_RETENTION_DAYS` | `90` | Days visitor events (menu/category/product views) are kept. They hold visitor IP addresses and source ports — personal data under KVKK — so older rows are deleted at start-up and every 24 h. `0` keeps them forever; a negative value falls back to `90`, one above `3650` is lowered to `3650` |
 | `ANALYTICS_DAILY_EVENT_CAP` | `10000` | Visitor events one business may store per Europe/Istanbul day. Beyond it the public endpoint still answers `204` but stores nothing, and logs the first refusal of the day once. A repeat of the same view within 10 s is never stored either. `0` disables the cap; a negative value falls back to `10000` |
+| `ANALYTICS_EXCLUDED_IPS` | *(empty)* | IPv4/IPv6 addresses or CIDR ranges, separated by commas, semicolons or spaces, whose visits are **never stored for any business** — the platform operator's own. Ranges broader than `/16` (IPv4) or `/48` (IPv6) and malformed entries are skipped with a warning naming them; start-up logs how many are active. Never exposed by any endpoint; each business manages its own list in the panel |
 
 Deeper reference: [SETUP](docs/SETUP.md) · [API](docs/API.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [FRONTEND-CONTRACT](docs/FRONTEND-CONTRACT.md)
 

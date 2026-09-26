@@ -1062,6 +1062,12 @@ menu or tenant, a bad `visitor_id` or `language` — is `422` and stores nothing
 `204` means **accepted**, not necessarily stored. A valid event is answered
 `204` and **not** stored when:
 
+- it is **not a customer's** — it comes from an address or range on the
+  business's exclusion list, from one in the platform-wide
+  `ANALYTICS_EXCLUDED_IPS`, or from a browser carrying the opt-out cookie
+  `karecik_analytics_optout=1` (see "Excluded visits" below). This is decided
+  before the two rules that follow, so such a view is never remembered as a
+  repeat and never counts against the daily cap;
 - it **repeats** an event of the same visitor (`visitor_id`, or address and
   user agent without one), type, menu, category and product sent less than
   **10 seconds** earlier — a double tap or a dialog opened twice is one look;
@@ -1150,6 +1156,120 @@ been deleted since; the ids stay.
 Both dashboard reads answer `Cache-Control: no-store` and only ever read the
 session's own business.
 
+### Excluded visits
+
+The owner's own visits — and the platform operator's — are never stored. Three
+mechanisms, all enforced by `POST /api/public/events` itself (a `204` that
+stores nothing, before the repeat rule and the daily cap):
+
+| Mechanism | Who manages it | Matches |
+|---|---|---|
+| the business's **exclusion list** | the owner, below | a visit to **this business's** menus from an address inside one of its entries |
+| **`ANALYTICS_EXCLUDED_IPS`** | the platform operator (environment) | a visit to **any** business's menu from an address inside one of its entries. Never exposed by any endpoint |
+| the **opt-out cookie** `karecik_analytics_optout=1` | the owner's browser, below | every visit from that browser, to any menu. The customer page does not even send them |
+
+The address matched is the one the visit log shows (`ip` of
+`GET /api/analytics/events`, from the same resolver). An address that could not
+be established never matches.
+
+#### `GET /api/analytics/excluded-ips` 🔒
+
+```json
+{ "items": [
+    { "id": "uuid", "cidr": "198.18.139.87/32", "display": "198.18.139.87",
+      "label": "Kasa", "created_at": "2026-09-26T10:12:03.4+03:00",
+      "created_by_email": "owner@example.com" },
+    { "id": "uuid", "cidr": "203.0.113.0/24", "display": "203.0.113.0/24",
+      "label": "", "created_at": "…", "created_by_email": "owner@example.com" } ],
+  "current_ip": "198.18.139.87", "current_ip_source": "cloudflare",
+  "current_ip_excluded": true, "optout": false, "max": 50 }
+```
+
+- `items` — the session's business only, oldest first. `cidr` is always the
+  CIDR text; `display` is the bare address for a single host (`/32`, `/128`),
+  the CIDR text otherwise. `created_by_email` is `null` once that user is gone.
+- `current_ip` — the address **this request** was resolved to (what the panel
+  offers to add), `null` when unknown; `current_ip_source` says how it was
+  established (`cloudflare`, `cloudflare-unverified`, `edge`, `peer`,
+  `unknown` …).
+- `current_ip_excluded` — whether **this business's** list covers
+  `current_ip`. The platform list is not consulted, so the answer says nothing
+  about it.
+- `optout` — whether this request carries the opt-out cookie.
+- `max` — the most entries a business may have (`50`).
+
+`Cache-Control: no-store`.
+
+#### `GET /api/analytics/excluded-ips/match-count?cidr=` 🔒
+
+How many of this business's **stored** events fall inside the address or range —
+what adding it with `delete_history: true` would delete.
+
+```json
+{ "cidr": "198.18.139.0/24", "count": 42 }
+```
+
+`cidr` comes back normalised (see below). The input obeys exactly the rules of
+an add: missing, malformed or too broad is `422`.
+
+#### `POST /api/analytics/excluded-ips` 🔒
+
+```json
+{ "cidr": "198.18.139.87", "label": "Kasa", "delete_history": true }
+```
+
+| Field | Rule |
+|---|---|
+| `cidr` | required; an IPv4 or IPv6 address, or a CIDR range. Normalised: host bits masked (`198.18.139.87/24` → `198.18.139.0/24`), IPv4-mapped IPv6 unmapped (`::ffff:1.2.3.4` → `1.2.3.4/32`), IPv6 lowercased and compressed; a single address is stored as `/32` or `/128`. No zone (`%eth0`), no port. **At most `/16` wide for IPv4 and `/48` for IPv6** — a broader range would exclude a whole provider's customers |
+| `label` | optional; trimmed, at most 60 characters, no control characters |
+| `delete_history` | **required** boolean: `true` also deletes this business's stored events from inside the range; `false` keeps them |
+
+**`201`**
+
+```json
+{ "item": { "id": "uuid", "cidr": "198.18.139.87/32", "display": "198.18.139.87",
+            "label": "Kasa", "created_at": "…", "created_by_email": "owner@example.com" },
+  "deleted_events": 42 }
+```
+
+The entry, the history deletion and the audit row are **one transaction**, and
+the events endpoint sees the change on the very next event (its cached copy of
+the list is dropped on commit). Only this business's events are deleted; a
+stored `ip` that is not an address (`unknown`, `-`, empty) never matches and
+never fails the request.
+
+| Status | When |
+|---|---|
+| `400` | the body is not JSON of the right types |
+| `409` `Bu IP zaten listede.` | the range is already listed, or lies inside an entry that is (`198.18.139.87` under `198.18.139.0/24`). A broader range over narrower entries is accepted |
+| `422` | `cidr` missing, malformed or too broad; `label` too long or with control characters; `delete_history` missing; the list already has 50 entries |
+
+#### `DELETE /api/analytics/excluded-ips/:id` 🔒
+
+`204`. A malformed id is `400`; an id the business does not have — another
+tenant's included — is `404` `Bu IP listede bulunamadı.` Removing an entry does
+not bring back visits that were not stored.
+
+#### `POST /api/analytics/optout` · `DELETE /api/analytics/optout` 🔒
+
+`204`, with the opt-out cookie set (`POST`) or expired (`DELETE`):
+
+```
+Set-Cookie: karecik_analytics_optout=1; max-age=31536000; domain=karecik.com; path=/; secure; SameSite=Lax
+```
+
+- `Domain` is `APP_DOMAIN` in production, so every tenant's
+  `{slug}.karecik.com` and the path-form menu on the apex receive it; in
+  development the cookie is host-only.
+- `Secure` exactly when the session cookie is (`COOKIE_SECURE`).
+- **Not** `HttpOnly`: the customer page reads it and sends nothing. It holds no
+  secret — a `1` that grants nothing.
+- The `DELETE` writes the same cookie, empty and already expired, with the same
+  `Domain`, `Path`, `SameSite` and `Secure`.
+
+Nothing is written to the database or the audit trail: the mark belongs to a
+browser, not to the business.
+
 ---
 
 ## 11. Audit trail 🔒
@@ -1192,6 +1312,8 @@ Newest first, the session's business only. One row per successful write:
 | `business.update` | business | the business / its name | `name`, `slug` |
 | `account.password_change` | account | the user / the e-mail | `method`: `dashboard` or `reset_link` |
 | `upload.create` | upload | the stored file name / the uploaded file's own name | `url`, `size`, `content_type` |
+| `analytics.exclude_ip.add` | analytics_exclusion | the entry / its `display` | `cidr` (the CIDR text), `label` (when not empty), `deleted_events` (0 without `delete_history`) — all `old: null` |
+| `analytics.exclude_ip.remove` | analytics_exclusion | the entry / its `display` | `cidr`, `label` (when not empty) — `new: null` |
 
 A save that changes nothing, a re-sent identical price and a bulk update that
 moves no price record nothing; a refused request records nothing. A Wi-Fi
@@ -1217,12 +1339,12 @@ another request had just changed is still recorded.
 |---|---|
 | 200 | Success |
 | 201 | Created |
-| 204 | Event accepted (`POST /api/public/events`) — no body; a repeat or an event past the daily cap is accepted without being stored |
+| 204 | Event accepted (`POST /api/public/events`) — no body; an excluded visit, a repeat or an event past the daily cap is accepted without being stored. Also a removed exclusion and the opt-out endpoints |
 | 400 | Malformed request body |
 | 401 | Missing or invalid token |
 | 403 | A menu of another business named as the target of a write — the `menu_id` of a category create or move, or of a bulk price update |
 | 404 | Record or business not found — including a category of another business named by a product write, and a menu or category deleted while a write into it was running |
-| 409 | Email or slug collision |
+| 409 | Email or slug collision; an analytics exclusion that is already listed |
 | 413 | File too large, or an event body over 2048 bytes |
 | 422 | Validation error (required field, invalid price, an unsafe SVG, a raster file whose bytes are not an image, …) |
 | 429 | Rate limited (`RATE_LIMITED`) — password reset, events |

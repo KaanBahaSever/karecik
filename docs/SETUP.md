@@ -187,6 +187,7 @@ COOKIE_SAMESITE=Lax
 COOKIE_SECURE=false
 ANALYTICS_RETENTION_DAYS=90
 ANALYTICS_DAILY_EVENT_CAP=10000
+ANALYTICS_EXCLUDED_IPS=
 ```
 
 `ANALYTICS_RETENTION_DAYS` is how many days the customer menu's visitor events
@@ -198,6 +199,13 @@ after. `0` keeps them forever; values above `3650` are lowered to `3650`.
 per Europe/Istanbul calendar day (`0` = no cap). The events endpoint is public;
 past the cap it keeps answering `204` but stores nothing, and the server log
 says so once per business per day.
+
+`ANALYTICS_EXCLUDED_IPS` lists addresses and CIDR ranges (comma, semicolon or
+space separated) whose visits no business ever stores — the platform
+operator's own. Leave it empty locally: each owner keeps their own list in the
+panel (**Analitik → Hariç tutulan IP'ler**), where the current browser can
+also be opted out. A range broader than `/16` (IPv4) or `/48` (IPv6) is skipped
+with a warning, and the list is never exposed by any endpoint.
 
 **Anatomy of the connection string** (`DATABASE_URL`):
 

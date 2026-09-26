@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"karecik/backend/internal/config"
 	"karecik/backend/internal/eventgate"
+	"karecik/backend/internal/ipexclude"
 	"karecik/backend/internal/mailer"
 	"karecik/backend/internal/middleware"
 	"karecik/backend/internal/models"
@@ -51,6 +53,13 @@ type Handler struct {
 	// eventgate). Like Sessions it is state of this process, and it is a field
 	// so that a test can give it a clock of its own.
 	Events *eventgate.Gate
+
+	// Exclusions decides whose visits POST /api/public/events never stores:
+	// the ANALYTICS_EXCLUDED_IPS list and each business's own list, the
+	// latter cached in memory and invalidated by the endpoints that change it
+	// (package ipexclude). A field for the same reason Events is one: a test
+	// gives it a clock of its own.
+	Exclusions *ipexclude.Set
 }
 
 // New builds a Handler.
@@ -62,7 +71,14 @@ func New(db *pgxpool.Pool, cfg *config.Config, sessions *session.Store, mail mai
 		DailyCap: cfg.AnalyticsDailyEventCap,
 		Zone:     utils.Istanbul,
 	})
-	return &Handler{DB: db, Cfg: cfg, Sessions: sessions, Mail: mail, Events: events}
+	exclusions := ipexclude.New(ipexclude.Config{
+		Platform: cfg.AnalyticsExcludedIPs,
+		Load: func(ctx context.Context, businessID uuid.UUID) ([]netip.Prefix, error) {
+			return repository.ExcludedPrefixes(ctx, db, businessID)
+		},
+	})
+	return &Handler{DB: db, Cfg: cfg, Sessions: sessions, Mail: mail, Events: events,
+		Exclusions: exclusions}
 }
 
 // Health reports the service and database status.

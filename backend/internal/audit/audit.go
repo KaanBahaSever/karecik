@@ -19,10 +19,11 @@ import (
 	"karecik/backend/internal/models"
 )
 
-// The actions. Every value is listed in the audit_logs_action CHECK of
-// migration 014, which turns a typo here into a failed write rather than a row
-// the dashboard cannot label — and tests/audit_test.go writes each one to prove
-// the two lists agree.
+// The actions. Every value is listed in the audit_logs_action_check CHECK —
+// declared by migration 014 and re-declared, extended, by every migration that
+// adds an action since (015) — which turns a typo here into a failed write
+// rather than a row the dashboard cannot label; tests/audit_log_test.go writes
+// each one to prove the two lists agree.
 const (
 	ActionProductCreate    = "product.create"
 	ActionProductUpdate    = "product.update"
@@ -43,6 +44,12 @@ const (
 	ActionBusinessUpdate = "business.update"
 	ActionPasswordChange = "account.password_change"
 	ActionUploadCreate   = "upload.create"
+
+	// The owner's list of addresses whose visits the analytics never store
+	// (migration 015): an entry added — with how many stored visits of it were
+	// deleted along with it — or removed.
+	ActionAnalyticsExcludeIPAdd    = "analytics.exclude_ip.add"
+	ActionAnalyticsExcludeIPRemove = "analytics.exclude_ip.remove"
 )
 
 // Actions lists every action, in the order the dashboard's filter offers them.
@@ -52,9 +59,10 @@ var Actions = []string{
 	ActionCategoryCreate, ActionCategoryUpdate, ActionCategoryDelete, ActionCategoryReorder,
 	ActionMenuCreate, ActionMenuUpdate, ActionMenuDelete,
 	ActionBusinessUpdate, ActionPasswordChange, ActionUploadCreate,
+	ActionAnalyticsExcludeIPAdd, ActionAnalyticsExcludeIPRemove,
 }
 
-// The entity types, likewise mirrored by a CHECK of migration 014.
+// The entity types, likewise mirrored by audit_logs_entity_type_check.
 const (
 	EntityProduct  = "product"
 	EntityCategory = "category"
@@ -62,11 +70,16 @@ const (
 	EntityBusiness = "business"
 	EntityAccount  = "account"
 	EntityUpload   = "upload"
+
+	// One entry of the analytics exclusion list; its entity_id is the entry's
+	// id and its label the address or range as the panel shows it.
+	EntityAnalyticsExclusion = "analytics_exclusion"
 )
 
 // EntityTypes lists every entity type.
 var EntityTypes = []string{
 	EntityProduct, EntityCategory, EntityMenu, EntityBusiness, EntityAccount, EntityUpload,
+	EntityAnalyticsExclusion,
 }
 
 // IsAction reports whether a string is one of Actions.
